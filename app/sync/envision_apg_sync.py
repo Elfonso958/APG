@@ -98,6 +98,9 @@ IATA_TO_ICAO = {
     "NPE": "NZNR",  # Napier
     "TRG": "NZTG",  # Tauranga
     "BHE": "NZWB",  # Woodbourne
+    "VAV": "NFTV",  # Woodbourne
+    "TBU": "NFTF",  # Woodbourne
+    "HAP": "NFTL",  # Woodbourne
 }
 
 # --- APG aircraft caches/indexes ---
@@ -1078,11 +1081,18 @@ def main(
     logging.info("After in-window filter: kept %d of %d", len(flights), pre_count)
 
     if apply_past_filter:
-        PAST_LEEWAY_MIN = int(os.getenv("PAST_LEEWAY_MIN", "0"))
-        utc_now = datetime.now(_get_local_tz()).astimezone(timezone.utc)
-        pre2 = len(flights)
-        flights = [f for f in flights if (_eobt_utc(f) and _eobt_utc(f) >= (utc_now - timedelta(minutes=PAST_LEEWAY_MIN)))]
-        logging.info("After past-filter: kept %d of %d", len(flights), pre2)
+        leeway = int(os.getenv("PAST_LEEWAY_MIN", "0"))
+        now_utc = datetime.now(timezone.utc)
+        cutoff = now_utc - timedelta(minutes=leeway)
+
+        pre = len(flights)
+        # use your existing helper that returns a tz-aware UTC datetime
+        flights = [f for f in flights if (_dt := _eobt_utc(f)) and _dt >= cutoff]
+
+        logging.info(
+            "After past-filter (cutoff %s): kept %d of %d",
+            cutoff.isoformat(), len(flights), pre
+        )
 
     # Optional testing cap
     test_limit_env = os.getenv("SYNC_TEST_LIMIT", "").strip()
