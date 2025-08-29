@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Recent Sync Runs</h2>
+<table border="1" cellpadding="6" cellspacing="0">
+  <thead>
+    <tr>
+      <th>ID</th><th>Started</th><th>Finished</th>
+      <th>Status</th><th>Created</th><th>Skipped</th><th>Warnings</th>
+      <th>Window (local)</th>
+      <th>Type</th><th>By</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in runs %}
+    <tr>
+      <td><a href="/sync/runs/{{ r.id }}">#{{ r.id }}</a></td>
+      <td>{{ r.started_at.strftime("%d-%m-%y %H:%M") if r.started_at else "-" }}</td>
+      <td>{{ r.finished_at.strftime("%d-%m-%y %H:%M") if r.finished_at else "-" }}</td>
+      <td>{{ 'OK' if r.ok else 'FAIL' }}</td>
+      <td>{{ r.created or 0 }}</td>
+      <td>{{ r.skipped or 0 }}</td>
+      <td>{{ r.warnings or 0 }}</td>
+      <td>
+        {% if r.window_from_local and r.window_to_local %}
+          {{ r.window_from_local.strftime("%d-%m-%y %H:%M") }} →
+          {{ r.window_to_local.strftime("%d-%m-%y %H:%M") }}
+        {% else %}-{% endif %}
+      </td>
+      <td>{{ r.run_type }}</td>
+      <td>{{ r.initiated_by or '' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<!-- Add this dialog somewhere in your page -->
+<dialog id="sync-range-dialog">
+  <form method="dialog" id="sync-range-form" style="min-width: 320px">
+    <h3>Select date & time range</h3>
+    <label>From (local): <input type="datetime-local" id="sync-from" required></label>
+    <br>
+    <label>To (local): <input type="datetime-local" id="sync-to" required></label>
+    <menu style="margin-top: 12px;">
+      <button value="cancel">Cancel</button>
+      <button id="sync-go" value="default">Run</button>
+    </menu>
+  </form>
+</dialog>
+
+<script>
+(function () {
+  const btn = document.getElementById('run-once-btn'); // your existing button
+  const dlg = document.getElementById('sync-range-dialog');
+  const inputFrom = document.getElementById('sync-from');
+  const inputTo = document.getElementById('sync-to');
+  const form = document.getElementById('sync-range-form');
+
+  function pad(n){ return String(n).padStart(2,'0'); }
+  function toLocalInput(dt) { // Date -> "YYYY-MM-DDTHH:MM"
+    return dt.getFullYear() + '-' + pad(dt.getMonth()+1) + '-' + pad(dt.getDate()) +
+           'T' + pad(dt.getHours()) + ':' + pad(dt.getMinutes());
+  }
+
+  btn?.addEventListener('click', () => {
+    const now = new Date();
+    const plus3d = new Date(now.getTime() + 3*24*3600*1000);
+    inputFrom.value = toLocalInput(now);
+    inputTo.value = toLocalInput(plus3d);
+    dlg.showModal();
+  });
+
+  form?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fromVal = inputFrom.value;  // local
+    const toVal = inputTo.value;      // local
+    if (!fromVal || !toVal) return;
+
+    // Convert local to ISO UTC (backend expects UTC)
+    const fromIsoUtc = new Date(fromVal).toISOString();
+    const toIsoUtc = new Date(toVal).toISOString();
+
+    try {
+      const res = await fetch('/api/sync/run', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ date_from_utc: fromIsoUtc, date_to_utc: toIsoUtc })
+      });
+      const data = await res.json();
+      console.log('Sync result:', data);
+      // TODO: update your UI with `data`
+    } catch (err) {
+      console.error('Sync error', err);
+    } finally {
+      dlg.close();
+    }
+  });
+})();
+</script>
+
+{% endblock %}

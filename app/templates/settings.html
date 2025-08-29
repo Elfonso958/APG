@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Scheduler</h2>
+<form method="post" style="margin-top:12px">
+  <label>
+    <input type="checkbox" name="auto_enabled" value="1" {% if cfg and cfg.auto_enabled %}checked{% endif %}>
+    Enable automatic sync
+  </label>
+  <div style="margin-top:8px">
+    <label>Interval (seconds): 
+      <input type="number" name="interval_sec" min="60" step="30" value="{{ (cfg.interval_sec if cfg and cfg.interval_sec else 300) }}">
+    </label>
+  </div>
+  <button type="submit" style="margin-top:10px">Save</button>
+</form>
+
+{% if cfg %}
+  <p style="margin-top:10px">
+    <b>Last auto started:</b> {{ cfg.last_auto_started or '-' }}<br>
+    <b>Last auto finished:</b> {{ cfg.last_auto_finished or '-' }}
+  </p>
+{% endif %}
+{% endblock %}

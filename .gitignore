@@ -1,0 +1,11 @@
+﻿__pycache__/
+.env
+.env.*
+instance/
+.mypy_cache/
+.pytest_cache/
+.db
+.venv/
+*.pyc
+Thumbs.db
+desktop.ini

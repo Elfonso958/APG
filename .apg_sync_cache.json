@@ -1,0 +1,294 @@
+{
+  "66071": "96eb58b4fa75ad827c0468e049c1215dd4b210f0",
+  "66175": "8de5a53f51dffe2a3578fe25ab605e4766c22a50",
+  "66487": "ec9b5f7a2c5bf98f73cfaf544b06dcd38fa8f7cd",
+  "66488": "5b258ca43a401a4332d7d12e3fd1ad7536907e93",
+  "66557": "ef62711a90ad4f5f585b3ea1d3b29cfd77ec5065",
+  "66558": "4471fd51a2ea3502e419045096c3e36fd52b13df",
+  "66627": "ba49343bb75de7991ccc74c87b92fcf756c064fc",
+  "66695": "d2e8a6275bc6c28eeb04f37688f5215e0a3f3d89",
+  "66696": "c51175a37ff379ae3f75a91403ba344621a4501f",
+  "66697": "49f49227eb11fde34cd772b9146d8c18619756c4",
+  "66765": "a3a5efae9a2aff4150eb10a56ad45a89c98ed1a1",
+  "66767": {
+    "core": {
+      "adep": "NZWU",
+      "ades": "NZAA",
+      "aircraft_id": 541458,
+      "eet": "0000",
+      "eobt": "2025-08-29T04:30:00+00:00",
+      "fl": "300",
+      "flight_no": "CVA709",
+      "pic_code": "DG",
+      "pic_id": null,
+      "pic_name": "David Giles",
+      "route": "DCT"
+    },
+    "fp": "af1f76ca1ccc91a4567fc936c5f04b48cae948d1"
+  },
+  "66907": "d82f1d71179c6788260dae8578ae68f7e351d969",
+  "66908": "2924f3217424e7fbd555b77e58582761d9dcf820",
+  "66977": "f9e749692b9755ec1b60e6f10820e50f4382ee5d",
+  "66978": "a50c7297ba03d13e15e8456706d91fc578985d56",
+  "67047": "c6a561e18f9893def2353431e2f6c13d92b820d0",
+  "67124": "53f5174f63391d2397a7314cdde560fc30d1ec12",
+  "67125": "fe02bea6a2b68419bd735d77791d21dcb55660a5",
+  "67126": "91bd597078764d207e5c9519ea7533a105d1678e",
+  "67127": "c294428c18e101e7a9c76e9edc8191603ce9dd20",
+  "67207": "3bdfdb5276777d2d883d587c31ce23cf5fdb4b77",
+  "67209": {
+    "core": {
+      "adep": "NZWK",
+      "ades": "NZAA",
+      "aircraft_id": 541464,
+      "eet": "0000",
+      "eobt": "2025-08-29T04:50:00+00:00",
+      "fl": "300",
+      "flight_no": "CVA829",
+      "pic_code": "CS",
+      "pic_id": 242087,
+      "pic_name": "Craig Steele",
+      "route": "DCT"
+    },
+    "fp": "e407108dac6d475459782a7d35104215645c1b07"
+  },
+  "67210": "41029e18861476eacf97d8e227cbb6d91cf3725c",
+  "67292": "52a0821a64b35f4266f66446d30ad1e2b33a7959",
+  "67293": "64b47e8cb833f02989d9d8a2d347a1bfbe064ae4",
+  "67294": {
+    "apg_id": 4515452,
+    "core": {
+      "adep": "NZAA",
+      "ades": "NZPP",
+      "aircraft_id": 541464,
+      "eet": "0000",
+      "eobt": "2025-09-01T06:10:00+00:00",
+      "fl": "300",
+      "flight_no": "CVA648",
+      "pic_code": null,
+      "pic_id": 242087,
+      "pic_name": "Craig Steele",
+      "route": "DCT"
+    },
+    "fp": "413df04c70e85a108a2c70c904322ca8f7fcb889",
+    "key": [
+      "CVA648",
+      "NZAA",
+      "NZPP",
+      "2025-09-01T06:10Z"
+    ]
+  },
+  "67326": "71e09df10ca67d10efc3d13291d39ae587bb2bd8",
+  "67349": {
+    "core": {
+      "adep": "NZPP",
+      "ades": "NZAA",
+      "aircraft_id": 541462,
+      "eet": "0000",
+      "eobt": "2025-08-29T04:15:00+00:00",
+      "fl": "300",
+      "flight_no": "CVA649",
+      "pic_code": "AL",
+      "pic_id": null,
+      "pic_name": "Alan Martin",
+      "route": "DCT"
+    },
+    "fp": "fc9f5aa525f30b92262b6942f4b6fb31119cc637"
+  },
+  "67350": "66ce872db2b27c4c8377f5dc229ab129a5267bca",
+  "67367": {
+    "apg_id": 4515300,
+    "core": {
+      "adep": "NZPP",
+      "ades": "NZAA",
+      "aircraft_id": 541464,
+      "eet": "0000",
+      "eobt": "2025-08-29T20:30:00+00:00",
+      "fl": "300",
+      "flight_no": "CVA643",
+      "pic_code": "CS",
+      "pic_id": 242087,
+      "pic_name": "Craig Steele",
+      "route": "DCT"
+    },
+    "fp": "bf2dd84ed4219e1db76ec91bbc70419156e43224",
+    "key": [
+      "CVA643",
+      "NZPP",
+      "NZAA",
+      "2025-08-29T20:30Z"
+    ]
+  },
+  "67406": {
+    "apg_id": 4515299,
+    "core": {
+      "adep": "NZWU",
+      "ades": "NZAA",
+      "aircraft_id": 541462,
+      "eet": "0000",
+      "eobt": "2025-08-29T20:00:00+00:00",
+      "fl": "300",
+      "flight_no": "CVA703",
+      "pic_code": "AL",
+      "pic_id": null,
+      "pic_name": "Alan Martin",
+      "route": "DCT"
+    },
+    "fp": "6b3524b8507344f8661bd6615bad73ee2ba86f2a",
+    "key": [
+      "CVA703",
+      "NZWU",
+      "NZAA",
+      "2025-08-29T20:00Z"
+    ]
+  },
+  "67419": "add40ca42f7f12c24efcb4b88f014695e0aaa022",
+  "67432": "5df262c3c15a0721d6e30e08ca7be47f34e08555",
+  "67445": "2d8d8c103a0746b3e04e2ec6d0bd42802a512972",
+  "67519": "ecefea61271d647238e919f4be7c42e4961ace9d",
+  "67521": {
+    "core": {
+      "adep": "NZAA",
+      "ades": "NZWU",
+      "aircraft_id": 541462,
+      "eet": "0000",
+      "eobt": "2025-08-29T06:00:00+00:00",
+      "fl": "300",
+      "flight_no": "CVA708",
+      "pic_code": "AL",
+      "pic_id": null,
+      "pic_name": "Alan Martin",
+      "route": "DCT"
+    },
+    "fp": "65374c610a6aed4181f81037aea082472c419f15"
+  },
+  "67522": "a6f6fd319bc9e8dd1c1b38a2b29894ea85c69df3",
+  "67523": {
+    "apg_id": 4515453,
+    "core": {
+      "adep": "NZAA",
+      "ades": "NZWU",
+      "aircraft_id": 541462,
+      "eet": "0000",
+      "eobt": "2025-09-01T06:00:00+00:00",
+      "fl": "300",
+      "flight_no": "CVA708",
+      "pic_code": null,
+      "pic_id": null,
+      "pic_name": "David Giles",
+      "route": "DCT"
+    },
+    "fp": "25aa0391c10a342693b25383923f6420d4ad57bb",
+    "key": [
+      "CVA708",
+      "NZAA",
+      "NZWU",
+      "2025-09-01T06:00Z"
+    ]
+  },
+  "68207": {
+    "apg_id": 4515296,
+    "core": {
+      "adep": "NZWU",
+      "ades": "NZAA",
+      "aircraft_id": 541462,
+      "eet": "0000",
+      "eobt": "2025-08-29T23:30:00+00:00",
+      "fl": "300",
+      "flight_no": "CVA711",
+      "pic_code": "AL",
+      "pic_id": null,
+      "pic_name": "Alan Martin",
+      "route": "DCT"
+    },
+    "fp": "c6ca3a6f524291f750a55b357916004085cc9dd1",
+    "key": [
+      "CVA711",
+      "NZWU",
+      "NZAA",
+      "2025-08-29T23:30Z"
+    ]
+  },
+  "68223": {
+    "apg_id": 4515298,
+    "core": {
+      "adep": "NZAA",
+      "ades": "NZWU",
+      "aircraft_id": 541462,
+      "eet": "0000",
+      "eobt": "2025-08-29T21:30:00+00:00",
+      "fl": "300",
+      "flight_no": "CVA702",
+      "pic_code": "AL",
+      "pic_id": null,
+      "pic_name": "Alan Martin",
+      "route": "DCT"
+    },
+    "fp": "e9cf5e94f3174774e3832e829f69fbb1bfe9758c",
+    "key": [
+      "CVA702",
+      "NZAA",
+      "NZWU",
+      "2025-08-29T21:30Z"
+    ]
+  },
+  "71023": {
+    "apg_id": 4515297,
+    "core": {
+      "adep": "NZCI",
+      "ades": "NZAA",
+      "aircraft_id": 541507,
+      "eet": "0000",
+      "eobt": "2025-08-29T23:15:00+00:00",
+      "fl": "300",
+      "flight_no": "CVA592",
+      "pic_code": "CE",
+      "pic_id": 241665,
+      "pic_name": "Craig Emeny",
+      "route": "DCT"
+    },
+    "fp": "500d0d64f48399358b5b6f6e99fa82c6cd7e3f87",
+    "key": [
+      "CVA592",
+      "NZCI",
+      "NZAA",
+      "2025-08-29T23:15Z"
+    ]
+  },
+  "71053": "2999c5fe6b51088c239036a4502db7235a6d93f8",
+  "71054": "403bc696fa6e8f026fefa64d79821371c1ffea55",
+  "71131": {
+    "apg_id": 4515431,
+    "core": {
+      "adep": "NZWU",
+      "ades": "NZAA",
+      "aircraft_id": 541108,
+      "eet": "0000",
+      "eobt": "2025-09-01T07:00:00+00:00",
+      "fl": "300",
+      "flight_no": "TEST1",
+      "fo_id": 241139,
+      "fo_name": "Cameron Bell",
+      "pic_code": null,
+      "pic_id": 242185,
+      "pic_name": "Duane Emeny",
+      "route": "DCT",
+      "tic_id": null,
+      "tic_name": "Stephanie O'Rourke"
+    },
+    "fp": "5ed6f5a38b1db96eac5cfc3220f2253e166cf603",
+    "key": [
+      "TEST1",
+      "NZWU",
+      "NZAA",
+      "2025-09-01T07:00Z"
+    ]
+  },
+  "_recent_keys": {
+    "CVA643|NZPP|NZAA|2025-08-29T19:30Z": 1756402252.0183706,
+    "CVA648|NZAA|NZPP|2025-08-29T06:10Z": 1756402246.4528286,
+    "CVA702|NZAA|NZWU|2025-08-29T21:30Z": 1756402263.7563694,
+    "CVA703|NZWU|NZAA|2025-08-29T20:00Z": 1756402257.8120453,
+    "CVA708|NZAA|NZWU|2025-08-29T06:00Z": 1756402239.305942
+  }
+}
