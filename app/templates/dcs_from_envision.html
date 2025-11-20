@@ -1,0 +1,2020 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container py-3">
+  <h2 class="mb-1">DCS &rarr; Flight Plan — {{ day.isoformat() }}</h2>
+  <div class="text-muted mb-1">
+    <small>All times shown below are NZ local (Pacific/Auckland).</small>
+  </div>
+  <div class="text-muted mb-3">
+    <small>
+      Click a flight bar to view details and <strong>Send to Flight Plan</strong>.
+    </small>
+  </div>
+<div class="text-muted small">
+  Last refreshed: <span id="gantt-last-refresh">never</span>
+</div>
+  <form class="row g-2 mb-3" method="get">
+    <div class="col-auto">
+      <label class="form-label">Date</label>
+      <input type="date" name="date" class="form-control" value="{{ day.isoformat() }}">
+    </div>
+    <div class="col-auto align-self-end">
+      <button class="btn btn-primary">Load</button>
+    </div>
+  </form>
+
+<!-- NEW: base filter -->
+<div class="row g-2 mb-3">
+  <div class="col-auto ms-auto">
+    <label for="base-filter" class="form-label mb-1">Base filter</label>
+    <select id="base-filter" class="form-select form-select-sm">
+      <option value="">All bases</option>
+      <option value="AKL">AKL (Auckland)</option>
+      <option value="WLG">WLG (Wellington)</option>
+      <option value="CHC">CHC (Christchurch)</option>
+      <option value="PPQ">PPQ (Paraparaumu)</option>
+      <option value="WHK">WHK (Whakatane)</option>
+      <option value="WAG">WAG (Whanganui)</option>
+      <option value="CHT">CHT (Chatham Islands)</option>
+      <option value="ZQN">ZQN (Queenstown)</option>
+      <option value="BHE">BHE (Blenheim)</option>
+    </select>
+  </div>
+</div>
+
+  {# ---------- Hidden data for JS to build the Gantt ---------- #}
+  <div id="dcs-gantt-data" class="d-none">
+    {% for r in results %}
+      <div
+        class="gantt-flight-data"
+        data-reg="{{ r.reg or 'Unknown' }}"
+        data-dep="{{ r.dep }}"
+        data-ades="{{ r.ades }}"
+        data-std="{{ r.std_nz.isoformat() if r.std_nz }}"
+        data-sta="{{ r.sta_nz.isoformat() if r.sta_nz }}"
+        data-std-sched="{{ r.std_sched_nz.isoformat() if r.std_sched_nz }}"
+        data-sta-sched="{{ r.sta_sched_nz.isoformat() if r.sta_sched_nz }}"
+        data-flight="{{ r.flight_number }}"
+        data-designator="{{ r.designator }}"
+        data-apg-plan-id="{{ r.apg_plan_id or '' }}"
+        data-block="{{ r.block_mins }}"
+        data-aircraft-type="{{ r.aircraft_type }}"
+        data-flight-status="{{ r.flight_status }}"
+        data-adt="{{ r.adt|default(0) }}"
+        data-chd="{{ r.chd|default(0) }}"
+        data-inf="{{ r.inf|default(0) }}"
+        data-pax-count="{{ r.pax_count|default(0) }}"
+        data-bags-kg="{{ '%.1f'|format((r.bags_kg or 0)|float) }}"
+        data-pax-list='{{ (r.pax_list or [])|tojson|e }}'
+      ></div>
+    {% endfor %}
+  </div>
+
+  {# ---------- Visible Gantt shell ---------- #}
+  <div class="dcs-gantt-shell card shadow-sm">
+    <div class="card-body p-2">
+      <div class="dcs-gantt-header d-flex align-items-center mb-1">
+        <div class="gantt-label-col text-muted fw-semibold">
+          Aircraft
+        </div>
+        <div class="gantt-time-col flex-grow-1 ps-2">
+          <div id="dcs-gantt-axis" class="dcs-gantt-axis"></div>
+        </div>
+      </div>
+      <div id="dcs-gantt-rows" class="dcs-gantt-rows"></div>
+    </div>
+  </div>
+
+  {# ---------- Diagnostics ---------- #}
+  {% if diag %}
+  <div class="alert alert-info mt-3">
+    <div><strong>Diagnostics</strong></div>
+    <div>Window used: {{ diag.window_used or 'N/A' }} <span class="text-muted">(UTC query window)</span></div>
+    <div>Envision base: {{ diag.base or 'N/A' }}</div>
+    <div>Token present: {{ 'Yes' if diag.has_token else 'No' }}</div>
+    <div>Raw type: {{ diag.raw_type or 'N/A' }}</div>
+
+    {% if diag.note %}
+    <div class="mt-2 text-muted">{{ diag.note }}</div>
+    {% endif %}
+
+    {% if diag.raw_preview %}
+    <details class="mt-2">
+      <summary>JSON preview (first page or first 2 items)</summary>
+      <pre class="small mb-0" style="white-space: pre-wrap">{{ diag.raw_preview }}</pre>
+    </details>
+    {% endif %}
+
+    <details class="mt-3" id="apg-plan-details" style="display:none;">
+      <summary>APG plan/get JSON (last pushed plan)</summary>
+      <div class="small text-muted mb-1">
+        Plan ID: <span id="apg-plan-id"></span>
+      </div>
+      <pre class="small mb-0" style="white-space: pre-wrap" id="apg-plan-json"></pre>
+    </details>
+
+    {% if diag.raw_http %}
+    <details class="mt-3">
+      <summary>Raw HTTP (first page)</summary>
+      <div class="small">
+        <div><strong>URL:</strong> {{ diag.raw_http.url }}</div>
+        <div><strong>Params:</strong> {{ diag.raw_http.params }}</div>
+        <div><strong>Status:</strong> {{ diag.raw_http.status }}</div>
+        <div><strong>Content-Type:</strong> {{ diag.raw_http.content_type }}</div>
+        {% if diag.raw_http.json_preview %}
+        <details class="mt-2">
+          <summary>JSON (parsed)</summary>
+          <pre class="small mb-0" style="white-space: pre-wrap">{{ diag.raw_http.json_preview }}</pre>
+        </details>
+        {% endif %}
+        {% if diag.raw_http.raw_text %}
+        <details class="mt-2">
+          <summary>Body (raw text)</summary>
+          <pre class="small mb-0" style="white-space: pre-wrap">{{ diag.raw_http.raw_text }}</pre>
+        </details>
+        {% endif %}
+      </div>
+    </details>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<!-- Flight Action Modal -->
+<div class="modal fade" id="flightActionModal" tabindex="-1" aria-labelledby="flightActionModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="flightActionModalLabel">Flight Details</h5>
+                <!-- NEW: warnings badges -->
+        <div id="flight-warnings" class="ms-3 small text-end"></div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row mb-2">
+          <div class="col-md-6">
+            <p><strong>Flight:</strong> <span id="modal-flight-code"></span></p>
+            <p><strong>Route:</strong> <span id="modal-route"></span></p>
+            <p><strong>Aircraft:</strong> <span id="modal-aircraft"></span></p>
+          </div>
+          <div class="col-md-6">
+            <p><strong>STD / STA:</strong> <span id="modal-std-sta"></span></p>
+            <p><strong>ETD / ETA:</strong> <span id="modal-etd-eta"></span></p>
+            <p><strong>Status:</strong> <span id="modal-status"></span></p>
+          </div>
+        </div>
+        <hr>
+        <div class="row mb-2">
+          <div class="col-md-6">
+            <p>
+              <strong>Passengers:</strong>
+              <span id="modal-pax-breakdown"></span>
+            </p>
+          </div>
+          <div class="col-md-6">
+            <p><strong>Baggage Weight:</strong> <span id="modal-bags"></span> kg</p>
+          </div>
+        </div>
+        <div class="d-flex gap-2">
+          <button id="btn-view-pax" type="button" class="btn btn-outline-secondary btn-sm">
+            Passenger list
+          </button>
+          <button id="btn-seatmap" type="button" class="btn btn-outline-secondary btn-sm">
+            Seat map
+          </button>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-reset-apg" type="button" class="btn btn-success">Reset Flight</button>
+        <button id="btn-send-apg" type="button" class="btn btn-success">Submit to APG</button>
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Passenger List Modal -->
+<div class="modal fade" id="paxListModal" tabindex="-1"
+     aria-labelledby="paxListModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="paxListModalLabel">Passenger list</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"
+                aria-label="Close"></button>
+      </div>
+
+    <div class="modal-body">
+      <div class="table-responsive mb-0">
+        <table id="pax-list-table" class="table table-sm align-middle mb-0">
+          <thead>
+            <tr>
+              <th>Seat</th>
+              <th>Name</th>
+              <th>DOB</th>
+              <th>Age</th>
+              <th>PNR</th>
+              <th>Status</th>
+              <th>SSR(s)</th>
+            </tr>
+          </thead>
+          <tbody id="pax-list-body">
+            <!-- filled by JS -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary btn-sm"
+                data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- Seatmap Modal -->
+<div class="modal fade" id="seatmapModal" tabindex="-1" aria-labelledby="seatmapModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="seatmapModalLabel">Seat map</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row">
+          <div class="col-md-8">
+            <div id="seatmap-container" class="seatmap-grid"></div>
+          </div>
+          <div class="col-md-4">
+            <div id="seatmap-info" class="small text-muted">
+              Seatmap not available for this aircraft type.<br>
+              Click a seat to see passenger details.
+            </div>
+          </div>
+        </div>
+
+        <!-- NEW: legend / key for colours + icons -->
+        <div id="seatmap-legend" class="small mt-2">
+          <span class="legend-item">
+            <span class="seat seat-adult"></span> Adult
+          </span>
+          <span class="legend-item">
+            <span class="seat seat-child"></span> Child
+          </span>
+          <span class="legend-item">
+            <span class="seat seat-infant"></span> Infant in Lap
+          </span>
+          <span class="legend-item">
+            <span class="seat-icon seat-icon-special">!</span> Special SSR
+          </span>
+          <span class="legend-item">
+            <span class="seat-icon seat-icon-wheelchair">♿</span> Wheelchair SSR
+          </span>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <small class="text-muted me-auto">Layout is indicative only.</small>
+        <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Times / Delay Modal -->
+<div class="modal fade" id="timeModal" tabindex="-1" aria-labelledby="timeModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-md modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="timeModalLabel">Times</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div id="time-modal-core"></div>
+        <div id="delay-section" class="mt-3 pt-2 border-top d-none">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <strong>Delay Codes</strong>
+            <button id="btn-add-delay" type="button" class="btn btn-outline-secondary btn-sm">Add code</button>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-sm mb-2">
+              <thead>
+                <tr>
+                  <th>Code</th>
+                  <th class="text-end">Minutes</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="delay-rows"></tbody>
+            </table>
+          </div>
+          <div class="small">
+            Required delay: <span id="delay-required">0</span> min<br>
+            Allocated: <span id="delay-allocated">0</span> min
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <small class="text-muted me-auto">Times are local and not yet persisted.</small>
+        <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Right-click context menu -->
+<div id="flightContextMenu" class="dropdown-menu" style="position:absolute; display:none; z-index:1060;">
+  <button class="dropdown-item" type="button" id="ctx-departure">Departure Times</button>
+  <button class="dropdown-item" type="button" id="ctx-arrival">Arrival Times</button>
+</div>
+
+<style>
+.dcs-gantt-shell {
+  margin-top: 0.75rem;
+}
+.dcs-gantt-header .gantt-label-col {
+  width: 120px;
+  flex-shrink: 0;
+}
+.dcs-gantt-axis {
+  position: relative;
+  height: 30px;
+  border-bottom: 1px solid #e5e7eb;
+  font-size: 0.75rem;
+}
+.dcs-gantt-axis .tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px dashed #e5e7eb;
+  padding-left: 2px;
+  transform: translateX(-50%);
+  color: #6c757d;
+  white-space: nowrap;
+}
+.dcs-gantt-axis .tick-label {
+  position: absolute;
+  bottom: 0;
+  transform: translate(-50%, 0);
+}
+.dcs-gantt-rows {
+  max-height: 600px;
+  overflow-y: auto;
+  border-radius: 0 0 .25rem .25rem;
+}
+.gantt-row {
+  display: flex;
+  border-bottom: 1px solid #f1f3f5;
+  min-height: 44px;
+}
+.gantt-row-label {
+  width: 120px;
+  flex-shrink: 0;
+  padding: 0.35rem 0.5rem;
+  font-weight: 600;
+  font-size: 0.85rem;
+  background: #f8fafc;
+  border-right: 1px solid #e5e7eb;
+}
+.gantt-row-track {
+  position: relative;
+  flex-grow: 1;
+  background: #fbfdff;
+}
+
+/* main flight bar (ETD/ETA) */
+.gantt-flight {
+  position: absolute;
+  top: 18px;
+  height: 20px;
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.15);
+  border-radius: 0;
+  color: #fff;
+}
+
+/* scheduled bar (STD/STA) touching the main bar */
+.gantt-flight-sched {
+  position: absolute;
+  top: 10px;
+  height: 8px;
+  background: #4c1d95; /* dark purple */
+  border-radius: 0;
+}
+
+/* airport labels above the bar */
+.gantt-airport-label {
+  position: absolute;
+  top: 0px;
+  font-size: 0.7rem;
+  color: #6c757d;
+  pointer-events: none;
+}
+.gantt-airport-label.dep {
+  transform: translateX(-10%);
+}
+.gantt-airport-label.arr {
+  transform: translateX(-50%);
+}
+
+/* status colours (from your screenshot) */
+.gantt-flight.status-planning      { background-color: #00ff00; color:#000; }
+.gantt-flight.status-onblocks      { background-color: #000000; }
+.gantt-flight.status-offblocks     { background-color: #e37373; }
+.gantt-flight.status-takeoff       { background-color: #0080ff; }
+.gantt-flight.status-landed        { background-color: #00fff1; color:#000; }
+.gantt-flight.status-diverted      { background-color: #ffab00; color:#000; }
+.gantt-flight.status-returntostand { background-color: #ff9800; color:#000; }
+.gantt-flight.status-unknown       { background-color: #6c757d; }
+
+.gantt-flight.sent {
+  box-shadow: 0 0 0 2px #198754;
+}
+
+/* === Seat map === */
+.seatmap-grid {
+  display: grid;
+  grid-auto-rows: 32px;
+  grid-gap: 4px;
+  justify-content: flex-start;
+  padding: 4px 0;
+}
+
+/* we’ll set column count dynamically in JS */
+.seatmap-row-label {
+  font-size: 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 4px;
+  font-weight: 600;
+}
+
+.seat {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  background: #9ca3af; /* empty/default */
+  display: inline-flex;      /* was: flex */
+  align-items: center;
+  justify-content: center;
+  font-size: 0.65rem;
+  color: #fff;
+  position: relative;
+  cursor: pointer;
+}
+
+/* seat colours by pax type / SSR */
+.seat-adult {
+  background: #eab308; /* nice yellow */
+}
+.seat-child {
+  background: #22c55e; /* nice green */
+}
+/* adult with lap infant SSR (INFT/INF) */
+.seat-adult-infant {
+  background: #0ea5e9; /* blue */
+}
+/* optional: dedicated infant seat if you ever get one */
+.seat-infant {
+  background: #0ea5e9;
+}
+/* explicit empty seat class (uses default grey) */
+.seat-empty {
+  background: #9ca3af;
+}
+/* icons overlay */
+.seat-icons {
+  position: absolute;
+  bottom: 1px;
+  right: 2px;
+  display: flex;
+  gap: 1px;
+}
+
+.seat-icon {
+  font-size: 0.55rem;
+  line-height: 1;
+}
+
+.seat-icon-special {
+  color: #facc15; /* yellow */
+}
+
+.seat-icon-wheelchair {
+  color: #38bdf8;
+}
+
+/* highlight on hover */
+.seat:hover {
+  outline: 2px solid #f97316;
+}
+
+/* legend icons (re-use styles but without seat box) */
+#seatmap-legend .seat {
+  cursor: default;
+}
+/* === Large seat map modal layout (2+1 / 2+2) === */
+.seatmap-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 0;
+}
+
+/* One row of seats (e.g. "1 A _ BC") */
+.seat-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Row number on the left */
+.seat-label {
+  width: 24px;
+  text-align: right;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+/* Block of seats (left or right of aisle) */
+.seat-block {
+  display: flex;
+  gap: 4px;
+}
+
+/* Visual aisle gap between left/right blocks */
+.seat-aisle {
+  width: 18px;
+}
+
+/* legend layout */
+#seatmap-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.5rem;
+}
+
+#seatmap-legend .legend-item {
+  display: inline-flex;
+  align-items: center;
+}
+
+#seatmap-legend .seat {
+  cursor: default;           /* keep it non-clickable in legend */
+  margin-right: 0.35rem;
+}
+#flight-warnings .badge {
+  margin-left: 0.25rem;
+}
+</style>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  const dataNodes     = Array.from(document.querySelectorAll(".gantt-flight-data"));
+  const rowsContainer = document.getElementById("dcs-gantt-rows");
+  const axisEl        = document.getElementById("dcs-gantt-axis");
+
+  if (!rowsContainer || !axisEl) return;
+
+  const DEFAULT_BLOCK_MIN = 60;
+
+  // Base → ICAO mapping
+  const BASE_ICAO = {
+    "AKL": "NZAA",  // Auckland
+    "WLG": "NZWN",  // Wellington
+    "CHC": "NZCH",  // Christchurch
+    "PPQ": "NZPP",  // Paraparaumu
+    "WHK": "NZWK",  // Whakatane
+    "WAG": "NZWU",  // Whanganui
+    "CHT": "NZCI",  // Chatham Islands
+    "ZQN": "NZQN",  // Queenstown
+    "BHE": "NZWB",  // Blenheim
+  };
+
+  // ---------- Helpers ----------
+  function parseDate(val) {
+    if (!val) return null;
+    const d = new Date(val);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  function formatDateYMD(d) {
+    if (!d) return "";
+    const yyyy = d.getFullYear();
+    const mm   = String(d.getMonth() + 1).padStart(2, "0");
+    const dd   = String(d.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  function fmtTime(d) {
+    if (!d) return "";
+    return d.toLocaleTimeString("en-NZ", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+  }
+
+  function normaliseStatus(status) {
+    if (!status) return "unknown";
+    const s = status.toLowerCase();
+    if (s.includes("planning"))        return "planning";
+    if (s.includes("on blocks"))       return "onblocks";
+    if (s.includes("off blocks"))      return "offblocks";
+    if (s.includes("take off"))        return "takeoff";
+    if (s.includes("landed"))          return "landed";
+    if (s.includes("return to stand")) return "returntostand";
+    if (s.includes("divert"))          return "diverted";
+    return "unknown";
+  }
+
+  // ---------- Build rows from DOM (hidden .gantt-flight-data divs) ----------
+  function buildRowsFromDom(nodes) {
+    return nodes.map(node => ({
+      reg: node.dataset.reg || "Unknown",
+      dep: node.dataset.dep || "",
+      ades: node.dataset.ades || "",
+      std_nz: node.dataset.std || null,
+      sta_nz: node.dataset.sta || null,
+      std_sched_nz: node.dataset.stdSched || null,
+      sta_sched_nz: node.dataset.staSched || null,
+      flight_number: node.dataset.flight || "",
+      designator: node.dataset.designator || "",
+      apg_plan_id: node.dataset.apgPlanId || "",
+      block_mins: node.dataset.block || "0",
+      aircraft_type: node.dataset.aircraftType || "",
+      flight_status: node.dataset.flightStatus || "",
+      adt: node.dataset.adt || "0",
+      chd: node.dataset.chd || "0",
+      inf: node.dataset.inf || "0",
+      pax_count: node.dataset.paxCount || "0",
+      bags_kg: node.dataset.bagsKg || "0",
+      pax_list: node.dataset.paxList ? JSON.parse(node.dataset.paxList) : []
+    }));
+  }
+
+  // ---------- Convert rows → flights model ----------
+  function buildFlightsFromRows(rows) {
+    return rows
+      .map((row, idx) => {
+        const stdEst   = parseDate(row.std_nz);
+        const staEst   = parseDate(row.sta_nz);
+        const stdSched = parseDate(row.std_sched_nz);
+        const staSched = parseDate(row.sta_sched_nz);
+
+        const block = parseInt(row.block_mins || "0", 10) || DEFAULT_BLOCK_MIN;
+        const etaEst = staEst || (stdEst ? new Date(stdEst.getTime() + block * 60000) : null);
+
+        const flightFull = (row.flight_number || "").trim();
+        const designator = (row.designator || "").trim().toUpperCase();
+
+        let numericPart = flightFull;
+        if (designator && flightFull.toUpperCase().startsWith(designator)) {
+          numericPart = flightFull.slice(designator.length);
+        }
+
+        let paxList = [];
+        try {
+          paxList = row.pax_list || [];
+        } catch (e) {
+          console.warn("Bad pax_list JSON", e);
+        }
+
+        return {
+          id: idx,
+          reg: (row.reg || "UNKNOWN").toUpperCase().trim(),
+          dep: (row.dep || "").toUpperCase(),
+          ades: (row.ades || "").toUpperCase(),
+          stdEst,
+          staEst: etaEst,
+          stdSched,
+          staSched,
+          designator,
+          flightFull,
+          flightNumeric: numericPart,
+          apgPlanId: row.apg_plan_id || "",
+          blockMins: block,
+          statusRaw: row.flight_status || "",
+          statusNorm: normaliseStatus(row.flight_status),
+          paxTotal: parseInt(row.pax_count || "0", 10) || 0,
+          paxAdt: parseInt(row.adt || "0", 10) || 0,
+          paxChd: parseInt(row.chd || "0", 10) || 0,
+          paxInf: parseInt(row.inf || "0", 10) || 0,
+          bagsKg: parseFloat(row.bags_kg || "0") || 0,
+          paxList: paxList,
+          aircraftType: row.aircraft_type || ""
+        };
+      })
+      .filter(f => f.stdEst && f.staEst);
+  }
+
+  // ---------- Global Gantt state ----------
+  let flights    = [];
+  let chartStart = null;
+  let chartEnd   = null;
+  let durationMs = 0;
+  let byReg      = {};
+  let regs       = [];
+
+  // ---------- Modals / context menu shared state ----------
+  let currentFlight = null;
+  let currentBarEl  = null;
+
+  const actionModalEl  = document.getElementById("flightActionModal");
+  const actionModal    = actionModalEl ? new bootstrap.Modal(actionModalEl) : null;
+  const timeModalEl    = document.getElementById("timeModal");
+  const timeModal      = timeModalEl ? new bootstrap.Modal(timeModalEl) : null;
+  const paxListModalEl = document.getElementById("paxListModal");
+  const paxListModal   = paxListModalEl ? new bootstrap.Modal(paxListModalEl) : null;
+  const seatmapModalEl = document.getElementById("seatmapModal");
+  const seatmapModal   = seatmapModalEl ? new bootstrap.Modal(seatmapModalEl) : null;
+
+  const ctxMenu         = document.getElementById("flightContextMenu");
+  const ctxDepartureBtn = document.getElementById("ctx-departure");
+  const ctxArrivalBtn   = document.getElementById("ctx-arrival");
+
+  function hideContextMenu() {
+    if (ctxMenu) ctxMenu.style.display = "none";
+  }
+  document.addEventListener("click", hideContextMenu);
+
+  // ---------- Gantt rendering ----------
+  function renderGanttFromFlights(newFlights) {
+    flights = newFlights || [];
+
+    if (!flights.length) {
+      rowsContainer.innerHTML = "";
+      axisEl.innerHTML = "";
+      byReg = {};
+      regs  = [];
+      return;
+    }
+
+    // Time window
+    let minStd = flights[0].stdEst;
+    let maxEta = flights[0].staEst;
+    flights.forEach(f => {
+      if (f.stdEst && f.stdEst < minStd) minStd = f.stdEst;
+      if (f.staEst && f.staEst > maxEta) maxEta = f.staEst;
+    });
+
+    chartStart = new Date(minStd.getTime() - 60 * 60000);
+    chartEnd   = new Date(maxEta.getTime() + 60 * 60000);
+    durationMs = chartEnd - chartStart;
+
+    // Axis
+    axisEl.innerHTML = "";
+    const startHour = new Date(chartStart);
+    startHour.setMinutes(0, 0, 0);
+    for (let t = new Date(startHour); t <= chartEnd; t.setHours(t.getHours() + 1)) {
+      const offset = (t - chartStart) / durationMs * 100;
+      const tick   = document.createElement("div");
+      tick.className = "tick";
+      tick.style.left = offset + "%";
+
+      const label = document.createElement("div");
+      label.className = "tick-label";
+      label.textContent = fmtTime(t);
+
+      tick.appendChild(label);
+      axisEl.appendChild(tick);
+    }
+
+    // Group by registration
+    byReg = {};
+    flights.forEach(f => {
+      const regKey = f.reg || "UNKNOWN";
+      if (!byReg[regKey]) byReg[regKey] = [];
+      byReg[regKey].push(f);
+    });
+    regs = Object.keys(byReg).sort();
+
+    // Re-render rows with current base filter
+    const baseFilterSelect = document.getElementById("base-filter");
+    const baseCode = baseFilterSelect ? (baseFilterSelect.value || "") : "";
+    renderRowsForBase(baseCode);
+  }
+
+  // ---------- Rows / bars (with base filter) ----------
+  function renderRowsForBase(baseCode) {
+    rowsContainer.innerHTML = "";
+
+    const base     = (baseCode || "").toUpperCase();
+    const baseIcao = base ? (BASE_ICAO[base] || null) : null;
+
+    regs.forEach(reg => {
+      const flightsForReg = (byReg[reg] || []).slice().sort((a, b) => a.stdEst - b.stdEst);
+
+      // Filter aircraft lines by base (either IATA or mapped ICAO)
+      if (base) {
+        const hasBaseFlight = flightsForReg.some(f => {
+          const dep  = (f.dep || "").toUpperCase();
+          const ades = (f.ades || "").toUpperCase();
+          return (
+            dep === base || ades === base ||
+            (baseIcao && (dep === baseIcao || ades === baseIcao))
+          );
+        });
+        if (!hasBaseFlight) return; // skip this aircraft
+      }
+
+      const row = document.createElement("div");
+      row.className = "gantt-row";
+
+      const labelCol = document.createElement("div");
+      labelCol.className = "gantt-row-label";
+      labelCol.textContent = reg;
+
+      const track = document.createElement("div");
+      track.className = "gantt-row-track";
+
+      let lastArrAirport = null;
+
+      flightsForReg.forEach(f => {
+        const leftPct  = (f.stdEst - chartStart) / durationMs * 100;
+        const widthPct = Math.max((f.staEst - f.stdEst) / durationMs * 100, 2);
+
+        // scheduled bar (thin)
+        if (f.stdSched && f.staSched) {
+          const schedLeft  = (f.stdSched - chartStart) / durationMs * 100;
+          const schedWidth = Math.max((f.staSched - f.stdSched) / durationMs * 100, 2);
+          const schedBar = document.createElement("div");
+          schedBar.className = "gantt-flight-sched";
+          schedBar.style.left  = schedLeft + "%";
+          schedBar.style.width = schedWidth + "%";
+          track.appendChild(schedBar);
+        }
+
+        // actual bar (thick)
+        const bar = document.createElement("div");
+        bar.className = "gantt-flight status-" + (f.statusNorm || "unknown");
+        bar.style.left  = leftPct + "%";
+        bar.style.width = widthPct + "%";
+        bar.dataset.flightId = f.id;
+
+        const labelCode = `${f.designator || ""}${f.flightNumeric || f.flightFull || ""}`.trim();
+        bar.innerHTML = `<span class="flight-main">${labelCode}</span>`;
+        bar.title = `${labelCode}  ${f.dep} → ${f.ades}  (${fmtTime(f.stdEst)}–${fmtTime(f.staEst)})`;
+
+        bar.addEventListener("click", function (ev) {
+          ev.preventDefault();
+          currentFlight = f;
+          currentBarEl  = bar;
+          populateFlightDetailsModal(f);
+          if (actionModal) actionModal.show();
+        });
+
+        bar.addEventListener("contextmenu", function (ev) {
+          ev.preventDefault();
+          currentFlight = f;
+          currentBarEl  = bar;
+          if (!ctxMenu) return;
+          ctxMenu.style.left = ev.pageX + "px";
+          ctxMenu.style.top  = ev.pageY + "px";
+          ctxMenu.style.display = "block";
+        });
+
+        // airport labels
+        if (!lastArrAirport || f.dep !== lastArrAirport) {
+          const depLbl = document.createElement("div");
+          depLbl.className = "gantt-airport-label dep";
+          depLbl.textContent = f.dep;
+          depLbl.style.left = leftPct + "%";
+          track.appendChild(depLbl);
+        }
+
+        const arrLbl = document.createElement("div");
+        arrLbl.className = "gantt-airport-label arr";
+        arrLbl.textContent = f.ades;
+        arrLbl.style.left = (leftPct + widthPct) + "%";
+        track.appendChild(arrLbl);
+        lastArrAirport = f.ades;
+
+        track.appendChild(bar);
+      });
+
+      row.appendChild(labelCol);
+      row.appendChild(track);
+      rowsContainer.appendChild(row);
+    });
+  }
+
+  const baseFilterSelect = document.getElementById("base-filter");
+  if (baseFilterSelect) {
+    baseFilterSelect.addEventListener("change", function () {
+      renderRowsForBase(this.value || "");
+    });
+  }
+
+  // ---------- Passenger status classifier ----------
+  function classifyPaxStatus(p) {
+    const raw =
+      (p.DCSStatus || p.DcsStatus ||
+       p.Status    || p.status    ||
+       p.CheckInStatus || p.checkInStatus ||
+       p.BoardingStatus || p.boardingStatus ||
+       "").toString().toUpperCase();
+
+    if (p.Boarded === true || p.boarded === true) return "BOARDED";
+    if (p.CheckedIn === true || p.checkedIn === true) return "CHECKED";
+
+    if (!raw) return "BOOKED";
+
+    if (raw.includes("BOARD")) return "BOARDED";
+    if (raw.includes("CHECK")) return "CHECKED";
+    if (raw === "CI" || raw === "CKIN" || raw === "CKI") return "CHECKED";
+    if (raw === "BD" || raw === "BRD") return "BOARDED";
+
+    return "BOOKED";
+  }
+
+  // ---------- Flight details modal ----------
+  function populateFlightDetailsModal(f) {
+    const codeEl      = document.getElementById("modal-flight-code");
+    const routeEl     = document.getElementById("modal-route");
+    const acEl        = document.getElementById("modal-aircraft");
+    const stdStaEl    = document.getElementById("modal-std-sta");
+    const etdEtaEl    = document.getElementById("modal-etd-eta");
+    const statusEl    = document.getElementById("modal-status");
+    const paxBrkEl    = document.getElementById("modal-pax-breakdown");
+    const bagsEl      = document.getElementById("modal-bags");
+    const warningsEl  = document.getElementById("flight-warnings");
+
+    const labelCode = `${f.designator || ""}${f.flightNumeric || f.flightFull || ""}`.trim();
+
+    if (codeEl)  codeEl.textContent  = labelCode;
+    if (routeEl) routeEl.textContent = `${f.dep} → ${f.ades}`;
+    if (acEl)    acEl.textContent    = f.reg;
+
+    const stdTxt = f.stdSched ? fmtTime(f.stdSched) : "—";
+    const staTxt = f.staSched ? fmtTime(f.staSched) : "—";
+    if (stdStaEl) stdStaEl.textContent = `${stdTxt} / ${staTxt}`;
+
+    const etdTxt = fmtTime(f.stdEst);
+    const etaTxt = fmtTime(f.staEst);
+    if (etdEtaEl) etdEtaEl.textContent = `${etdTxt || "—"} / ${etaTxt || "—"}`;
+
+    if (statusEl) statusEl.textContent = f.statusRaw || "Unknown";
+
+    // booked / checked / boarded from passenger list
+    const paxList = Array.isArray(f.paxList) ? f.paxList : [];
+    const bookedTotal  = paxList.length;
+    let checkedTotal   = 0;
+    let boardedTotal   = 0;
+
+    paxList.forEach(p => {
+      const bucket = classifyPaxStatus(p);
+      if (bucket === "CHECKED" || bucket === "BOARDED") checkedTotal++;
+      if (bucket === "BOARDED") boardedTotal++;
+    });
+
+    const typeStr = `Total: ${f.paxTotal} (AD ${f.paxAdt} / CHD ${f.paxChd} / INF ${f.paxInf})`;
+
+    if (paxBrkEl) {
+      paxBrkEl.innerHTML =
+        `Booked: <strong>${bookedTotal}</strong>, ` +
+        `Checked-in: <strong>${checkedTotal}</strong>, ` +
+        `Boarded: <strong>${boardedTotal}</strong> ` +
+        `<span class="text-muted ms-2">${typeStr}</span>`;
+    }
+
+    if (bagsEl) bagsEl.textContent = (f.bagsKg || 0).toFixed(1);
+
+    // ---- NEW: warnings (DCS + APG) with hover details ----
+    if (warningsEl) {
+      const hasDcs = Array.isArray(f.paxList) && f.paxList.length > 0;
+      const hasApg = !!(f.apgPlanId && f.apgPlanId.toString().trim());
+
+      // What date/time & IDs are we actually using?
+      const flightDate = formatDateYMD(f.stdEst || f.stdSched);
+      const labelCode  = `${f.designator || ""}${f.flightNumeric || f.flightFull || ""}`.trim();
+      const etdText    = fmtTime(f.stdEst);
+      const etaText    = fmtTime(f.staEst);
+
+      // Text for the tooltips
+      const dcsTip = hasDcs
+        ? `DCS flight key:\n  ${labelCode}  ${f.dep} → ${f.ades}\n  Date: ${flightDate}\n  ETD/ETA (local): ${etdText} / ${etaText}`
+        : `No DCS passenger list linked for:\n  ${labelCode}  ${f.dep} → ${f.ades}\n  Date: ${flightDate}`;
+
+      const apgTip = hasApg
+        ? `APG plan ID: ${f.apgPlanId}\nMatched using:\n  ${labelCode}  ${f.dep} → ${f.ades}\n  Date: ${flightDate}`
+        : `No APG plan ID is currently linked to:\n  ${labelCode}  ${f.dep} → ${f.ades}\n  Date: ${flightDate}`;
+
+      let html = "";
+
+      if (hasDcs) {
+        html += `
+          <span
+            class="badge bg-success me-1"
+            title="${dcsTip.replace(/"/g, "&quot;")}"
+          >
+            DCS linked
+          </span>`;
+      } else {
+        html += `
+          <span
+            class="badge bg-secondary me-1"
+            title="${dcsTip.replace(/"/g, "&quot;")}"
+          >
+            No DCS pax
+          </span>`;
+      }
+
+      if (hasApg) {
+        html += `
+          <span
+            class="badge bg-success"
+            title="${apgTip.replace(/"/g, "&quot;")}"
+          >
+            APG plan
+          </span>`;
+      } else {
+        html += `
+          <span
+            class="badge bg-warning text-dark"
+            title="${apgTip.replace(/"/g, "&quot;")}"
+          >
+            No APG plan
+          </span>`;
+      }
+
+      warningsEl.innerHTML = html;
+    }
+  }
+
+  // ---------- APG push ----------
+// --- send to APG with pending icon + stronger payload building ---
+function sendToFlightPlan(f, barEl) {
+  if (!f) return;
+
+  // Button feedback
+  const sendBtn = document.getElementById("btn-send-apg");
+  let originalBtnHtml = "";
+  if (sendBtn) {
+    originalBtnHtml = sendBtn.innerHTML;
+    sendBtn.disabled = true;
+    sendBtn.innerHTML =
+      '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>Sending…';
+  }
+
+  // Bar feedback
+  if (barEl) barEl.classList.add("sending");
+
+  // --- Build required fields safely ---
+  // Flight date: prefer ETD, fall back to STD
+  const dt = f.stdEst || f.stdSched || null;
+  const dateStr = dt ? dt.toISOString().slice(0, 10) : null;
+
+  // Plan ID: from our model
+  const apgPlanId = (f.apgPlanId || f.apg_plan_id || "").toString().trim() || null;
+
+  // Designator + flight number parsing
+  let designator = (f.designator || "").toString().trim().toUpperCase();
+  let fullNo =
+    (f.flightFull ||
+      f.flight ||
+      (designator && f.flightNumeric ? designator + f.flightNumeric : "") ||
+      "").toString().replace(/\s+/g, "").toUpperCase();
+
+  // If we still don't have a designator, try to infer from fullNo
+  if (!designator && fullNo) {
+    const m = fullNo.match(/^([A-Z]{1,3})?(\d+)/);
+    if (m) {
+      if (m[1]) designator = m[1];
+    }
+  }
+
+  // Numeric part: last run of digits
+  let number = "";
+  if (fullNo) {
+    const m2 = fullNo.match(/(\d+)$/);
+    if (m2) number = m2[1];
+  }
+  // If no fullNo yet but we have designator + numeric, build it
+  if (!fullNo && designator && f.flightNumeric) {
+    number = f.flightNumeric.toString();
+    fullNo = (designator + number).toUpperCase();
+  }
+
+  const baseRequest = {
+    apg_plan_id: apgPlanId,
+    dep: (f.dep || "").toString().toUpperCase(),
+    date: dateStr,
+    designator: designator,
+    flight_number: fullNo || null,
+    pax_list: Array.isArray(f.paxList) ? f.paxList : []
+  };
+
+
+  console.log("[APG] sending payload:", baseRequest);
+
+  // If anything critical is missing, abort nicely
+  if (!baseRequest.apg_plan_id ||
+      !baseRequest.dep ||
+      !baseRequest.date ||
+      !baseRequest.designator ||
+      !baseRequest.flight_number) {
+
+    console.error("[APG] missing required fields:", baseRequest);
+    alert("Cannot send to Flight Plan: missing required data (check console).");
+
+    if (sendBtn) {
+      sendBtn.disabled = false;
+      sendBtn.innerHTML = originalBtnHtml;
+    }
+    if (barEl) barEl.classList.remove("sending");
+    return;
+  }
+
+  // --- Do preview then actual send ---
+  fetch("/api/dcs/push_to_apg", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...baseRequest, preview_only: true })
+  })
+    .then(r => r.json())
+    .then(data => {
+      if (!data.ok) throw new Error(data.error || "Preview failed");
+      console.log("[APG] preview OK:", data);
+
+      return fetch("/api/dcs/push_to_apg", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...baseRequest, preview_only: false })
+      });
+    })
+    .then(r => r.json())
+    .then(data => {
+      if (!data.ok) throw new Error(data.error || "APG push failed");
+
+      console.log("[APG] send OK:", data);
+
+      // Bar visual
+      if (barEl) {
+        barEl.classList.remove("sending");
+        barEl.classList.add("sent");
+      }
+
+      // Button success state
+      if (sendBtn) {
+        sendBtn.innerHTML = "Sent ✓";
+        setTimeout(() => {
+          sendBtn.disabled = false;
+          sendBtn.innerHTML = originalBtnHtml;
+        }, 2000);
+      }
+
+      if (data.plan_id) {
+        loadApgPlanDetails(data.plan_id);
+      }
+    })
+    .catch(err => {
+      console.error("[APG] send error:", err);
+      alert("Error sending to Flight Plan: " + err.message);
+
+      if (sendBtn) {
+        sendBtn.disabled = false;
+        sendBtn.innerHTML = originalBtnHtml;
+      }
+      if (barEl) barEl.classList.remove("sending");
+    });
+}
+
+// --- Reset APG plan for the current flight ---
+async function resetFlightPlan(f, barEl) {
+  if (!f) return;
+
+  const resetBtn = document.getElementById("btn-reset-apg");
+  if (!resetBtn) return;
+
+  const dt = f.stdEst || f.stdSched || null;
+  const dateStr = dt ? dt.toISOString().slice(0, 10) : null;
+
+  const apgPlanId = (f.apgPlanId || f.apg_plan_id || "").toString().trim() || null;
+
+  const payload = {
+    apg_plan_id: apgPlanId,
+    dep: (f.dep || "").toString().toUpperCase(),
+    date: dateStr,
+    designator: (f.designator || "").toString().toUpperCase(),
+    flight_number:
+      (f.flightFull ||
+        (f.designator || "") + (f.flightNumeric || "")).
+        toString().replace(/\s+/g, "").toUpperCase()
+  };
+
+  if (!payload.apg_plan_id || !payload.dep || !payload.date || !payload.designator || !payload.flight_number) {
+    alert("Cannot reset APG plan: missing required data.");
+    return;
+  }
+
+  if (!confirm(`Reset APG plan ${payload.apg_plan_id} for ${payload.designator}${payload.flight_number}?`)) {
+    return;
+  }
+
+  resetBtn.disabled = true;
+  const originalText = resetBtn.textContent;
+  resetBtn.textContent = "Resetting…";
+
+  if (barEl) barEl.classList.add("sending");
+
+  try {
+    const resp = await fetch("/api/dcs/reset_apg", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await resp.json().catch(() => ({}));
+
+    if (!resp.ok || !data.ok) {
+      throw new Error(data.error || resp.statusText || "Reset failed");
+    }
+
+    alert("APG plan has been reset.");
+    if (barEl) {
+      barEl.classList.remove("sending");
+      barEl.classList.remove("sent");
+    }
+  } catch (err) {
+    console.error("[APG] reset error:", err);
+    alert("Error resetting APG plan: " + err.message);
+    if (barEl) barEl.classList.remove("sending");
+  } finally {
+    resetBtn.disabled = false;
+    resetBtn.textContent = originalText;
+  }
+}
+
+// Wire the reset button
+const resetBtn = document.getElementById("btn-reset-apg");
+if (resetBtn) {
+  resetBtn.addEventListener("click", function () {
+    if (!currentFlight) {
+      alert("Please select a flight on the Gantt first.");
+      return;
+    }
+    resetFlightPlan(currentFlight, currentBarEl);
+  });
+}
+
+  async function loadApgPlanDetails(planId) {
+    const detailsEl = document.getElementById("apg-plan-details");
+    const idSpan    = document.getElementById("apg-plan-id");
+    const jsonPre   = document.getElementById("apg-plan-json");
+    if (!detailsEl || !idSpan || !jsonPre) return;
+
+    try {
+      const res  = await fetch(`/api/apg/plan/${planId}`);
+      const data = await res.json();
+      if (!res.ok || !data.ok) return;
+      idSpan.textContent      = planId;
+      jsonPre.textContent     = JSON.stringify(data.plan, null, 2);
+      detailsEl.style.display = "";
+      detailsEl.open          = true;
+    } catch (err) {
+      console.error("Error fetching APG plan:", err);
+    }
+  }
+
+  const sendBtn = document.getElementById("btn-send-apg");
+  if (sendBtn) {
+    sendBtn.addEventListener("click", function () {
+      if (!currentFlight || !currentBarEl) return;
+      sendToFlightPlan(currentFlight, currentBarEl);
+    });
+  }
+
+  // ---------- Passenger list table (sortable) ----------
+  function formatDob(dobStr) {
+    if (!dobStr) return "";
+    const d = new Date(dobStr);
+    if (isNaN(d.getTime())) return dobStr;
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }
+
+  function calcAge(dobStr) {
+    if (!dobStr) return "";
+    const d = new Date(dobStr);
+    if (isNaN(d.getTime())) return "";
+    const today = new Date();
+    let age = today.getFullYear() - d.getFullYear();
+    const m = today.getMonth() - d.getMonth();
+    if (m < 0 || (m === 0 && today.getDate() < d.getDate())) age--;
+    return age;
+  }
+
+  function getField(obj, candidates, fallback = "") {
+    for (const c of candidates) {
+      if (obj[c] !== undefined && obj[c] !== null && obj[c] !== "") {
+        return obj[c];
+      }
+    }
+    return fallback;
+  }
+
+  // Seat parsing helper for sorting "12C"
+  function parseSeatCode(seatStr) {
+    if (!seatStr) return { row: Number.MAX_SAFE_INTEGER, col: "" };
+    const s = seatStr.toString().trim().toUpperCase();
+    const m = s.match(/^(\d+)([A-Z]+)$/);
+    if (!m) return { row: Number.MAX_SAFE_INTEGER, col: s };
+    return {
+      row: parseInt(m[1], 10),
+      col: m[2],
+    };
+  }
+
+  function sortPaxTable(colIndex, ascending) {
+    const table = document.getElementById("pax-list-table");
+    const tbody = document.getElementById("pax-list-body");
+    if (!table || !tbody) return;
+
+    const rows = Array.from(tbody.querySelectorAll("tr"));
+    if (!rows.length) return;
+
+    rows.sort((a, b) => {
+      const aText = (a.children[colIndex]?.textContent || "").trim();
+      const bText = (b.children[colIndex]?.textContent || "").trim();
+
+      if (colIndex === 0) {
+        const aSeat = parseSeatCode(aText);
+        const bSeat = parseSeatCode(bText);
+        if (aSeat.row !== bSeat.row)
+          return ascending ? (aSeat.row - bSeat.row) : (bSeat.row - aSeat.row);
+        if (aSeat.col < bSeat.col) return ascending ? -1 : 1;
+        if (aSeat.col > bSeat.col) return ascending ? 1 : -1;
+        return 0;
+      }
+
+      if (colIndex === 3) {
+        const aNum = parseInt(aText || "0", 10);
+        const bNum = parseInt(bText || "0", 10);
+        if (isNaN(aNum) && isNaN(bNum)) return 0;
+        if (isNaN(aNum)) return ascending ? 1 : -1;
+        if (isNaN(bNum)) return ascending ? -1 : 1;
+        return ascending ? (aNum - bNum) : (bNum - aNum);
+      }
+
+      if (aText < bText) return ascending ? -1 : 1;
+      if (aText > bText) return ascending ? 1 : -1;
+      return 0;
+    });
+
+    rows.forEach(row => tbody.appendChild(row));
+  }
+
+  (function setupPaxTableHeaderSort() {
+    const table = document.getElementById("pax-list-table");
+    if (!table) return;
+
+    const headers = table.querySelectorAll("thead th");
+    headers.forEach((th, idx) => {
+      th.style.cursor = "pointer";
+      th.dataset.sortDir = "none";
+
+      th.addEventListener("click", () => {
+        const current = th.dataset.sortDir;
+        const newDir = (current === "asc") ? "desc" : "asc";
+
+        headers.forEach(h => h.dataset.sortDir = "none");
+        th.dataset.sortDir = newDir;
+
+        sortPaxTable(idx, newDir === "asc");
+      });
+    });
+  })();
+
+  function populatePassengerListModal(passengers) {
+    const tbody = document.getElementById("pax-list-body");
+    if (!tbody) return;
+
+    tbody.innerHTML = "";
+
+    (passengers || []).forEach((p) => {
+      const name =
+        (
+          getField(p, ["Name", "FullName", "PassengerName"], "") ||
+          (
+            (getField(p, ["NamePrefix"], "") + " " +
+             getField(p, ["GivenName", "FirstName"], "") + " " +
+             getField(p, ["Surname", "LastName"], ""))
+          )
+        ).trim();
+
+      const dob   = getField(p, ["DateOfBirth", "BirthDate", "DOB"], "");
+      const age   = calcAge(dob);
+      const seat  = getField(p, ["Seat", "SeatNo", "SeatNumber"], "");
+      const pnr   = getField(p, ["BookingReferenceID", "PNR", "PnrCode", "RecordLocator"], "");
+      const status = classifyPaxStatus(p);
+
+      const ssrs = getField(p, ["Ssrs", "SSRs", "SpecialServiceRequests"], []);
+      let ssrText = "";
+      if (Array.isArray(ssrs)) {
+        ssrText = ssrs
+          .map((s) => {
+            const c   = (s.Code || s.code || "").toUpperCase();
+            const txt = s.FreeText || s.freeText || "";
+            return txt ? `${c} (${txt})` : c;
+          })
+          .filter(Boolean)
+          .join(", ");
+      } else if (typeof ssrs === "string") {
+        ssrText = ssrs;
+      }
+
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${seat}</td>
+        <td>${name}</td>
+        <td>${dob ? dob.substring(0, 10) : ""}</td>
+        <td>${age ? age : ""}</td>
+        <td>${pnr}</td>
+        <td>${status}</td>
+        <td>${ssrText}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+    // default sort: seat ascending
+    sortPaxTable(0, true);
+  }
+
+  const viewPaxBtn = document.getElementById("btn-view-pax");
+  if (viewPaxBtn && paxListModal) {
+    viewPaxBtn.addEventListener("click", function () {
+      if (!currentFlight) return;
+      populatePassengerListModal(currentFlight.paxList || []);
+      paxListModal.show();
+    });
+  }
+
+  // ---------- Seatmap ----------
+  const SSR_SPECIAL = new Set(["CKIN", "DEAF", "PETC", "VVIP", "UNZZ"]);
+
+  function hasWheelchairSSR(ssrs) {
+    if (!Array.isArray(ssrs)) return false;
+    return ssrs.some(s => {
+      const code = (s.Code || s.code || "").toUpperCase();
+      return code.startsWith("WC");
+    });
+  }
+
+  function hasSpecialSSR(ssrs) {
+    if (!Array.isArray(ssrs)) return false;
+    return ssrs.some(s => {
+      const code = (s.Code || s.code || "").toUpperCase();
+      return SSR_SPECIAL.has(code);
+    });
+  }
+
+  function hasInfantSSR(ssrs) {
+    if (!Array.isArray(ssrs)) return false;
+    return ssrs.some(s => {
+      const code = (s.Code || s.code || "").toUpperCase();
+      return code === "INFT" || code === "INF";
+    });
+  }
+
+  const seatmapConfigs = {
+    SF3_STD: {
+      name: "SF340A",
+      rows: [1,2,3,4,5,6,7,8,9],
+      left: ["A"],
+      right: ["B","C"],
+      lastRowMode: "4-inline",
+      hasRow0C: false,
+    },
+    SF3_CIZ: {
+      name: "SF340B",
+      rows: [1,2,3,4,5,6,7,8,9,10,11],
+      left: ["A"],
+      right: ["B","C"],
+      lastRowMode: "4-inline",
+      hasRow0C: false,
+    },
+    SF3_CIT: {
+      name: "SF340A",
+      rows: [0,1,2,3,4,5,6,7,8,9,10,11],
+      left: ["A"],
+      right: ["B","C"],
+      lastRowMode: null,
+      hasRow0C: true,
+    },
+    
+    ATR72: {
+      name: "ATR 72",
+      rows: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17],
+      left: ["A","B"],
+      right:["C","D"],
+      lastRowMode: null,
+      hasRow0C: false,
+    },
+  };
+
+  function seatmapKeyForFlight(f) {
+    const t = (f.aircraftType || "").toUpperCase();
+    const r = (f.reg || "").toUpperCase();
+
+    if (t.includes("ATR") || r.includes("MCU")) return "ATR72";
+
+    const isSaab =
+      t.includes("SAAB") ||
+      t.includes("SF3") ||
+      t.includes("SF34") ||
+      t.includes("SF340") ||
+      r.startsWith("ZK-CI") ||
+      r.startsWith("ZK-KR");
+
+    if (isSaab) {
+      if (r === "ZK-CIT") return "SF3_CIT";
+      if (r === "ZK-CIZ") return "SF3_CIZ";
+      return "SF3_STD";
+    }
+
+    return null;
+  }
+
+  function buildSeatmapForFlight(f) {
+    const container = document.getElementById("seatmap-container");
+    const infoEl    = document.getElementById("seatmap-info");
+    const titleEl   = document.getElementById("seatmapModalLabel");
+    if (!container || !infoEl || !titleEl) return;
+
+    container.innerHTML = "";
+    infoEl.textContent = "Click a seat to see passenger details.";
+
+    const key = seatmapKeyForFlight(f);
+    const cfg = key ? seatmapConfigs[key] : null;
+
+    if (!cfg) {
+      titleEl.textContent = `Seat map — ${f.reg}`;
+      infoEl.textContent  = "Seatmap not available for this aircraft type.";
+      return;
+    }
+
+    titleEl.textContent = `Seat map — ${cfg.name} (${f.reg})`;
+
+    const paxBySeat = {};
+    (f.paxList || []).forEach(p => {
+      const seat = (p.Seat || p.SeatNumber || "").toString().toUpperCase();
+      if (seat) paxBySeat[seat] = p;
+    });
+
+    function makeSeat(rowNum, col) {
+      const seatCode = `${rowNum}${col}`;
+      const seatEl   = document.createElement("div");
+      seatEl.className = "seat";
+      seatEl.textContent = col;
+      seatEl.dataset.seat = seatCode;
+
+      const pax = paxBySeat[seatCode];
+
+      if (pax) {
+        const ssrsForSeat = getField(pax, ["Ssrs","SSRs","SpecialServiceRequests"], []);
+        const paxType = (pax.PassengerType || pax.passengerType || "").toUpperCase();
+
+        if (paxType === "CH" || paxType === "CHD") {
+          seatEl.classList.add("seat-child");
+        } else if (hasInfantSSR(ssrsForSeat)) {
+          seatEl.classList.add("seat-adult-infant");
+        } else {
+          seatEl.classList.add("seat-adult");
+        }
+
+        const iconsDiv = document.createElement("div");
+        iconsDiv.className = "seat-icons";
+
+        if (hasSpecialSSR(ssrsForSeat)) {
+          const sp = document.createElement("span");
+          sp.className = "seat-icon seat-icon-special";
+          sp.textContent = "!";
+          iconsDiv.appendChild(sp);
+        }
+
+        if (hasWheelchairSSR(ssrsForSeat)) {
+          const wc = document.createElement("span");
+          wc.className = "seat-icon seat-icon-wheelchair";
+          wc.textContent = "♿";
+          iconsDiv.appendChild(wc);
+        }
+
+        if (iconsDiv.children.length > 0) {
+          seatEl.appendChild(iconsDiv);
+        }
+      } else {
+        seatEl.classList.add("seat-empty");
+      }
+
+      seatEl.addEventListener("click", function () {
+        container.querySelectorAll(".seat.selected").forEach(el => el.classList.remove("selected"));
+        seatEl.classList.add("selected");
+
+        const pax = paxBySeat[seatCode];
+        if (pax) {
+          const name = [
+            pax.NamePrefix || "",
+            pax.GivenName || pax.FirstName || "",
+            pax.Surname   || pax.LastName  || ""
+          ].join(" ").trim();
+
+          const dobRaw = pax.DateOfBirth || pax.BirthDate || "";
+          const dob    = formatDob(dobRaw);
+          const age    = calcAge(dobRaw);
+          const pnr    = pax.BookingReferenceID || "";
+          let ssrs = "";
+          if (Array.isArray(pax.Ssrs) && pax.Ssrs.length) {
+            ssrs = pax.Ssrs.map(s => {
+              const code = s.Code || "";
+              const text = s.FreeText || "";
+              return text ? `${code} (${text})` : code;
+            }).join(", ");
+          }
+
+          infoEl.innerHTML = `
+            <div><strong>${seatCode}</strong></div>
+            <div>${name}</div>
+            <div>DOB: ${dob || "—"}${age ? ` (${age} yrs)` : ""}</div>
+            <div>PNR: ${pnr || "—"}</div>
+            <div>SSR: ${ssrs || "—"}</div>
+          `;
+        } else {
+          infoEl.innerHTML = `<strong>${seatCode}</strong><br>Empty seat`;
+        }
+      });
+
+      return seatEl;
+    }
+
+    container.innerHTML = "";
+    const lastRowNumber = cfg.rows[cfg.rows.length - 1];
+
+    cfg.rows.forEach(rowNum => {
+      const rowDiv = document.createElement("div");
+      rowDiv.className = "seat-row";
+
+      const label = document.createElement("div");
+      label.className = "seat-label";
+      label.textContent = rowNum;
+      rowDiv.appendChild(label);
+
+      const isRow0C          = cfg.hasRow0C && rowNum === 0;
+      const isLastRow4Inline = cfg.lastRowMode === "4-inline" && rowNum === lastRowNumber;
+
+      if (isRow0C) {
+        const ghostA = document.createElement("div");
+        ghostA.className = "seat";
+        ghostA.style.visibility = "hidden";
+        const ghostB = document.createElement("div");
+        ghostB.className = "seat";
+        ghostB.style.visibility = "hidden";
+
+        const leftBlock = document.createElement("div");
+        leftBlock.className = "seat-block";
+        leftBlock.appendChild(ghostA);
+        leftBlock.appendChild(ghostB);
+        rowDiv.appendChild(leftBlock);
+
+        const aisle = document.createElement("div");
+        aisle.className = "seat-aisle";
+        rowDiv.appendChild(aisle);
+
+        const rightBlock = document.createElement("div");
+        rightBlock.className = "seat-block";
+        rightBlock.appendChild(makeSeat(rowNum, "C"));
+        rowDiv.appendChild(rightBlock);
+
+        container.appendChild(rowDiv);
+        return;
+      }
+
+      if (isLastRow4Inline) {
+        const block = document.createElement("div");
+        block.className = "seat-block";
+        ["A", "B", "C", "D"].forEach(col => block.appendChild(makeSeat(rowNum, col)));
+        rowDiv.appendChild(block);
+        container.appendChild(rowDiv);
+        return;
+      }
+
+      const leftCols  = cfg.left.slice();
+      const rightCols = cfg.right.slice();
+
+      const leftBlock = document.createElement("div");
+      leftBlock.className = "seat-block";
+      leftCols.forEach(col => leftBlock.appendChild(makeSeat(rowNum, col)));
+      rowDiv.appendChild(leftBlock);
+
+      const aisle = document.createElement("div");
+      aisle.className = "seat-aisle";
+      rowDiv.appendChild(aisle);
+
+      const rightBlock = document.createElement("div");
+      rightBlock.className = "seat-block";
+      rightCols.forEach(col => rightBlock.appendChild(makeSeat(rowNum, col)));
+      rowDiv.appendChild(rightBlock);
+
+      container.appendChild(rowDiv);
+    });
+  }
+
+  const seatmapBtn = document.getElementById("btn-seatmap");
+  if (seatmapBtn && seatmapModal) {
+    seatmapBtn.addEventListener("click", function () {
+      if (!currentFlight) return;
+      buildSeatmapForFlight(currentFlight);
+      seatmapModal.show();
+    });
+  }
+
+  // ---------- Times / delay modal ----------
+  function minutesBetween(t1, t2) {
+    if (!t1 || !t2) return 0;
+    return Math.round((t2 - t1) / 60000);
+  }
+
+  function recalcDelayAllocated() {
+    const delayRows    = document.getElementById("delay-rows");
+    const delayAllocEl = document.getElementById("delay-allocated");
+    if (!delayRows || !delayAllocEl) return;
+    const minsInputs = delayRows.querySelectorAll(".delay-minutes");
+    let total = 0;
+    minsInputs.forEach(inp => {
+      const v = parseInt(inp.value || "0", 10);
+      if (!isNaN(v)) total += v;
+    });
+    delayAllocEl.textContent = total.toString();
+  }
+
+  function buildTimeModal(mode, flight) {
+    const core         = document.getElementById("time-modal-core");
+    const delaySection = document.getElementById("delay-section");
+    const delayRows    = document.getElementById("delay-rows");
+    const delayReqEl   = document.getElementById("delay-required");
+    const delayAllocEl = document.getElementById("delay-allocated");
+    if (!core || !delaySection || !delayRows || !delayReqEl || !delayAllocEl) return;
+
+    core.innerHTML = "";
+    delayRows.innerHTML = "";
+    delaySection.classList.add("d-none");
+    delayReqEl.textContent   = "0";
+    delayAllocEl.textContent = "0";
+
+    const labelCode = `${flight.designator || ""}${flight.flightNumeric || flight.flightFull || ""}`.trim();
+    const stdTxt = flight.stdSched ? fmtTime(flight.stdSched) : "—";
+    const staTxt = flight.staSched ? fmtTime(flight.staSched) : "—";
+
+    if (mode === "dep") {
+      document.getElementById("timeModalLabel").textContent = `Departure Times — ${labelCode}`;
+      core.innerHTML = `
+        <div class="mb-2"><strong>${flight.dep} → ${flight.ades}</strong></div>
+        <div class="mb-2 d-flex justify-content-between">
+          <span>STD</span>
+          <span>${stdTxt}</span>
+        </div>
+        <div class="mb-2 d-flex justify-content-between align-items-center">
+          <label class="me-2 mb-0">ETD</label>
+          <input type="time"
+                 class="form-control form-control-sm w-auto"
+                 id="time-etd"
+                 value="${flight.stdEst ? fmtTime(flight.stdEst) : ""}">
+        </div>
+        <div class="mb-2 d-flex justify-content-between align-items-center">
+          <label class="me-2 mb-0">Off blocks</label>
+          <input type="time"
+                 class="form-control form-control-sm w-auto"
+                 id="time-offblocks">
+        </div>
+        <div class="mb-2 d-flex justify-content-between align-items-center">
+          <label class="me-2 mb-0">Airborne</label>
+          <input type="time"
+                 class="form-control form-control-sm w-auto"
+                 id="time-airborne">
+        </div>
+      `;
+
+      const etdInput = document.getElementById("time-etd");
+      const offInput = document.getElementById("time-offblocks");
+
+      function timeInputToDate(inputEl) {
+        if (!flight.stdSched || !inputEl) return null;
+
+        const raw = (
+          inputEl.value ||
+          inputEl.getAttribute("value") ||
+          ""
+        ).toString();
+
+        const m = raw.match(/(\d{1,2}):(\d{2})/);
+        if (!m) return null;
+
+        const h  = parseInt(m[1], 10);
+        const mi = parseInt(m[2], 10);
+
+        const d = new Date(flight.stdSched);
+        d.setHours(h, mi, 0, 0);
+        return d;
+      }
+
+      function updateDelayDep() {
+        if (!flight.stdSched) {
+          delaySection.classList.add("d-none");
+          delayReqEl.textContent   = "0";
+          delayAllocEl.textContent = "0";
+          return;
+        }
+
+        const etdDt = timeInputToDate(etdInput);
+        const offDt = timeInputToDate(offInput);
+
+        if (!etdDt && !offDt) {
+          delaySection.classList.add("d-none");
+          delayReqEl.textContent   = "0";
+          delayAllocEl.textContent = "0";
+          return;
+        }
+
+        let maxDelay = 0;
+
+        if (etdDt) {
+          const d = minutesBetween(flight.stdSched, etdDt);
+          if (d > maxDelay) maxDelay = d;
+        }
+        if (offDt) {
+          const d = minutesBetween(flight.stdSched, offDt);
+          if (d > maxDelay) maxDelay = d;
+        }
+
+        if (maxDelay > 15) {
+          delaySection.classList.remove("d-none");
+          delayReqEl.textContent = String(maxDelay);
+          recalcDelayAllocated();
+        } else {
+          delaySection.classList.add("d-none");
+          delayReqEl.textContent   = "0";
+          delayAllocEl.textContent = "0";
+        }
+      }
+
+      if (etdInput) {
+        etdInput.addEventListener("change", updateDelayDep);
+        etdInput.addEventListener("input",  updateDelayDep);
+      }
+      if (offInput) {
+        offInput.addEventListener("change", updateDelayDep);
+        offInput.addEventListener("input",  updateDelayDep);
+      }
+
+    } else {
+      document.getElementById("timeModalLabel").textContent = `Arrival Times — ${labelCode}`;
+      core.innerHTML = `
+        <div class="mb-2"><strong>${flight.dep} → ${flight.ades}</strong></div>
+        <div class="mb-2 d-flex justify-content-between">
+          <span>STA</span>
+          <span>${staTxt}</span>
+        </div>
+        <div class="mb-2 d-flex justify-content-between align-items-center">
+          <label class="me-2 mb-0">ETA</label>
+          <input type="time"
+                 class="form-control form-control-sm w-auto"
+                 id="time-eta"
+                 value="${flight.staEst ? fmtTime(flight.staEst) : ""}">
+        </div>
+        <div class="mb-2 d-flex justify-content-between align-items-center">
+          <label class="me-2 mb-0">Landing</label>
+          <input type="time"
+                 class="form-control form-control-sm w-auto"
+                 id="time-landing">
+        </div>
+        <div class="mb-2 d-flex justify-content-between align-items-center">
+          <label class="me-2 mb-0">On chocks</label>
+          <input type="time"
+                 class="form-control form-control-sm w-auto"
+                 id="time-onchocks">
+        </div>
+      `;
+
+      const etaInput = core.querySelector("#time-eta");
+
+      function updateDelayArr() {
+        const etaVal = etaInput ? etaInput.value : "";
+        if (!flight.staSched || !etaVal) {
+          delaySection.classList.add("d-none");
+          delayReqEl.textContent   = "0";
+          delayAllocEl.textContent = "0";
+          return;
+        }
+        const [h, m] = etaVal.split(":");
+        const etaDt  = new Date(flight.staSched);
+        etaDt.setHours(parseInt(h,10), parseInt(m,10), 0, 0);
+
+        const diff = minutesBetween(flight.staSched, etaDt);
+        if (Math.abs(diff) > 15) {
+          delaySection.classList.remove("d-none");
+          delayReqEl.textContent = diff.toString();
+          recalcDelayAllocated();
+        } else {
+          delaySection.classList.add("d-none");
+          delayReqEl.textContent   = "0";
+          delayAllocEl.textContent = "0";
+        }
+      }
+
+      if (etaInput) etaInput.addEventListener("change", updateDelayArr);
+    }
+
+    document.getElementById("btn-add-delay").onclick = function () {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td><input type="text" class="form-control form-control-sm delay-code" maxlength="4"></td>
+        <td><input type="number" class="form-control form-control-sm text-end delay-minutes" min="0"></td>
+        <td class="text-end">
+          <button type="button" class="btn btn-sm btn-link text-danger p-0">&times;</button>
+        </td>
+      `;
+      const remBtn   = tr.querySelector("button");
+      const minsInput = tr.querySelector(".delay-minutes");
+      remBtn.addEventListener("click", function () {
+        tr.remove();
+        recalcDelayAllocated();
+      });
+      minsInput.addEventListener("input", recalcDelayAllocated);
+      delayRows.appendChild(tr);
+      recalcDelayAllocated();
+    };
+  }
+
+  if (ctxDepartureBtn) {
+    ctxDepartureBtn.addEventListener("click", function () {
+      hideContextMenu();
+      if (!currentFlight || !timeModal) return;
+      buildTimeModal("dep", currentFlight);
+      timeModal.show();
+    });
+  }
+  if (ctxArrivalBtn) {
+    ctxArrivalBtn.addEventListener("click", function () {
+      hideContextMenu();
+      if (!currentFlight || !timeModal) return;
+      buildTimeModal("arr", currentFlight);
+      timeModal.show();
+    });
+  }
+
+  // ---------- Auto-refresh from backend ----------
+  function refreshGantt() {
+    const dateInput = document.querySelector('input[name="date"]');
+    if (!dateInput) return;
+    const dayStr = dateInput.value;
+
+    fetch(`/api/dcs/gantt_data?date=${encodeURIComponent(dayStr)}`)
+      .then(r => r.json())
+      .then(data => {
+        if (!data.ok || !Array.isArray(data.results)) return;
+        const newFlights = buildFlightsFromRows(data.results);
+        renderGanttFromFlights(newFlights);
+
+        const stamp = document.getElementById("gantt-last-refresh");
+        if (stamp) {
+          const now = new Date();
+          stamp.textContent = now.toLocaleTimeString("en-NZ", {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+          });
+        }
+      })
+      .catch(err => {
+        console.error("Gantt refresh failed:", err);
+      });
+  }
+
+  // ---------- Initial build from DOM + start refresh ----------
+  if (dataNodes.length) {
+    const domRows = buildRowsFromDom(dataNodes);
+    renderGanttFromFlights(buildFlightsFromRows(domRows));
+  }
+
+  // immediate refresh + interval
+  refreshGantt();
+  setInterval(refreshGantt, 60_000);
+});
+
+</script>
+
+{% endblock %}

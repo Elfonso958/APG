@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 try:
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -60,7 +61,6 @@ ENVISION_PAGE_LIMIT = int(os.getenv("ENVISION_PAGE_LIMIT", "100"))
 # Registration → APG aircraft_id mapping (populate for your fleet)
 REG_TO_APG_AIRCRAFT_ID = {
     # "ZK-CIZ": 137997,
-    # "G-TUIA": 251490,
 }
 
 # Optional overrides from .env (comma-separated IDs). If unset we auto-discover from /Crews/Positions.
@@ -113,6 +113,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     stream=sys.stdout,
 )
+
 
 # ===========================
 # Helpers
@@ -596,7 +597,7 @@ def build_existing_plan_index(
     window_from_utc: datetime,
     window_to_utc: datetime
 ) -> dict[tuple[str, str, str, Optional[str]], Optional[int]]:
-    statuses = [s.strip() for s in os.getenv("APG_EXIST_STATUSES", "draft,ready,planned,active,filed").split(",") if s.strip()]
+    statuses = [s.strip() for s in os.getenv("APG_EXIST_STATUSES", "draft,planned,active,filed").split(",") if s.strip()]
     index: dict[tuple[str, str, str, Optional[str]], Optional[int]] = {}
     seen = kept = 0
 
@@ -901,9 +902,21 @@ def apg_headers(bearer: str) -> Dict[str, str]:
 
 def apg_plan_edit(bearer: str, plan_payload: Dict[str, Any]) -> Dict[str, Any]:
     url = f"{APG_BASE}/plan/edit"
-    r = requests.post(url, headers=apg_headers(bearer), json=plan_payload, timeout=60)
+    headers = apg_headers(bearer)
+
+    # 🔹 Debug payload when APG_DEBUG_PAYLOAD is enabled
+    if os.getenv("APG_DEBUG_PAYLOAD", "0").lower() in ("1", "true", "yes"):
+        try:
+            logging.info(
+                "[APG] plan/edit payload:\n%s",
+                json.dumps(plan_payload, ensure_ascii=False, default=str, indent=2)[:4000],
+            )
+        except Exception:
+            logging.info("[APG] plan/edit payload (repr): %r", plan_payload)
+
+    r = requests.post(url, headers=headers, json=plan_payload, timeout=60)
     r.raise_for_status()
-    data = r.json()
+    data = r.json() or {}
     status = data.get("status", {})
     if not status.get("success", False):
         raise RuntimeError(f"APG plan/edit error: {status.get('message', 'unknown')}")
@@ -2012,6 +2025,648 @@ def run_sync_once_return_summary(
             "window_to_utc": window_to_utc,
         }
 
+# ---------------------------
+# APG: plan get + pax update
+# ---------------------------
+
+def apg_plan_get(bearer: str, plan_id: int) -> dict:
+    """
+    Fetch a single APG plan by id.
+    Docs show GET with JSON body, but POST works consistently
+    (same pattern as /plan/list and /plan/edit).
+    """
+    url = f"{APG_BASE.rstrip('/')}/plan/get"
+    headers = {
+        "Authorization": bearer,
+        "X-API-Version": APG_API_VERSION,
+        "Content-Type": "application/json",
+        "User-Agent": "AirChathams-Bridge/1.0",
+    }
+    payload = {"id": int(plan_id)}
+    r = requests.post(url, headers=headers, json=payload, timeout=30)
+    r.raise_for_status()
+    data = r.json() or {}
+    status = data.get("status", {})
+    if not status.get("success", False):
+        raise RuntimeError(f"APG plan/get error: {status.get('message', 'unknown')}")
+    return data.get("data") or {}
+
+def build_pax_payload_for_plan(
+    plan: dict,
+    pax_ad: int,
+    pax_chd: int,
+    pax_inf: int,
+    bags_kg: float,
+) -> dict:
+    """
+    Build a /plan/edit payload that:
+      * preserves existing plan structure
+      * updates baggage mass in massAndBalance
+
+    NOTE:
+    We NO LONGER add custom keys like PAX_ADT / PAX_CHD / PAX_INF in field19,
+    because APG rejects unknown item names.
+    """
+
+    pax_ad   = int(pax_ad or 0)
+    pax_chd  = int(pax_chd or 0)
+    pax_inf  = int(pax_inf or 0)
+    bags_kg  = float(bags_kg or 0.0)
+    # pax_total = pax_ad + pax_chd + pax_inf  # not used anymore
+
+    payload: dict = {
+        "id": int(plan.get("id") or 0),
+    }
+
+    # --- field19: keep EXACTLY what APG already has ---
+    orig_f19 = plan.get("field19") or {}
+    if orig_f19:
+        payload["field19"] = dict(orig_f19)
+
+    # --- massAndBalance: only touch the baggage station ---
+    mb = plan.get("massAndBalance") or {}
+    loading = mb.get("loading") or []
+    new_loading = []
+
+    for st in loading:
+        st = dict(st)  # shallow copy
+        label = (st.get("label") or "").strip().lower()
+        if label == "baggage":
+            cl = dict(st.get("customLoad") or {})
+            cl["mass"] = bags_kg  # total checked baggage in kg
+            st["customLoad"] = cl
+        new_loading.append(st)
+
+    if new_loading:
+        payload["massAndBalance"] = {
+            "loading": new_loading,
+            "fuelMass": mb.get("fuelMass", 0),
+        }
+
+    return payload
+
+
+def apg_plan_get_details(bearer: str, plan_id: int) -> dict:
+    return apg_plan_get(bearer, plan_id)
+
+def update_apg_plan_from_dcs_row(
+    bearer: str,
+    plan_id: int,
+    dcs_flight: dict,
+    preview_only: bool = False,
+) -> dict:
+    """
+    Update an APG plan's massAndBalance.loading[] from a single Zenith DCS flight.
+
+    - Pull the current plan via apg_plan_get()
+    - Apply DCS passengers -> 'Passenger {Seat}' rows (mass + pob_count)
+    - Optionally update 'Baggage' station mass from Passenger.BaggageWeight
+    - Log a detailed DEBUG block BEFORE calling plan/edit so we can see exactly
+      what is being sent into APG.
+
+    If preview_only=True:
+      -> returns {"payload": <edit_payload>, "debug": <summary>} and DOES NOT
+         call apg_plan_edit.
+
+    If preview_only=False:
+      -> logs the same debug and then calls apg_plan_edit(), returning the
+         raw APG response.
+    """
+    logger = logging.getLogger(__name__)
+
+    # --- 1) Get current plan from APG ---
+    plan = apg_plan_get(bearer, plan_id)
+
+    mb = plan.get("massAndBalance") or {}
+    loading = mb.get("loading") or []
+
+    # shallow copies so we don't mutate the original APG response object
+    loading = [dict(st) for st in loading]
+
+    # --- 2) Apply DCS passengers onto APG passenger rows ---
+    apply_dcs_passengers_to_apg_rows(loading, dcs_flight)
+
+    # --- 3) Optional baggage update from DCS ---
+    total_bags_kg = 0.0
+    for p in (dcs_flight or {}).get("Passengers") or []:
+        try:
+            total_bags_kg += float(p.get("BaggageWeight") or 0)
+        except (TypeError, ValueError):
+            pass
+
+    if total_bags_kg:
+        for st in loading:
+            label = (st.get("label") or "").strip().lower()
+            if label == "baggage":
+                cl = st.setdefault("customLoad", {})
+                cl["mass"] = total_bags_kg
+                cl.setdefault("volume", 0)
+                cl.setdefault("pob_count", 0)
+                break
+
+    # --- 4) Build the minimal plan/edit payload ---
+    edit_payload: Dict[str, Any] = {
+        "id": int(plan_id),
+        "massAndBalance": {
+            "loading": loading,
+            "fuelMass": mb.get("fuelMass", 0),
+        },
+    }
+
+    # --- 5) Build a debug summary so we can see what happened ---
+
+    # 5a) DCS pax summary (with proper names)
+    dcs_pax_summary: list[dict] = []
+    raw_pax = (dcs_flight or {}).get("Passengers") or []
+
+    for p in raw_pax:
+        seat = (p.get("Seat") or "").strip().upper()
+
+        full_name = " ".join(
+            x
+            for x in [
+                (p.get("NamePrefix") or "").strip(),
+                (p.get("GivenName") or "").strip(),
+                (p.get("Surname") or "").strip(),
+            ]
+            if x
+        ) or None
+
+        dcs_pax_summary.append(
+            {
+                "Seat": seat or None,
+                "PassengerType": p.get("PassengerType"),
+                "BaggageWeight": p.get("BaggageWeight"),
+                "Name": full_name,
+            }
+        )
+
+    # 5b) Build seat->name map for APG pax debug view
+    seat_to_name: dict[str, str] = {}
+    for p in dcs_pax_summary:
+        seat_code = (p.get("Seat") or "").strip().upper()
+        pax_name = (p.get("Name") or "").strip()
+        if seat_code and pax_name and seat_code not in seat_to_name:
+            seat_to_name[seat_code] = pax_name
+
+    # 5c) APG pax rows (after we’ve applied DCS load)
+    apg_pax_rows: list[dict] = []
+    for st in loading:
+        label = (st.get("label") or "").strip()
+        if not label.startswith("Passenger "):
+            continue
+
+        cl = st.get("customLoad") or {}
+
+        try:
+            seat_code = label.split(" ", 1)[1].strip().upper()
+        except IndexError:
+            seat_code = ""
+
+        apg_pax_rows.append(
+            {
+                "label": label,
+                "mass": cl.get("mass"),
+                "pob_count": cl.get("pob_count"),
+                "name": seat_to_name.get(seat_code),
+            }
+        )
+
+    # 5d) TEMP: log a sample raw DCS pax so we can inspect fields
+    if raw_pax:
+        try:
+            logger.info(
+                "[APG] Sample DCS passenger raw: %s",
+                json.dumps(raw_pax[0], ensure_ascii=False, default=str, indent=2),
+            )
+        except Exception:
+            logger.info(
+                "[APG] Sample DCS passenger keys: %s",
+                sorted(raw_pax[0].keys()),
+            )
+
+    debug_summary = {
+        "plan_id": int(plan_id),
+        "fuelMass": mb.get("fuelMass"),
+        "apg_pax_rows": apg_pax_rows,
+        "dcs_pax": dcs_pax_summary,
+    }
+
+    # --- 6) Log payload + summary BEFORE we call plan/edit ---
+    try:
+        logger.info(
+            "[APG] About to plan/edit (preview_only=%s) plan_id=%s\n"
+            "Payload (truncated): %s\n"
+            "Summary (truncated): %s",
+            preview_only,
+            plan_id,
+            json.dumps(edit_payload, ensure_ascii=False, default=str, indent=2)[:4000],
+            json.dumps(debug_summary, ensure_ascii=False, default=str, indent=2)[:4000],
+        )
+    except Exception as e:
+        logger.warning(
+            "[APG] Failed to serialise debug payload for logging: %r", e
+        )
+
+    # --- 7) Preview-only mode: return payload + summary, no API call ---
+    if preview_only:
+        return {
+            "payload": edit_payload,
+            "debug": debug_summary,
+        }
+
+    # --- 8) Real call to APG plan/edit ---
+    resp = apg_plan_edit(bearer, edit_payload)
+    return resp
+
+def apg_get_plan_list(bearer: str, status: Optional[str] = None, page_size: int = 200, after: Optional[str] = None) -> list[dict]:
+    """
+    POST /api/plan/list
+
+    Handles response shapes:
+      - {"status": {...}, "data": {"dataset": "...", "plans": [...]} }
+      - {"status": {...}, "data": [...]}
+      - [ ... ]  # bare list
+    """
+    url = f"{APG_BASE.rstrip('/')}/plan/list"
+    headers = {
+        "Authorization": bearer,
+        "X-API-Version": APG_API_VERSION,
+        "Content-Type": "application/json",
+        "User-Agent": "AirChathams-Bridge/1.0",
+    }
+    payload: dict[str, Any] = {"page": 1, "page_size": page_size, "is_template": 0}
+    if status:
+        payload["status"] = status
+    if after:
+        payload["after"] = after
+
+    out: list[dict] = []
+
+    while True:
+        r = requests.post(url, headers=headers, json=payload, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+
+        # Normalise to a list of plan dicts
+        rows: list[dict] = []
+        if isinstance(data, list):
+            rows = [p for p in data if isinstance(p, dict)]
+        else:
+            d = (data or {}).get("data")
+            if isinstance(d, list):
+                rows = [p for p in d if isinstance(p, dict)]
+            elif isinstance(d, dict):
+                # New format: {"dataset": "...", "plans": [...]}
+                plans = d.get("plans")
+                if isinstance(plans, list):
+                    rows = [p for p in plans if isinstance(p, dict)]
+                else:
+                    # Fallback: first list-valued field
+                    rows = next((v for v in d.values() if isinstance(v, list)), [])
+                    rows = [p for p in rows if isinstance(p, dict)]
+            else:
+                rows = []
+
+        out.extend(rows)
+        if len(rows) < page_size:
+            break
+        payload["page"] += 1
+
+    return out
+
+def _find_apg_plan_id_for_row(
+    row: dict,
+    existing_index: dict[tuple[str, str, str, Optional[str]], Optional[int]],
+    existing_index_by3: dict[tuple[str, str, str], Optional[int]],
+) -> Optional[int]:
+    """
+    Given one DCS row and the APG presence indexes, return the matching plan_id (or None).
+
+    Key is (flight_no_norm, ADEP, ADES, EOBT_key).
+    """
+    # Flight number -> APG-normalised
+    raw_flight = (row.get("flight") or row.get("Flight") or "").strip()
+    flight_no = normalize_flight_no(raw_flight)
+    if not flight_no:
+        return None
+
+    # ADEP (ICAO)
+    adep_icao = to_icao(row.get("dep") or row.get("Dep"))
+    if not adep_icao:
+        return None
+
+    # ADES (ICAO)
+    dest_raw = (
+        row.get("dest") or row.get("Dest") or
+        row.get("ades") or row.get("arr") or row.get("Arr")
+    )
+    ades_icao = to_icao(dest_raw)
+    if not ades_icao:
+        return None
+
+    # EOBT key from STD in UTC
+    std_utc = _std_to_utc_from_row(row)
+    if not std_utc:
+        return None
+    eobt_key = _canon_eobt_to_utc_min_str(std_utc)
+    if not eobt_key:
+        return None
+
+    key = (flight_no, adep_icao, ades_icao, eobt_key)
+
+    # Exact match
+    pid = existing_index.get(key)
+    if pid is not None:
+        return pid
+
+    # Fallback: ignore EOBT, match only on (flight_no, ADEP, ADES)
+    pid = existing_index_by3.get((key[0], key[1], key[2]))
+    return pid
+
+def attach_apg_presence_to_rows(
+    rows: list[dict],
+    window_from_utc: datetime,
+    window_to_utc: datetime,
+) -> None:
+    """
+    For each row in 'rows', add:
+      - row["apg_plan_id"]  -> int | None
+      - row["apg_has_plan"] -> bool
+
+    Uses the same APG presence logic as the Envision→APG sync.
+    """
+    # 1) Login to APG
+    apg_auth = apg_login(APG_EMAIL, APG_PASSWORD)
+    apg_bearer = apg_auth["authorization"]
+
+    # 2) Build presence index in the same window you show on the page
+    existing_index = build_existing_plan_index(
+        apg_bearer,
+        window_from_utc=window_from_utc,
+        window_to_utc=window_to_utc,
+    )
+
+    # Extra index ignoring EOBT for slight timing mismatches
+    existing_index_by3: dict[tuple[str, str, str], Optional[int]] = {}
+    for k, v in existing_index.items():
+        if k:
+            existing_index_by3[(k[0], k[1], k[2])] = v
+
+    # 3) Attach APG plan ids
+    for r in rows:
+        plan_id = _find_apg_plan_id_for_row(r, existing_index, existing_index_by3)
+        r["apg_plan_id"] = plan_id
+        r["apg_has_plan"] = bool(plan_id)
+
+def _std_to_utc_from_row(row: dict) -> Optional[datetime]:
+    """
+    Extract STD from the row and convert to UTC.
+
+    Looks for keys in this order: std_dt, std_utc, std.
+    Accepts datetime or ISO string "YYYY-MM-DD HH:MM[:SS]".
+    """
+    raw = row.get("std_dt") or row.get("std_utc") or row.get("std")
+    if not raw:
+        return None
+
+    if isinstance(raw, datetime):
+        dt = raw
+    else:
+        try:
+            # You can tweak if your format is different
+            dt = datetime.fromisoformat(str(raw))
+        except ValueError:
+            return None
+
+    if dt.tzinfo is None:
+        # Treat naive as NZ local
+        dt = dt.replace(tzinfo=_get_local_tz())
+
+    return dt.astimezone(timezone.utc)
+
+# === Standard passenger weights (kg) =========================================
+PAX_STD_WEIGHTS_KG = {
+    # Adults
+    "AD":     86.0,
+    "ADT":    86.0,
+    "ADULT":  86.0,
+    "A":      86.0,
+
+    # Children
+    "CHD":    46.0,
+    "CHILD":  46.0,
+    "C":      46.0,
+
+    # Infants
+    "INF":    15.0,
+    "INFANT": 15.0,
+}
+
+
+def _lookup_pax_weight_kg(pax_type: str) -> float:
+    """
+    Map DCS PassengerType -> standard weight.
+    If the type is unknown, fall back to adult weight.
+    """
+    key = (pax_type or "").strip().upper()
+    if key in PAX_STD_WEIGHTS_KG:
+        return float(PAX_STD_WEIGHTS_KG[key])
+    # Fallback = adult
+    return float(PAX_STD_WEIGHTS_KG["AD"])
+
+
+def _normalise_seat_code(raw_seat: str | None) -> str | None:
+    """
+    Normalise a DCS seat string into something like '2B', '10A', etc.
+
+    Examples:
+      '2B'      -> '2B'
+      '02b '    -> '2B'
+      ' 10A'    -> '10A'
+      '10-A'    -> '10A'
+      '3/ C'    -> '3C'
+
+    If the value can't be parsed into <row><letters>, return None.
+    """
+    if not raw_seat:
+        return None
+
+    # Clean up common separators/spaces
+    s = str(raw_seat).strip().upper()
+    s = s.replace("-", "").replace("/", "").replace(" ", "")
+    if not s:
+        return None
+
+    # Expect digits + letters, e.g. 10A or 3C
+    m = re.match(r"^(\d+)([A-Z]+)$", s)
+    if not m:
+        return None
+
+    row = str(int(m.group(1)))  # drop leading zeros ('02' -> '2')
+    col = m.group(2)
+    return row + col
+
+
+def _get_pax_seat_from_dcs(p: dict) -> str | None:
+    """
+    Try the various DCS seat fields and normalise:
+    - Seat
+    - SeatNumber
+    - SeatNo
+    """
+    raw = (
+        p.get("Seat")
+        or p.get("SeatNumber")
+        or p.get("SeatNo")
+        or ""
+    )
+    return _normalise_seat_code(raw)
+
+
+ADULT_MASS_KG = 86.0
+CHILD_MASS_KG = 46.0
+INFANT_MASS_KG = 0.0   # on lap → 0 in a seat row
+
+def apply_dcs_passengers_to_apg_rows(
+    loading: list[dict],
+    dcs_flight: dict,
+) -> None:
+    """
+    Take a Zenith DCS flight (with .Passengers list) and overwrite the APG
+    'Passenger {Seat}' rows in `loading` so that they exactly match the DCS
+    seat map.
+
+    - Every seat that has a passenger in DCS gets mass + pob_count=1
+    - Every seat with no passenger in DCS is zeroed (mass=0, pob_count=0)
+    """
+
+    pax_list = (dcs_flight or {}).get("Passengers") or []
+
+    # --- Build a simple seat -> (mass, pob_count) map from Zenith ----
+    seat_to_load: dict[str, dict[str, float]] = {}
+
+    for p in pax_list:
+        seat = (p.get("Seat") or "").strip().upper()
+        if not seat:
+            # INF w/out seat or unseated pax – we don't touch APG seat rows
+            continue
+
+        ptype = (p.get("PassengerType") or "AD").upper()
+
+        if ptype == "CHD":
+            mass = CHILD_MASS_KG
+        elif ptype == "INF":
+            mass = INFANT_MASS_KG
+        else:
+            mass = ADULT_MASS_KG
+
+        # if multiple records somehow share a seat, last one wins (that’s
+        # also what Zenith is effectively showing in the seat map)
+        seat_to_load[seat] = {"mass": float(mass), "pob_count": 1}
+
+    # --- Now push that onto the APG passenger stations ----
+    for st in loading:
+        label = (st.get("label") or "").strip()
+        if not label.startswith("Passenger "):
+            continue
+
+        cl = st.setdefault("customLoad", {})
+
+        try:
+            seat_code = label.split(" ", 1)[1].strip().upper()
+        except IndexError:
+            seat_code = ""
+
+        info = seat_to_load.get(seat_code)
+
+        if info:
+            cl["mass"] = info["mass"]
+            cl["pob_count"] = info["pob_count"]
+        else:
+            # no DCS pax in that seat
+            cl["mass"] = 0.0
+            cl["pob_count"] = 0
+
+        # make sure volume is at least present
+        cl.setdefault("volume", 0)
+
+
+
+def update_apg_plan_from_dcs_flight(
+    bearer: str,
+    plan_id: int,
+    dcs_flight: dict,
+) -> dict:
+    """
+    Update an APG plan's weightAndBalance from a single DCS flight:
+
+      * Per-seat passenger loads:
+          - For each APG 'Passenger XX' row, set mass + pob_count based on
+            DCS Passengers[] and PAX_STD_WEIGHTS_KG.
+
+      * Baggage:
+          - Optionally update the 'Baggage' station mass by summing
+            Passenger.BaggageWeight from DCS.
+
+      * We do NOT touch any other massAndBalance fields (e.g. field19) to avoid
+        APG rejecting unknown custom keys.
+    """
+    # 1) Get current plan details from APG
+    plan = apg_plan_get(bearer, plan_id)
+
+    mb = plan.get("massAndBalance") or {}
+    loading = mb.get("loading") or []
+
+    # Make a shallow copy of each station dict so we don't accidentally mutate
+    # some shared object. For nested dicts, we mutate in-place (APG is fine).
+    loading = [dict(st) for st in loading]
+
+    # 2) Apply DCS passengers → passenger seat rows
+    apply_dcs_passengers_to_apg_rows(loading, dcs_flight)
+
+    # 3) Optional: update baggage mass from DCS
+    total_bags_kg = 0.0
+    for p in (dcs_flight or {}).get("Passengers") or []:
+        try:
+            total_bags_kg += float(p.get("BaggageWeight") or 0)
+        except (TypeError, ValueError):
+            # If any weird values come through, just skip them
+            pass
+
+    if total_bags_kg:
+        for st in loading:
+            label = (st.get("label") or "").strip().lower()
+            if label == "baggage":
+                cl = st.setdefault("customLoad", {})
+                cl["mass"] = total_bags_kg
+                # keep volume/pob if present, or default them
+                cl.setdefault("volume", 0)
+                cl.setdefault("pob_count", 0)
+                break
+
+    # 4) Build minimal edit payload (only the bits APG needs)
+    edit_payload = {
+        "id": int(plan_id),
+        "massAndBalance": {
+            "loading": loading,
+            "fuelMass": mb.get("fuelMass", 0),
+        },
+    }
+
+    # Optional debug logging – controlled via env var
+    if os.getenv("APG_DEBUG_PAYLOAD", "0").lower() in ("1", "true", "yes"):
+        try:
+            logging.info(
+                "[APG] per-seat plan/edit payload:\n%s",
+                json.dumps(edit_payload, ensure_ascii=False, default=str, indent=2)[:4000],
+            )
+        except Exception:
+            logging.info("[APG] per-seat plan/edit payload (repr): %r", edit_payload)
+
+    # 5) Push to APG
+    return apg_plan_edit(bearer, edit_payload)
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Envision → APG sync")
     parser.add_argument("--once", action="store_true", help="Run a single sync pass and exit")
@@ -2019,6 +2674,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.watch:
-        watch_loop()
-    else:
+        #watch_loop()
+    #else:
         main()

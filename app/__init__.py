@@ -24,12 +24,32 @@ def _should_start_scheduler(app: Flask) -> bool:
 
 def create_app():
     app = Flask(__name__, static_folder="static", template_folder="templates")
-    # ---- DB config
-    app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///apg_importer.db"
-    app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-    app.secret_key = "dev"
+    app.config.setdefault("DCS_MAX_WORKERS", 8)  # tune as needed, e.g. 4–10
 
-    # ---- init extensions (this is what registers 'flask db' commands)
+    # 0) Load config FIRST so everything else can use it
+    from .config import Config  # <-- adjust path if needed
+    app.config.from_object(Config)
+    # Optional: allow an extra config file path via env var
+    if os.environ.get("APP_SETTINGS"):
+        app.config.from_envvar("APP_SETTINGS", silent=True)
+
+    # ---- DB config (keep if you still want to override)
+    app.config.setdefault("SQLALCHEMY_DATABASE_URI", "sqlite:///apg_importer.db")
+    app.config.setdefault("SQLALCHEMY_TRACK_MODIFICATIONS", False)
+    app.secret_key = app.config.get("SECRET_KEY", "dev")
+
+    # Log (masked) DCS config so you can confirm it’s loaded
+    dcs_base = app.config.get("DCS_API_BASE")
+    dcs_path = app.config.get("DCS_API_FLIGHTS_PATH")
+    dcs_key  = app.config.get("DCS_API_KEY") or ""
+    app.logger.info(
+        "[BOOT] DCS base=%s path=%s key=%s",
+        dcs_base,
+        dcs_path,
+        (dcs_key[:4] + "…" + dcs_key[-4:]) if dcs_key else "(missing)"
+    )
+
+    # ---- init extensions
     db.init_app(app)
     migrate.init_app(app, db)
 
@@ -38,7 +58,7 @@ def create_app():
     from .views import ui_bp
     app.register_blueprint(api_bp, url_prefix="/api")
     app.register_blueprint(ui_bp)
-
+    
     with app.app_context():
         from .models import AppConfig, SyncRun, SyncFlightLog  # noqa: F401
         from .sync.envision_apg_sync import run_sync_once_return_summary

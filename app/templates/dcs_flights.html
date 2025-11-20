@@ -1,0 +1,240 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container py-3">
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <h2 class="mb-0">DCS Flights — {{ day.isoformat() }}</h2>
+    {% if rows %}
+    <button id="btnExportCsv" class="btn btn-outline-secondary btn-sm">Export Summary CSV</button>
+    {% endif %}
+  </div>
+
+  <form class="row g-2 mb-3" method="get">
+    <div class="col-auto">
+      <label class="form-label">Date</label>
+      <input type="date" name="date" class="form-control" value="{{ day.isoformat() }}">
+    </div>
+    <div class="col-auto">
+      <label class="form-label">Dep</label>
+      <input type="text" name="dep" class="form-control" value="{{ filters.dep or '' }}" placeholder="e.g. LGW">
+    </div>
+    <div class="col-auto">
+      <label class="form-label">Arr</label>
+      <input type="text" name="arr" class="form-control" value="{{ filters.arr or '' }}" placeholder="e.g. PMI">
+    </div>
+    <div class="col-auto">
+      <label class="form-label">Airline</label>
+      <input type="text" name="airline" class="form-control" value="{{ filters.airline or '' }}" placeholder="e.g. TFL">
+    </div>
+    <div class="col-auto align-self-end">
+      <button class="btn btn-primary">Apply</button>
+    </div>
+  </form>
+
+{% if rows|length == 0 %}
+<div class="alert alert-warning">
+  No flights returned for the selected filters.
+</div>
+{% endif %}
+
+  <div class="table-responsive">
+    <table class="table table-sm table-striped align-middle">
+      <thead class="table-light">
+        <tr>
+          <th>Flight</th>
+          <th>Origin</th>
+          <th>Destination</th>
+          <th>Status</th>
+          <th>DCS</th>
+          <th>Pax</th>
+          <th>Adults</th>
+          <th>Children</th>
+          <th>Bags (kg)</th>
+          <th class="text-center">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>{{ r.flight_no }}</td>
+          <td>{{ r.origin }}</td>
+          <td>{{ r.destination }}</td>
+          <td>{{ r.status }}</td>
+          <td>{{ r.dcs_status }}</td>
+          <td>{{ r.pax_count }}</td>
+          <td>{{ r.adults }}</td>
+          <td>{{ r.children }}</td>
+          <td>{{ "%.1f"|format(r.bags_kg|float) }}</td>
+          <td class="text-center">
+            <button class="btn btn-outline-primary btn-sm js-view-pax" data-index="{{ loop.index0 }}">
+              View pax
+            </button>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="10" class="text-muted">No flights returned for this day.</td></tr>
+        {% endfor %}
+
+        {% if rows %}
+        <tr class="fw-bold">
+          <td colspan="5" class="text-end">Totals:</td>
+          <td>{{ totals.pax }}</td>
+          <td>{{ totals.adults }}</td>
+          <td>{{ totals.children }}</td>
+          <td>{{ "%.1f"|format(totals.bags_kg|float) }}</td>
+          <td></td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if rows %}
+<!-- Store the raw flight dicts for the modal (includes Passengers[]) -->
+<script id="dcs-data" type="application/json">{{ rows|tojson }}</script>
+{% endif %}
+
+<!-- Pax Details Modal -->
+<div class="modal fade" id="paxModal" tabindex="-1" aria-labelledby="paxModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="paxModalLabel">Passengers</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-2 small text-muted" id="paxSubheader"></div>
+        <div class="table-responsive">
+          <table class="table table-sm table-hover align-middle mb-0" id="paxTable">
+            <thead class="table-light">
+              <tr>
+                <th>Seat</th>
+                <th>Name</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Baggage (kg)</th>
+                <th>SSR</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="btnExportPaxCsv" type="button" class="btn btn-outline-secondary">Export Pax CSV</button>
+        <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<script>
+(function(){
+  function download(filename, text) {
+    const blob = new Blob([text], {type: "text/csv;charset=utf-8"});
+    const url = URL.createObjectURL(blob);
+    const a = Object.assign(document.createElement("a"), { href: url, download: filename });
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  }
+
+  function csvEscape(v) {
+    if (v == null) return "";
+    v = String(v);
+    return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+  }
+
+  const rowsDataEl = document.getElementById("dcs-data");
+  const flights = rowsDataEl ? JSON.parse(rowsDataEl.textContent) : [];
+
+  // SUMMARY CSV (the table rows you see)
+  const btnExportCsv = document.getElementById("btnExportCsv");
+  if (btnExportCsv) {
+    btnExportCsv.addEventListener("click", function(){
+      const headers = ["Flight","Origin","Destination","Status","DCS","Pax","Adults","Children","Bags (kg)"];
+      const lines = [headers.join(",")];
+      flights.forEach(f => {
+        lines.push([
+          csvEscape(f.flight_no),
+          csvEscape(f.origin),
+          csvEscape(f.destination),
+          csvEscape(f.status),
+          csvEscape(f.dcs_status),
+          csvEscape(f.pax_count),
+          csvEscape(f.adults),
+          csvEscape(f.children),
+          csvEscape((+f.bags_kg || 0).toFixed(1))
+        ].join(","));
+      });
+      download(`dcs_summary_{{ day.isoformat() }}.csv`, lines.join("\n"));
+    });
+  }
+
+  // PAX MODAL
+  let currentFlight = null;
+
+  function renderPaxModal(flight){
+    currentFlight = flight;
+    const pax = (flight.raw && flight.raw.Passengers) || [];
+    const title = `${flight.flight_no} — ${flight.origin} → ${flight.destination}`;
+    document.getElementById("paxModalLabel").textContent = title;
+    document.getElementById("paxSubheader").textContent =
+      `Pax: ${pax.length} | Adults: ${flight.adults} | Children: ${flight.children} | Bags: ${(flight.bags_kg || 0).toFixed(1)} kg`;
+
+    const tbody = document.querySelector("#paxTable tbody");
+    tbody.innerHTML = "";
+
+    pax.forEach(p => {
+      const ssrs = Array.isArray(p.Ssrs) ? p.Ssrs.map(s => s.Code).join(" ") : "";
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${p.Seat || ""}</td>
+        <td>${[p.NamePrefix, p.GivenName, p.Surname].filter(Boolean).join(" ")}</td>
+        <td>${p.PassengerType || ""}</td>
+        <td>${p.Status || p.IataStatus || ""}</td>
+        <td>${(Number(p.BaggageWeight) || 0).toFixed(1)}</td>
+        <td>${ssrs}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+    const modal = new bootstrap.Modal(document.getElementById("paxModal"));
+    modal.show();
+  }
+
+  document.querySelectorAll(".js-view-pax").forEach(btn => {
+    btn.addEventListener("click", function(e){
+      e.preventDefault();
+      const idx = Number(this.dataset.index || -1);
+      if (idx >= 0 && flights[idx]) renderPaxModal(flights[idx]);
+    });
+  });
+
+  // Export pax CSV for the currently opened flight
+  const btnExportPaxCsv = document.getElementById("btnExportPaxCsv");
+  if (btnExportPaxCsv) {
+    btnExportPaxCsv.addEventListener("click", function(){
+      if (!currentFlight) return;
+      const pax = (currentFlight.raw && currentFlight.raw.Passengers) || [];
+      const headers = ["Seat","Name","Type","Status","BaggageKg","SSR","BookingRef","ETicket"];
+      const lines = [headers.join(",")];
+      pax.forEach(p => {
+        const name = [p.NamePrefix, p.GivenName, p.Surname].filter(Boolean).join(" ");
+        const ssrs = Array.isArray(p.Ssrs) ? p.Ssrs.map(s => s.Code).join(" ") : "";
+        lines.push([
+          csvEscape(p.Seat || ""),
+          csvEscape(name),
+          csvEscape(p.PassengerType || ""),
+          csvEscape(p.Status || p.IataStatus || ""),
+          csvEscape((Number(p.BaggageWeight) || 0).toFixed(1)),
+          csvEscape(ssrs),
+          csvEscape(p.BookingReferenceID || ""),
+          csvEscape(p.ETicketNumber || "")
+        ].join(","));
+      });
+      download(`${currentFlight.flight_no.replace(/\s+/g,"")}_pax_{{ day.isoformat() }}.csv`, lines.join("\n"));
+    });
+  }
+})();
+</script>
+{% endblock %}
