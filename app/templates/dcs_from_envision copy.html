@@ -845,12 +845,6 @@
 
 <script>
 document.addEventListener("DOMContentLoaded", function () {
-  const GANTT_URL        = "{{ url_for('ui.api_dcs_gantt_data') }}";
-  const APG_PUSH_URL     = "{{ url_for('api.api_dcs_push_to_apg') }}";
-  const APG_RESET_URL    = "{{ url_for('api.api_dcs_reset_apg') }}";
-  const SAVE_TIMES_URL   = "{{ url_for('api.api_dcs_save_times') }}";
-  const ENV_TIMES_URL    = "{{ url_for('api.api_envision_flight_times') }}";
-  const APG_PLAN_URL_TMPL = "{{ url_for('api.api_apg_get_plan', plan_id='__PLAN__') }}";
   const dataNodes     = Array.from(document.querySelectorAll(".gantt-flight-data"));
   const rowsContainer = document.getElementById("dcs-gantt-rows");
   const axisEl        = document.getElementById("dcs-gantt-axis");
@@ -1130,7 +1124,7 @@ function buildFlightsFromRows(rows) {
   // ---------- Modals / context menu shared state ----------
   let currentFlight = null;
   let currentBarEl  = null;
-  let currentTimeMode = null;  // "de8p" or "arr"
+  let currentTimeMode = null;  // "dep" or "arr"
 
   const actionModalEl  = document.getElementById("flightActionModal");
   const actionModal    = actionModalEl ? new bootstrap.Modal(actionModalEl) : null;
@@ -1635,7 +1629,7 @@ function sendToFlightPlan(f, barEl) {
   }
 
   // --- Do preview then actual send ---
-  fetch(APG_PUSH_URL, {
+  fetch("/api/dcs/push_to_apg", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...baseRequest, preview_only: true })
@@ -1727,7 +1721,7 @@ async function resetFlightPlan(f, barEl) {
   if (barEl) barEl.classList.add("sending");
 
   try {
-    const resp = await fetch(APG_RESET_URL, {
+    const resp = await fetch("/api/dcs/reset_apg", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -1773,7 +1767,7 @@ if (resetBtn) {
     if (!detailsEl || !idSpan || !jsonPre) return;
 
     try {
-      const res  = await fetch(APG_PLAN_URL_TMPL.replace("__PLAN__", encodeURIComponent(planId)));
+      const res  = await fetch(`/api/apg/plan/${planId}`);
       const data = await res.json();
       if (!res.ok || !data.ok) return;
       idSpan.textContent      = planId;
@@ -1800,7 +1794,7 @@ if (resetBtn) {
       return Promise.resolve(null);
     }
 
-      return fetch(`${ENV_TIMES_URL}?flight_id=${encodeURIComponent(envisionFlightId)}`)
+    return fetch(`/api/envision/flight_times?flight_id=${encodeURIComponent(envisionFlightId)}`)
       .then(r => r.json())
       .then(data => {
         if (!data.ok) {
@@ -2857,7 +2851,7 @@ if (saveTimesBtn) {
     let data = null;
 
     try {
-      resp = await fetch(SAVE_TIMES_URL, {
+      resp = await fetch("/api/dcs/save_times", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -2914,7 +2908,7 @@ if (saveTimesBtn) {
       setGanttLoading(true);
     }
 
-    fetch(`${GANTT_URL}?date=${encodeURIComponent(dayStr)}`)
+    fetch(`/api/dcs/gantt_data?date=${encodeURIComponent(dayStr)}`)
       .then(r => r.json())
       .then(data => {
         if (!data.ok || !Array.isArray(data.results)) return;
