@@ -100,17 +100,17 @@ def fetch_dcs_for_flight(
     }
 
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
-    current_app.logger.info("[DCS] POST %s payload=%s", url, {
-        "DepartureAirport": payload["DepartureAirport"],
-        "DepartureDate": payload["DepartureDate"],
-        "OperatingAirline": payload["OperatingAirline"],
-        "OnlyDCSStatus": payload["OnlyDCSStatus"],
-        "ApiKey": f"{payload['ApiKey'][:4]}…{payload['ApiKey'][-4:]}" if payload["ApiKey"] else ""
-    })
+    #current_app.logger.info("[DCS] POST %s payload=%s", url, {
+    #    "DepartureAirport": payload["DepartureAirport"],
+    #   "DepartureDate": payload["DepartureDate"],
+    #    "OperatingAirline": payload["OperatingAirline"],
+    #    "OnlyDCSStatus": payload["OnlyDCSStatus"],
+    #    "ApiKey": f"{payload['ApiKey'][:4]}…{payload['ApiKey'][-4:]}" if payload["ApiKey"] else ""
+    #})
     r = requests.post(url, json=payload, headers=headers, timeout=60)
-    current_app.logger.info("[DCS] status=%s elapsed=%.3fs",
-                            r.status_code,
-                            getattr(r, "elapsed", 0.0).total_seconds() if hasattr(r, "elapsed") else -1)
+    #current_app.logger.info("[DCS] status=%s elapsed=%.3fs",
+    #                        r.status_code,
+    #                        getattr(r, "elapsed", 0.0).total_seconds() if hasattr(r, "elapsed") else -1)
     r.raise_for_status()
     return r.json()
 

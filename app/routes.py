@@ -2,6 +2,8 @@
 from flask import Blueprint, request, current_app, jsonify
 from datetime import datetime, timezone, timedelta, date
 from . import db
+import requests
+from zoneinfo import ZoneInfo
 from .models import SyncRun, SyncFlightLog, AppConfig
 from .sync.envision_apg_sync import (
     run_sync_once_return_summary,
@@ -15,6 +17,10 @@ from .sync.envision_apg_sync import (
     APG_PASSWORD,
     update_apg_plan_from_dcs_row,
     apg_plan_get,
+    envision_update_flight_times,
+    envision_get_flight_times,
+    envision_authenticate,
+    envision_put_delays
 )
 import logging
 import re
@@ -28,6 +34,11 @@ APG_APP_KEY = os.getenv("APG_APP_KEY", "")             # Provisioned by APG
 APG_API_VERSION = os.getenv("APG_API_VERSION", "1.18") # Must be sent on each call
 APG_EMAIL = os.getenv("APG_EMAIL", "")                 # API user email (from APG)
 APG_PASSWORD = os.getenv("APG_PASSWORD", "")           # API user password (from APG)
+ENVISION_BASE = os.getenv("ENVISION_BASE", "https://<envision-host>/v1")
+ENVISION_USER = os.getenv("ENVISION_USER", "")   # e.g. "OJB"
+ENVISION_PASS = os.getenv("ENVISION_PASS", "")   # e.g. "********"
+NZ_TZ  = ZoneInfo("Pacific/Auckland")
+UTC_TZ = ZoneInfo("UTC")
 
 # ---- Manual run ----
 @api_bp.post("/sync/run")
@@ -446,3 +457,237 @@ def api_apg_reset_passengers():
         # if update_apg_plan_from_dcs_row returned raw APG response:
         "apg_response": result,
     })
+
+@api_bp.post("/dcs/save_times")
+def api_dcs_save_times():
+    data = request.get_json(force=True) or {}
+
+    # --- core fields from UI ---
+    mode          = data.get("mode")            # "dep" or "arr"
+    std_sched     = data.get("std_sched")       # ISO UTC from UI (optional)
+    sta_sched     = data.get("sta_sched")       # ISO UTC from UI (optional)
+    envision_id   = data.get("envision_flight_id")
+
+    etd       = data.get("etd")        # HH:MM (NZ local)
+    offblocks = data.get("offblocks")  # HH:MM (NZ local)
+    airborne  = data.get("airborne")   # HH:MM (NZ local)
+
+    eta       = data.get("eta")        # HH:MM (NZ local)
+    landing   = data.get("landing")    # HH:MM (NZ local)
+    onchocks  = data.get("onchocks")   # HH:MM (NZ local)
+
+    # explicit local dates (YYYY-MM-DD) from UI
+    dep_date  = data.get("dep_date")   # for departure times
+    arr_date  = data.get("arr_date")   # for arrival times
+
+    # NEW: delays payload from UI
+    delays    = data.get("delays") or []
+
+    current_app.logger.info("[DCS/TIMES] raw payload: %r", data)
+
+    if not envision_id:
+        return jsonify({"ok": False, "error": "Missing Envision flight ID"}), 400
+
+    try:
+        env_id_int = int(envision_id)
+    except ValueError:
+        return jsonify({"ok": False, "error": "Bad envision_flight_id"}), 400
+
+    # 1) Envision auth
+    try:
+        env_auth = envision_authenticate()
+        token = env_auth["token"]
+    except Exception as exc:
+        current_app.logger.exception("[DCS/TIMES] Envision auth failed")
+        return jsonify({
+            "ok": False,
+            "error": f"Envision auth failed: {exc}",
+        }), 502
+
+    # 2) Get current flight so we can build a proper FlightUpdateRequest
+    try:
+        base = envision_get_flight_times(token, envision_id)
+    except Exception as exc:
+        current_app.logger.exception("[DCS/TIMES] Envision GET flight %s failed", envision_id)
+        return jsonify({
+            "ok": False,
+            "error": f"Envision GET Flights/{envision_id} failed: {exc}",
+        }), 502
+
+    # 3) Start from Envision's own values
+    update_body = {
+        "id": int(base.get("id") or envision_id),
+        "flightStatusId": base.get("flightStatusId") or 0,
+
+        # DEPARTURE (we will NOT touch 'departureEstimate' in dep mode)
+        "departureEstimate": base.get("departureEstimate"),
+        "departureActual": base.get("departureActual"),
+        "departureTakeOff": base.get("departureTakeOff"),
+
+        # ARRIVAL (we will NOT touch 'arrivalEstimate' in arr mode unless we have ETA)
+        "arrivalEstimate": base.get("arrivalEstimate"),
+        "arrivalLanded": base.get("arrivalLanded"),
+        "arrivalActual": base.get("arrivalActual"),
+
+        "plannedFlightTime": base.get("plannedFlightTime") or 0,
+        "calculatedTakeOffTime": base.get("calculatedTakeOffTime"),
+    }
+
+    # Anchor logic for combining date + HH:MM when UI dates not provided
+    base_dep_sched = (
+        std_sched
+        or base.get("departureEstimate")
+        or base.get("departureActual")
+        or base.get("departureTakeOff")
+    )
+    base_arr_sched = (
+        sta_sched
+        or base.get("arrivalEstimate")
+        or base.get("arrivalActual")
+        or base.get("arrivalLanded")
+    )
+
+    current_app.logger.info(
+        "[DCS/TIMES] using base_dep_sched=%r base_arr_sched=%r dep_date=%r arr_date=%r",
+        base_dep_sched, base_arr_sched, dep_date, arr_date
+    )
+
+    if mode == "dep":
+        # We DO NOT modify departureEstimate (ETD)
+        if dep_date:
+            dep_act = _local_date_hm_to_utc_iso(dep_date, offblocks)
+            dep_to  = _local_date_hm_to_utc_iso(dep_date, airborne)
+        else:
+            dep_act = _combine_date_and_hm(base_dep_sched, offblocks)
+            dep_to  = _combine_date_and_hm(base_dep_sched, airborne)
+
+        if dep_act:
+            update_body["departureActual"] = dep_act
+        if dep_to:
+            update_body["departureTakeOff"] = dep_to
+
+    elif mode == "arr":
+        if arr_date:
+            arr_lan = _local_date_hm_to_utc_iso(arr_date, landing)
+            arr_act = _local_date_hm_to_utc_iso(arr_date, onchocks)
+            arr_est = _local_date_hm_to_utc_iso(arr_date, eta)
+        else:
+            arr_lan = _combine_date_and_hm(base_arr_sched, landing)
+            arr_act = _combine_date_and_hm(base_arr_sched, onchocks)
+            arr_est = _combine_date_and_hm(base_arr_sched, eta)
+
+        # If you **don’t** want ETA touched, comment this block out
+        if arr_est:
+            update_body["arrivalEstimate"] = arr_est
+
+        if arr_lan:
+            update_body["arrivalLanded"] = arr_lan
+        if arr_act:
+            update_body["arrivalActual"] = arr_act
+
+    else:
+        return jsonify({"ok": False, "error": f"Unknown mode {mode!r}"}), 400
+
+    # Strip Nones so we only send populated fields
+    update_body = {k: v for k, v in update_body.items() if v is not None}
+
+    current_app.logger.info(
+        "[DCS/TIMES] FlightUpdateRequest payload (final): %r",
+        update_body
+    )
+
+    # 4) Send time update to Envision
+    try:
+        env_resp = envision_update_flight_times(token, envision_id, update_body)
+    except requests.HTTPError as http_err:
+        resp = http_err.response
+        body = resp.text[:500] if resp is not None and resp.text else ""
+        current_app.logger.error(
+            "[ENVISION] Flights/%s update failed: HTTP %s, body=%s",
+            envision_id,
+            resp.status_code if resp is not None else "?",
+            body,
+        )
+        return jsonify({
+            "ok": False,
+            "error": f"Envision HTTP {resp.status_code if resp is not None else '?'}",
+            "body": body,
+        }), 502
+    except Exception as exc:
+        current_app.logger.error(
+            "[DCS/TIMES] Envision HTTP error for flight %s: %s",
+            envision_id, exc
+        )
+        return jsonify({
+            "ok": False,
+            "error": str(exc),
+            "body": "",
+        }), 502
+
+    # 5) NEW: push delays to Envision
+    updated_delays = []
+    try:
+        if delays:
+            current_app.logger.info(
+                "api_dcs_save_times: sending %d delay(s) to Envision for flight %s",
+                len(delays), env_id_int
+            )
+            updated_delays = envision_put_delays(token, env_id_int, delays)
+    except Exception as e:
+        current_app.logger.exception("Envision delay update failed in api_dcs_save_times")
+        # keep same behaviour you’re seeing now: treat as fatal so UI shows error
+        return jsonify({"ok": False, "error": f"Envision delay update failed: {e}"}), 502
+
+    # 6) Success response (times + delays)
+    return jsonify({
+        "ok": True,
+        "envision_response": env_resp,
+        "delays_sent": delays,
+        "delays_result": updated_delays,
+    }), 200
+
+
+def _combine_date_and_hm(base_iso: str | None, hm: str | None) -> str | None:
+    """
+    base_iso: scheduled time from Envision, e.g. '2025-11-20T17:45:00.000Z'
+    hm: '06:45' (local HH:MM, NZ time)
+
+    Returns RFC3339 UTC string or None.
+    """
+    if not base_iso or not hm:
+        return None
+
+    try:
+        base_utc   = datetime.fromisoformat(base_iso.replace("Z", "+00:00"))
+        base_local = base_utc.astimezone(NZ_TZ)
+
+        h, m = map(int, hm.split(":", 1))
+        dt_local = base_local.replace(hour=h, minute=m, second=0, microsecond=0)
+        dt_utc   = dt_local.astimezone(UTC_TZ)
+        return dt_utc.isoformat().replace("+00:00", "Z")
+    except Exception:
+        current_app.logger.exception(
+            "_combine_date_and_hm failed for base_iso=%r hm=%r",
+            base_iso, hm
+        )
+        return None
+
+def _local_date_hm_to_utc_iso(local_date: str | None, hm: str | None) -> str | None:
+    """
+    Combine a local NZ date 'YYYY-MM-DD' and 'HH:MM' into a UTC ISO8601 string.
+    Returns None if inputs are missing/bad.
+    """
+    if not local_date or not hm:
+        return None
+    try:
+        d = date.fromisoformat(local_date)
+        hour_str, minute_str = hm.split(":", 1)
+        hour = int(hour_str)
+        minute = int(minute_str)
+    except Exception:
+        return None
+
+    dt_local = datetime(d.year, d.month, d.day, hour, minute, tzinfo=NZ_TZ)
+    dt_utc = dt_local.astimezone(timezone.utc).replace(microsecond=0)
+    # Keep a 'Z' suffix like Envision's example
+    return dt_utc.isoformat().replace("+00:00", "Z")

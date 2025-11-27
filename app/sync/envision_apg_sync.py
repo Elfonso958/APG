@@ -3,7 +3,7 @@ import sys
 import json
 import logging
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, date, time, timedelta, timezone
 try:
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 except Exception:
@@ -2666,6 +2666,161 @@ def update_apg_plan_from_dcs_flight(
 
     # 5) Push to APG
     return apg_plan_edit(bearer, edit_payload)
+
+########## Envision Flight Uodate Helpers (for reference) ##########
+def envision_get_flight_times(token: str, flight_id: int | str) -> dict:
+    """
+    GET /v1/Flights/{flightId}
+
+    Returns a single flight record, including:
+      - flightStatusId
+      - departureEstimate / departureActual / departureTakeOff
+      - arrivalEstimate / arrivalLanded / arrivalActual
+      - plannedFlightTime, calculatedTakeOffTime, etc.
+    """
+    headers = {"Authorization": f"Bearer {token}"}
+    url = f"{ENVISION_BASE}/Flights/{flight_id}"
+    r = requests.get(url, headers=headers, timeout=30)
+    r.raise_for_status()
+    data = r.json() or {}
+
+    if not isinstance(data, dict):
+        raise RuntimeError(
+            f"Unexpected /Flights/{{id}} response for {flight_id}: {data}"
+        )
+
+    return data
+
+def envision_update_flight_times(token: str, flight_id: int | str, update: dict) -> dict:
+    """
+    PUT /v1/Flights/{flightId}
+
+    Sends a Flights.Requests.FlightUpdateRequest payload, e.g.:
+
+      {
+        "id": 12345,
+        "departureEstimate": "...",
+        "departureActual": "...",
+        "departureTakeOff": "...",
+        "arrivalEstimate": "...",
+        "arrivalLanded": "...",
+        "arrivalActual": "..."
+      }
+    """
+    tenant = os.getenv("ENVISION_TENANT")
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    if tenant:
+        headers["X-Tenant-Id"] = tenant
+
+    url = f"{ENVISION_BASE}/Flights/{flight_id}"
+    r = requests.put(url, headers=headers, json=update, timeout=30)
+
+    try:
+        r.raise_for_status()
+    except requests.HTTPError as exc:
+        body = r.text or ""
+        logging.error(
+            "[ENVISION] Flights/%s update failed: HTTP %s, body=%s",
+            flight_id, r.status_code, body[:2000],
+        )
+        raise
+
+    ctype = r.headers.get("Content-Type", "")
+    if "application/json" in ctype:
+        return r.json()
+    return {"raw": r.text}
+
+###Im Not Sure what this does###
+def fetch_flights_for_day(token: str, local_day: date):
+    """
+    Backwards-compatible wrapper used by views.py.
+
+    Fetches all Envision flights for a single local day [00:00, 24:00).
+    """
+    if isinstance(local_day, datetime):
+        # In case someone passes a datetime; normalise to date
+        local_day = local_day.date()
+
+    start = datetime.combine(local_day, time.min)
+    end   = start + timedelta(days=1)
+
+    # Reuse the existing paging logic
+    return envision_get_flights(token, start, end)
+
+def envision_get_delays(token: str, flight_id: int) -> list[dict]:
+    """
+    Call Envision /v1/Flights/{flightId}/Delays and return the list.
+    """
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+    }
+    url = f"{ENVISION_BASE}/Flights/{flight_id}/Delays"
+    resp = requests.get(url, headers=headers, timeout=30)
+    resp.raise_for_status()
+    data = resp.json() or []
+
+    if not isinstance(data, list):
+        raise RuntimeError(f"Unexpected delays payload for flight {flight_id}: {data!r}")
+
+    return data
+
+def envision_put_delays(token: str, flight_id: int, delays: list[dict]) -> list[dict]:
+    """
+    Try to write delays for a flight.
+
+    NOTE: Envision currently returns 405 for PUT on /Flights/{id}/Delays.
+    After checking the API docs / Allow header you may need to change the
+    HTTP method or URL here.
+    """
+    url = f"{ENVISION_BASE.rstrip('/')}/Flights/{flight_id}/Delays"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+
+    # Normalise the payload into whatever Envision expects (example only)
+    payload = []
+    for d in delays:
+        payload.append({
+            "id": d.get("id", 0),
+            "flightId": flight_id,
+            "delayCodeId": d.get("delayCodeId"),
+            "delayCode": d.get("delayCode"),
+            "delayMinutes": d.get("delayMinutes"),
+            "isArrival": d.get("isArrival", False),
+            "comment": d.get("comment") or "",
+        })
+
+    # 🔴 THIS IS THE BIT YOU PROBABLY NEED TO CHANGE
+    # Start by logging what methods are allowed when we get a 405.
+    resp = requests.post(url, headers=headers, json=payload, timeout=30)
+
+    try:
+        resp.raise_for_status()
+    except requests.HTTPError:
+        # Extra debug
+        allow = resp.headers.get("Allow")
+        body  = (resp.text or "")[:500]
+        logging.error(
+            "envision_put_delays: HTTP %s for %s, Allow=%r, body=%s",
+            resp.status_code, url, allow, body
+        )
+        raise
+
+    if not resp.content:
+        return []
+
+    js = resp.json()
+    if not isinstance(js, list):
+        raise RuntimeError(f"Unexpected delay update response for flight {flight_id}: {js!r}")
+    return js
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Envision → APG sync")

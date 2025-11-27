@@ -24,8 +24,22 @@ def _should_start_scheduler(app: Flask) -> bool:
 
 def create_app():
     app = Flask(__name__, static_folder="static", template_folder="templates")
-    app.config.setdefault("DCS_MAX_WORKERS", 8)  # tune as needed, e.g. 4–10
+    app.config.setdefault("DCS_MAX_WORKERS", 12)  # tune as needed, e.g. 4–10
 
+    noisy_loggers = [
+    "zenith_client",   # [DCS] POST ... status logs
+    "apscheduler",     # "Scheduler started", "Added job..."
+    "dcs_api_client",  # [DCS] INFO in ...
+    "dcs_sync",        # [DCS] INFO in ...
+
+    #"werkzeug",        # 127.0.0.1 - - GET /... access logs
+    # Add any others you see in the "INFO in X" lines
+    # e.g. "routes" or your APG sync logger name if you have one
+    ]
+
+    for name in noisy_loggers:
+        logging.getLogger(name).setLevel(logging.WARNING)
+    
     # 0) Load config FIRST so everything else can use it
     from .config import Config  # <-- adjust path if needed
     app.config.from_object(Config)

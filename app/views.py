@@ -18,10 +18,13 @@ from .sync.envision_apg_sync import (
     envision_get_flights,
     ENVISION_BASE,               # diagnostics
     attach_apg_presence_to_rows, # APG plan presence
-    apg_login,                   # 🔹 add
-    apg_get_plan_list,           # 🔹 add
-    APG_EMAIL,                   # 🔹 add
-    APG_PASSWORD,                # 🔹 add
+    apg_login,                   #add
+    apg_get_plan_list,           #add
+    APG_EMAIL,                   #add
+    APG_PASSWORD,                #add
+    envision_get_flight_times,
+    fetch_flights_for_day,       #add
+    envision_get_delays
 )
 
 # ✅ use your DCS single-flight call
@@ -466,8 +469,9 @@ def _first_page_debug(token: str, start_utc: datetime, end_utc: datetime, limit:
         out["raw_text"] = f"Request error: {e}"
     return out
 
-@ui_bp.route("/dcs/from-envision")
-def dcs_from_envision_page():
+### OLD WORKING ROUTE FOR REFERENCE ONLY; MAY BE DELETED LATER ###
+@ui_bp.route("/dcs/from-envision/old")
+def dcs_from_envision_page_old():
     dstr = request.args.get("date")
     try:
         day = date.fromisoformat(dstr) if dstr else date.today()
@@ -526,7 +530,10 @@ def dcs_from_envision_page():
         return render_template("dcs_from_envision.html", day=day, results=[], diag=diag)
 
     if not env_flights:
-        diag["note"] = "No flights returned for this UTC window. Check the Raw HTTP block below (URL, params, status, body)."
+        diag["note"] = (
+            "No flights returned for this UTC window. "
+            "Check the Raw HTTP block below (URL, params, status, body)."
+        )
         return render_template("dcs_from_envision.html", day=day, results=[], diag=diag)
 
     # --- Map Envision -> table rows (convert to NZ, filter to selected NZ day) ---
@@ -572,14 +579,29 @@ def dcs_from_envision_page():
         block_mins = None
         if etd and arr_time:
             block_mins = round((arr_time - etd).total_seconds() / 60)
+
+        # STD / STA (thin bar)
         std_sched_nz = _parse_env_time_to_nz(f.get("departureScheduled"))   # STD
         sta_sched_nz = _parse_env_time_to_nz(f.get("arrivalScheduled"))     # STA
 
-        std_est_nz = _parse_env_time_to_nz(                                 # ETD
+        # ETD / ETA (estimate, what you were using for the thick bar)
+        std_est_nz = _parse_env_time_to_nz(
             f.get("departureEstimate") or f.get("departureScheduled")
         )
-        sta_est_nz = _parse_env_time_to_nz(                                 # ETA
+        sta_est_nz = _parse_env_time_to_nz(
             f.get("arrivalEstimate") or f.get("arrivalScheduled")
+        )
+
+        # NEW: ATD / ATA – off-blocks / on-blocks actuals in NZ local
+        dep_actual_nz = _parse_env_time_to_nz(
+            f.get("departureActual")
+            or f.get("departureOffBlocks")
+            or f.get("gateOutActual")
+        )
+        arr_actual_nz = _parse_env_time_to_nz(
+            f.get("arrivalActual")
+            or f.get("arrivalOnBlocks")
+            or f.get("gateInActual")
         )
 
         rows.append({
@@ -587,6 +609,7 @@ def dcs_from_envision_page():
             "dep": str(dep),
             "dest": str(arr) if arr else None,
             "ades": str(arr) if arr else "",
+            "envision_flight_id": f.get("id"),
 
             # ETD / ETA (what the thick bar uses)
             "std_nz": std_est_nz,
@@ -597,6 +620,10 @@ def dcs_from_envision_page():
             # STD / STA (thin scheduled bar)
             "std_sched_nz": std_sched_nz,
             "sta_sched_nz": sta_sched_nz,
+
+            # ✅ NEW: ATD / ATA in NZ local
+            "dep_actual_nz": dep_actual_nz,
+            "arr_actual_nz": arr_actual_nz,
 
             "block_mins": block_mins or 0,
 
@@ -650,7 +677,24 @@ def dcs_from_envision_page():
     except Exception as e:
         current_app.logger.warning(f"APG presence attach failed: {e}")
         # Don't break the page — APG column will just show blanks
-        # 🔹 Attach APG plan presence (plan_id per row)
+
+    # 🔹 Delay enrichment for initial page render
+    try:
+        for r in rows:
+            fid = r.get("envision_flight_id")
+            if not fid:
+                r["delays"] = []
+                continue
+            try:
+                r["delays"] = envision_get_delays(token, int(fid)) or []
+            except Exception as e:
+                current_app.logger.warning("Failed to load delays for %s: %s", fid, e)
+                r["delays"] = []
+    except Exception as e:
+        current_app.logger.warning("Bulk delay enrichment failed: %s", e)
+        for r in rows:
+            # make sure key exists so template doesn't blow up
+            r.setdefault("delays", [])
 
     # 🔹 APG /plan/list debug – for diagnostics panel
     if request.args.get("apg_debug") == "1":
@@ -672,6 +716,22 @@ def dcs_from_envision_page():
 
     diag["raw_http"] = _first_page_debug(token, start_utc, end_utc, limit=1000)
     return render_template("dcs_from_envision.html", day=day, results=rows, diag=diag)
+
+@ui_bp.route("/dcs/from-envision")
+def dcs_from_envision():
+    # parse ?date=… but default to today
+    day_str = request.args.get("date")
+    if day_str:
+        try:
+            day = date.fromisoformat(day_str)
+        except ValueError:
+            day = date.today()
+    else:
+        day = date.today()
+
+    # ONLY render HTML – data will be loaded via JS from /api/dcs/gantt_data
+    return render_template("dcs_from_envision.html", day=day)
+
 
 @ui_bp.get("/api/dcs/gantt_data")
 def api_dcs_gantt_data():
@@ -740,11 +800,24 @@ def api_dcs_gantt_data():
             f.get("arrivalEstimate") or f.get("arrivalScheduled")
         )  # ETA
 
-        rows.append({
+         # NEW: ATD/ATA
+        dep_actual_nz = _parse_env_time_to_nz(
+            f.get("departureActual")
+            or f.get("departureOffBlocks")
+            or f.get("gateOutActual")
+        )
+        arr_actual_nz = _parse_env_time_to_nz(
+            f.get("arrivalActual")
+            or f.get("arrivalOnBlocks")
+            or f.get("gateInActual")
+        )
+
+        row = {
             # --- core identifiers used for matching ---
             "dep": str(dep),
             "dest": str(arr) if arr else None,
             "ades": str(arr) if arr else "",
+            "envision_flight_id": f.get("id"),
 
             # ETD / ETA (thick bar)
             "std_nz": std_est_nz,
@@ -755,6 +828,10 @@ def api_dcs_gantt_data():
             # STD / STA (thin scheduled bar)
             "std_sched_nz": std_sched_nz,
             "sta_sched_nz": sta_sched_nz,
+
+            # ✅ Actual off-blocks/on-blocks
+            "dep_actual_nz": dep_actual_nz,
+            "arr_actual_nz": arr_actual_nz,
 
             "block_mins": block_mins or 0,
 
@@ -792,7 +869,12 @@ def api_dcs_gantt_data():
             "error": None,
             "apg_plan_id": "",
             "pax_list": [],
-        })
+
+            # NEW: default delays
+            "delays": [],
+        }
+
+        rows.append(row)
 
     rows.sort(key=lambda r: r["std_nz"] or _dt.min.replace(tzinfo=NZ))
 
@@ -812,10 +894,44 @@ def api_dcs_gantt_data():
     except Exception as e:
         current_app.logger.warning(f"api_dcs_gantt_data: attach_apg_presence_to_rows failed: {e}")
 
-    # 6) Make it JSON-serialisable (convert datetimes to ISO strings)
+    # 6) NEW: attach delays for each Envision flight
+    try:
+        for r in rows:
+            fid = r.get("envision_flight_id")
+            if not fid:
+                r["delays"] = []
+                continue
+
+            try:
+                delays = envision_get_delays(token, int(fid))
+            except Exception as e:
+                current_app.logger.warning(
+                    "api_dcs_gantt_data: failed to load delays for flight %s: %s",
+                    fid, e
+                )
+                delays = []
+
+            # Delays look like:
+            # {
+            #   "id": 8824,
+            #   "flightId": 68687,
+            #   "delayCodeId": 92,
+            #   "delayCode": "93",
+            #   "delayCodeDescription": "...",
+            #   "delayMinutes": 32,
+            #   "isArrival": false,
+            #   ...
+            # }
+            r["delays"] = delays or []
+    except Exception as e:
+        current_app.logger.warning(
+            "api_dcs_gantt_data: top-level delay fetch error: %s", e
+        )
+
+    # 7) Make it JSON-serialisable (convert datetimes to ISO strings)
     def row_to_json(r):
         def dt_or_none(x):
-            return x.isoformat() if isinstance(x, (datetime,)) else None
+            return x.isoformat() if isinstance(x, datetime) else None
 
         return {
             "reg": (r.get("reg") or "Unknown"),
@@ -825,6 +941,11 @@ def api_dcs_gantt_data():
             "sta_nz": dt_or_none(r.get("sta_nz")),
             "std_sched_nz": dt_or_none(r.get("std_sched_nz")),
             "sta_sched_nz": dt_or_none(r.get("sta_sched_nz")),
+            
+            # ✅ Actuals
+            "dep_actual_nz": dt_or_none(r.get("dep_actual_nz")),
+            "arr_actual_nz": dt_or_none(r.get("arr_actual_nz")),
+
             "flight_number": r.get("flight_number"),
             "designator": r.get("designator"),
             "apg_plan_id": r.get("apg_plan_id") or "",
@@ -837,10 +958,11 @@ def api_dcs_gantt_data():
             "pax_count": r.get("pax_count") or 0,
             "bags_kg": float(r.get("bags_kg") or 0),
             "pax_list": r.get("pax_list") or [],
+            "envision_flight_id": r.get("envision_flight_id"),
+            "delays": r.get("delays") or [],   # <-- NEW: ship delays to JS
         }
 
     json_rows = [row_to_json(r) for r in rows]
-
     return jsonify({"ok": True, "results": json_rows})
 
 @ui_bp.route("/debug/zenith-config")
@@ -881,6 +1003,84 @@ def _list_from_envision_payload(payload):
                     if isinstance(vv, list):
                         return vv
     return []
+
+@ui_bp.get("/api/envision/flight_times")
+def api_envision_flight_times():
+    """
+    Return Envision actual times for a single flight.
+
+    Expects:
+      /api/envision/flight_times?flight_id=12345
+
+    Uses /v1/Flights/{flightId} under the hood.
+    """
+    flight_id = request.args.get("flight_id") or request.args.get("id")
+    if not flight_id:
+        return jsonify({"ok": False, "error": "Missing flight_id"}), 400
+
+    try:
+        flight_id_int = int(flight_id)
+    except ValueError:
+        return jsonify({"ok": False, "error": "Bad flight_id"}), 400
+
+    # 1) Envision auth
+    try:
+        auth = envision_authenticate()
+        token = auth["token"]
+    except Exception as e:
+        current_app.logger.exception("Envision auth failed in api_envision_flight_times")
+        return jsonify({"ok": False, "error": f"Envision auth failed: {e}"}), 502
+
+    # 2) Get single-flight record
+    try:
+        raw = envision_get_flight_times(token, flight_id_int)
+    except Exception as e:
+        current_app.logger.exception("Envision /Flights/{id} failed")
+        return jsonify({"ok": False, "error": f"Envision /Flights/{{id}} failed: {e}"}), 502
+
+    # 3) Convert the four key timestamps to NZ local
+    def as_local_iso(key: str):
+        s = raw.get(key)
+        dt = _parse_env_time_to_nz(s) if s else None
+        return dt.isoformat() if dt else None
+
+    def as_local_hm(key: str):
+        s = raw.get(key)
+        dt = _parse_env_time_to_nz(s) if s else None
+        return dt.strftime("%H:%M") if dt else None
+
+    payload = {
+        "ok": True,
+        "flight_id": flight_id_int,
+        "flightStatusId": raw.get("flightStatusId"),
+
+        # raw strings exactly as Envision returns them
+        "raw": {
+            "departureActual": raw.get("departureActual"),
+            "departureTakeOff": raw.get("departureTakeOff"),
+            "arrivalLanded": raw.get("arrivalLanded"),
+            "arrivalActual": raw.get("arrivalActual"),
+        },
+
+        # Local ISO datetimes (NZ)
+        "local_iso": {
+            "departureActual": as_local_iso("departureActual"),
+            "departureTakeOff": as_local_iso("departureTakeOff"),
+            "arrivalLanded": as_local_iso("arrivalLanded"),
+            "arrivalActual": as_local_iso("arrivalActual"),
+        },
+
+        # HH:MM strings for UI labels
+        "local_hm": {
+            "departureActual": as_local_hm("departureActual"),
+            "departureTakeOff": as_local_hm("departureTakeOff"),
+            "arrivalLanded": as_local_hm("arrivalLanded"),
+            "arrivalActual": as_local_hm("arrivalActual"),
+        },
+    }
+
+    return jsonify(payload), 200
+
 
 def _envision_first_page_debug(token: str, start_utc: datetime, end_utc: datetime, limit: int = 5) -> dict:
     import json as _json
