@@ -847,10 +847,12 @@
 document.addEventListener("DOMContentLoaded", function () {
   const GANTT_URL        = "{{ url_for('ui.api_dcs_gantt_data') }}";
   const APG_PUSH_URL     = "{{ url_for('api.api_dcs_push_to_apg') }}";
-  const APG_RESET_URL    = "{{ url_for('api.api_dcs_reset_apg') }}";
+  const APG_RESET_URL    = "{{ url_for('api.api_apg_reset_passengers') }}";
   const SAVE_TIMES_URL   = "{{ url_for('api.api_dcs_save_times') }}";
-  const ENV_TIMES_URL    = "{{ url_for('api.api_envision_flight_times') }}";
-  const APG_PLAN_URL_TMPL = "{{ url_for('api.api_apg_get_plan', plan_id='__PLAN__') }}";
+  const ENV_TIMES_URL    = "{{ url_for('ui.api_envision_flight_times') }}";
+  // Use a real int for url_for, then swap the trailing 0 to a placeholder
+  const APG_PLAN_URL_TMPL = "{{ url_for('api.api_apg_plan_get', plan_id=0) }}".replace(/0$/, "__PLAN__");
+
   const dataNodes     = Array.from(document.querySelectorAll(".gantt-flight-data"));
   const rowsContainer = document.getElementById("dcs-gantt-rows");
   const axisEl        = document.getElementById("dcs-gantt-axis");
