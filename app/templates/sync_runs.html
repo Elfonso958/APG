@@ -13,7 +13,7 @@
   <tbody>
     {% for r in runs %}
     <tr>
-      <td><a href="/sync/runs/{{ r.id }}">#{{ r.id }}</a></td>
+      <td><a href="APG/sync/runs/{{ r.id }}">#{{ r.id }}</a></td>
       <td>{{ r.started_at.strftime("%d-%m-%y %H:%M") if r.started_at else "-" }}</td>
       <td>{{ r.finished_at.strftime("%d-%m-%y %H:%M") if r.finished_at else "-" }}</td>
       <td>{{ 'OK' if r.ok else 'FAIL' }}</td>
