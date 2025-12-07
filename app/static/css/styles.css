@@ -41,10 +41,17 @@ body{
 
 /* ====== Layout ====== */
 .container{
+  width: 100%;
   max-width: 1100px;
   margin: 24px auto;
   padding: 0 16px;
 }
+
+/* Full-width variant for pages like the Gantt */
+.container--wide{
+  max-width: 100%;
+}
+
 
 .card{
   background: var(--panel);
@@ -69,22 +76,93 @@ body{
 
 /* ====== Top Nav ====== */
 nav{
-  position: sticky; top:0; z-index: 20;
-  backdrop-filter: blur(10px);
-  background: color-mix(in oklab, var(--panel) 70%, transparent);
-  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  backdrop-filter: blur(16px);
+  background: color-mix(in oklab, var(--bg) 82%, var(--panel));
+  border-bottom: 1px solid rgba(148,163,184,0.45);
 }
+
 nav .nav-inner{
-  max-width: 1100px; margin: 0 auto; padding: 10px 16px;
-  display:flex; align-items:center; gap:14px; flex-wrap: wrap;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 10px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
 }
-nav a{
+
+/* Left side: brand + environment */
+.nav-left{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.nav-brand{
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 0.8rem;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 0% 0%, rgba(143,209,255,0.45), transparent 55%),
+    color-mix(in oklab, var(--panel) 70%, var(--bg));
+  border: 1px solid rgba(148,163,184,0.5);
   color: var(--text);
-  text-decoration: none;
-  padding: 8px 10px;
-  border-radius: 9px;
 }
-nav a:hover{ background: color-mix(in oklab, var(--text) 6%, transparent); }
+
+.nav-env{
+  font-size: 0.7rem;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(148,163,184,0.4);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* Right side: nav links + actions */
+.nav-right{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+nav a{
+  color: var(--muted);
+  text-decoration: none;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  transition:
+    color .15s ease,
+    background .15s ease,
+    transform .12s ease;
+}
+
+nav a:hover{
+  color: var(--text);
+  background: color-mix(in oklab, var(--text) 8%, transparent);
+  transform: translateY(-1px);
+}
+
+nav a.nav-active{
+  color: var(--text);
+  background: color-mix(in oklab, var(--brand) 22%, transparent);
+}
+
+/* Optional: keep buttons in nav looking neat */
+nav .btn{
+  padding-inline: 10px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+}
+
 
 /* ====== Buttons & Links ====== */
 .btn{
@@ -276,4 +354,76 @@ tr.failed td:first-child  { background-color: #f8d7da; }
 }
 .reason-list li {
   margin-bottom: 2px;
+}
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 1.5rem;
+}
+
+.page-kicker {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--muted);
+  margin-bottom: 0.15rem;
+}
+
+.page-title {
+  font-size: 1.5rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  margin: 0;
+}
+
+.page-subtitle {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-top: 0.2rem;
+}
+
+.page-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.35rem;
+}
+
+.date-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: color-mix(in oklab, var(--panel) 92%, var(--bg));
+  font-size: 0.8rem;
+}
+
+.date-pill .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--ok);
+  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.18);
+}
+
+.date-pill .date-text {
+  font-weight: 600;
+}
+
+.refresh-text small {
+  color: var(--muted);
+}
+
+@media (max-width: 768px) {
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .page-meta {
+    align-items: flex-start;
+  }
 }

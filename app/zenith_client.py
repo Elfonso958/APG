@@ -65,23 +65,18 @@ def _normalize_flight_date_to_iso(day_in: Union[str, _date, _dt]) -> str:
     raise TypeError("flight_date must be str|date|datetime")
 
 # -------- public API --------
+# zenith_client.py
+
+import requests
+from flask import current_app
+
 def fetch_dcs_for_flight(
     dep_airport: str,
-    flight_date,                   # str|date|datetime (we convert to midnight Z)
+    flight_date,                   # str|date|datetime
     airline_designator: str,       # e.g. '3C'
-    flight_number: str,            # e.g. '701'
+    flight_number: str,            # e.g. '702'
     only_status: bool = True,
 ) -> dict:
-    """
-    POSTs the exact payload required by the DCS:
-    {
-      "DepartureAirport": "...",
-      "DepartureDate": "YYYY-MM-DDT00:00:00Z",
-      "OperatingAirline": { "AirlineDesignator": "...", "FlightNumber": "..." },
-      "OnlyDCSStatus": true,
-      "ApiKey": "..."
-    }
-    """
     _require_cfg(["PROD_DCS_API_BASE", "DCS_API_FLIGHTS_PATH", "PROD_DCS_API_KEY"])
 
     base = current_app.config["PROD_DCS_API_BASE"].rstrip("/")
@@ -100,19 +95,24 @@ def fetch_dcs_for_flight(
     }
 
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
-    #current_app.logger.info("[DCS] POST %s payload=%s", url, {
-    #    "DepartureAirport": payload["DepartureAirport"],
-    #   "DepartureDate": payload["DepartureDate"],
-    #    "OperatingAirline": payload["OperatingAirline"],
-    #    "OnlyDCSStatus": payload["OnlyDCSStatus"],
-    #    "ApiKey": f"{payload['ApiKey'][:4]}…{payload['ApiKey'][-4:]}" if payload["ApiKey"] else ""
-    #})
+
+    # 🔍 Debug logging (mask API key)
+    safe_payload = dict(payload)
+    safe_payload["ApiKey"] = "****"  # don’t log real key
+    current_app.logger.info("[DCS] FullPassengerList POST %s payload=%s", url, safe_payload)
+
     r = requests.post(url, json=payload, headers=headers, timeout=60)
-    #current_app.logger.info("[DCS] status=%s elapsed=%.3fs",
-    #                        r.status_code,
-    #                        getattr(r, "elapsed", 0.0).total_seconds() if hasattr(r, "elapsed") else -1)
-    r.raise_for_status()
+
+    if not r.ok:
+        current_app.logger.error(
+            "[DCS] FullPassengerList error status=%s body=%s",
+            r.status_code,
+            r.text[:2000],
+        )
+        r.raise_for_status()
+
     return r.json()
+
 
 # -------- optional: debug helper used by /debug/dcs-ping --------
 def _debug_call(

@@ -1,18 +1,16 @@
 ﻿import os
-from flask import Blueprint, request, current_app, jsonify
+from flask import Blueprint, request, abort, send_file, make_response, current_app, jsonify, Response, render_template
 from datetime import datetime, timezone, timedelta, date
 from . import db
 import requests
+from sqlalchemy import func
 from zoneinfo import ZoneInfo
 from .models import SyncRun, SyncFlightLog, AppConfig
+from .helpers_manifest import _seat_sort_key, _format_ssrs, _calc_age, _parse_dcs_dob, generate_manifest_pdf_from_html, generate_pdf_modern
+
 from .sync.envision_apg_sync import (
     run_sync_once_return_summary,
     apg_login,
-    _canon_eobt_to_utc_min_str,
-    normalize_flight_no,
-    to_icao,
-    build_existing_plan_index,
-    _get_local_tz,
     APG_EMAIL,
     APG_PASSWORD,
     update_apg_plan_from_dcs_row,
@@ -20,7 +18,11 @@ from .sync.envision_apg_sync import (
     envision_update_flight_times,
     envision_get_flight_times,
     envision_authenticate,
-    envision_put_delays
+    envision_put_delays,
+    apg_upload_manifest_pdf,
+    PAX_STD_WEIGHTS_KG,
+    fetch_envision_crew_for_apg
+
 )
 import logging
 import re
@@ -206,6 +208,8 @@ def api_dcs_push_to_apg():
     {
       "apg_plan_id": 4595816,
       "dep": "WHK",
+      "ades": "AKL",              # optional for APG update, useful for manifest
+      "reg": "ZK-CIT",            # optional for APG update, useful for manifest
       "date": "2025-11-21",
       "designator": "3C",
       "flight_number": "823",
@@ -219,13 +223,17 @@ def api_dcs_push_to_apg():
 
     plan_id      = data.get("apg_plan_id")
     dep          = (data.get("dep") or "").strip().upper()
+    ades         = (data.get("ades") or "").strip().upper()     # NEW: for manifest + filename
+    reg          = (data.get("reg") or "").strip().upper()      # NEW: for manifest
     flight_date  = data.get("date")               # "2025-11-21" (NZ-local string)
     designator   = (data.get("designator") or "").strip().upper()
     flight_no    = (data.get("flight_number") or "").strip()
     preview_only = bool(data.get("preview_only"))
     pax_list     = data.get("pax_list") or []
 
-    # Basic validation
+    raw_crew     = data.get("crew") or [] 
+
+    # Basic validation (same as before)
     if not plan_id:
         return jsonify({"ok": False, "error": "Missing apg_plan_id"}), 400
 
@@ -242,7 +250,8 @@ def api_dcs_push_to_apg():
         return jsonify({"ok": False, "error": "Bad date format (expected YYYY-MM-DD)"}), 400
 
     # Build a *stub* DCS flight in the shape your helper expects
-    # (the important bit is the Passengers list)
+    # (the important bit is the Passengers list) – DO NOT TOUCH THIS, it
+    # is what drives the APG mass & balance update and is already working.
     dcs_flight = {
         "Origin": dep,
         "FlightDate": nz_day.isoformat(),
@@ -254,11 +263,12 @@ def api_dcs_push_to_apg():
     }
 
     logger.info(
-        "APG push: plan_id=%s dep=%s date=%s designator=%s flight_no=%s pax_count=%d preview_only=%s",
+        "APG push: plan_id=%s dep=%s date=%s designator=%s flight_no=%s "
+        "pax_count=%d preview_only=%s",
         plan_id, dep, flight_date, designator, flight_no, len(pax_list), preview_only
     )
 
-    # 1) APG auth (your existing pattern)
+    # 1) APG auth (unchanged pattern)
     try:
         auth = apg_login(APG_EMAIL, APG_PASSWORD)
         if isinstance(auth, dict):
@@ -266,13 +276,13 @@ def api_dcs_push_to_apg():
         else:
             bearer = auth  # just in case you later change apg_login to return a string
     except Exception as e:
-        current_app.logger.exception("APG login failed in api_apg_reset_passengers")
+        current_app.logger.exception("APG login failed in api_dcs_push_to_apg")
         return jsonify({"ok": False, "error": f"APG login failed: {e}"}), 502
 
-    # 2) Update APG plan from this *stub* DCS flight (using the pax you already fetched)
+    # 2) Update APG plan from this *stub* DCS flight (MASS LOGIC UNCHANGED)
     try:
         result = update_apg_plan_from_dcs_row(
-            bearer=bearer,                 # adjust name if your helper uses a different param
+            bearer=bearer,
             plan_id=int(plan_id),
             dcs_flight=dcs_flight,
             preview_only=preview_only,
@@ -281,20 +291,98 @@ def api_dcs_push_to_apg():
         logger.exception("update_apg_plan_from_dcs_row crashed")
         return jsonify({"ok": False, "error": f"APG update failed: {e}"}), 500
 
-    # 3) Return something valid in all cases
-    if preview_only:
-        # result should already contain "payload" and "debug"
-        return jsonify({
-            "ok": True,
-            "mode": "preview",
-            **result,
-        })
+    # --- Only generate + upload manifest in LIVE mode (not preview) ---
+    # --- Only generate + upload manifest in LIVE mode (not preview) ---
+    manifest_pdf = None
+    manifest_resp = None
+    manifest_error = None
+    plan_version = None
 
-    # live mode – we expect result to be the raw APG response from plan/edit
+    if not preview_only:
+        # Derive a version from APG response if possible
+        if isinstance(result, dict):
+            plan_version = (
+                result.get("version")
+                or result.get("data", {}).get("route", {}).get("version")
+                or result.get("route", {}).get("version")
+            )
+        if plan_version is None:
+            plan_version = 1
+
+        # --- Build the SAME HTML as preview (includes crew + nice layout) ---
+        env_id_raw = data.get("envision_flight_id")
+        try:
+            envision_flight_id = int(env_id_raw) if env_id_raw is not None else None
+        except (TypeError, ValueError):
+            envision_flight_id = None
+
+        try:
+            html, _flight_ctx = _build_manifest_html_and_ctx(
+                dep=dep,
+                ades=ades or "",
+                date_str=flight_date,
+                designator=designator,
+                raw_number=flight_no,
+                reg=reg or "",
+                envision_flight_id=envision_flight_id,
+            )
+        except Exception as e:
+            current_app.logger.exception(
+                "Manifest HTML build failed in api_dcs_push_to_apg"
+            )
+            manifest_error = f"Manifest HTML build failed: {e}"
+            html = None
+
+        # 2a) Generate PDF **from that HTML** using wkhtmltopdf
+        if html is not None:
+            try:
+                manifest_pdf = generate_pdf_modern(html)
+            except Exception as e:
+                current_app.logger.exception("Manifest PDF generation failed")
+                manifest_error = f"Manifest PDF generation failed: {e}"
+                manifest_pdf = None
+
+        # 2b) Upload to APG (non-fatal if it fails)
+        if manifest_pdf is not None:
+            flight_code = f"{designator}{flight_no}".upper()
+            route_str   = f"{dep}-{ades or 'UNK'}"
+            date_local  = nz_day.isoformat()
+            filename    = f"{flight_code} - {route_str} - {date_local} v{plan_version}.pdf"
+
+            try:
+                manifest_resp = apg_upload_manifest_pdf(
+                    bearer=bearer,
+                    plan_id=int(plan_id),
+                    pdf_bytes=manifest_pdf,
+                    filename=filename,
+                )
+            except Exception as e:
+                current_app.logger.exception("APG manifest upload failed")
+                manifest_error = f"APG manifest upload failed: {e}"
+
+
+    # --- Normalise manifest response for the frontend ---
+    doc_id = None
+    if isinstance(manifest_resp, dict):
+        data = manifest_resp.get("data")
+        if isinstance(data, dict):
+            # Just in case APG ever returns a single object
+            doc_id = data.get("doc_id")
+        elif isinstance(data, list) and data:
+            first = data[0] or {}
+            doc_id = first.get("doc_id")
+
+    manifest_uploaded = bool(doc_id)
+
+
     return jsonify({
         "ok": True,
         "mode": "live",
         "apg_response": result,
+        "manifest_uploaded": manifest_uploaded,
+        "manifest_doc_id": doc_id,
+        "manifest_error": manifest_error,
+        "plan_version": plan_version,
     })
 
 
@@ -353,12 +441,12 @@ def api_dcs_passenger_list():
 
     try:
         dcs = fetch_dcs_for_flight(
-            dep_airport=dep,
-            flight_date_nz=nz_day,
-            designator=designator,
-            flight_number=numeric,
-            only_status=False,          # we want full passenger list
-        )
+        dep,
+        nz_day,
+        designator,
+        numeric,
+        True,
+    )
     except Exception as e:
         current_app.logger.exception("DCS passenger_list fetch failed")
         return jsonify({"ok": False, "error": f"DCS fetch failed: {e}"}), 502
@@ -691,3 +779,322 @@ def _local_date_hm_to_utc_iso(local_date: str | None, hm: str | None) -> str | N
     dt_utc = dt_local.astimezone(timezone.utc).replace(microsecond=0)
     # Keep a 'Z' suffix like Envision's example
     return dt_utc.isoformat().replace("+00:00", "Z")
+
+@api_bp.route("/dcs/manifest_preview", methods=["POST"])
+def api_dcs_manifest_preview():
+    data = request.get_json() or {}
+
+    envision_flight_id = data.get("envision_flight_id")
+    try:
+        envision_flight_id = int(envision_flight_id) if envision_flight_id is not None else None
+    except (TypeError, ValueError):
+        envision_flight_id = None
+
+    try:
+        html, _flight_ctx = _build_manifest_html_and_ctx(
+            dep=data.get("dep") or "",
+            ades=data.get("ades") or "",
+            date_str=data.get("date") or "",
+            designator=data.get("designator") or "",
+            raw_number=data.get("number") or data.get("flight_number") or "",
+            reg=data.get("reg") or "",
+            envision_flight_id=envision_flight_id,
+        )
+    except Exception as e:
+        current_app.logger.exception("Manifest preview failed: %s", e)
+        return jsonify({"ok": False, "error": str(e)}), 400
+
+    return jsonify({"ok": True, "html": html})
+
+
+def _build_manifest_html_and_ctx(
+    dep: str,
+    ades: str,
+    date_str: str,
+    designator: str,
+    raw_number: str,
+    reg: str,
+    envision_flight_id: int | None,
+) -> tuple[str, dict]:
+    """
+    Core logic to fetch DCS + Envision crew and render manifest.html.
+    Returns (html, flight_ctx).
+    """
+
+    dep = (dep or "").upper()
+    ades = (ades or "").upper()
+    designator = (designator or "").upper()
+    reg = reg or ""
+
+    raw_number = (raw_number or "").strip().upper()
+
+    # Strip designator prefix if present (e.g. "3C702" → "702")
+    if designator and raw_number.startswith(designator):
+        number = raw_number[len(designator):]
+    else:
+        number = raw_number
+
+    if not number:
+        raise ValueError("Missing flight number for manifest build")
+
+    # 1) Fetch from DCS – we want full passenger list
+    dcs_json = fetch_dcs_for_flight(
+        dep_airport=dep,
+        flight_date=date_str,
+        airline_designator=designator,
+        flight_number=number,
+        only_status=True,
+    )
+
+    flights = dcs_json.get("Flights") or []
+    if not flights:
+        # Graceful empty case – let caller decide what to show
+        return render_template(
+            "manifest.html",
+            flight={
+                "designator": designator,
+                "number": number,
+                "dep": dep,
+                "ades": ades,
+                "date": date_str,
+                "reg": reg,
+            },
+            passengers=[],
+            crew=[],
+        ), {
+            "designator": designator,
+            "number": number,
+            "dep": dep,
+            "ades": ades,
+            "date": date_str,
+            "reg": reg,
+        }
+
+
+    dcs_f = flights[0]
+
+    # 2) Build passenger list (unchanged from your route)
+    passengers: list[dict] = []
+    for r in dcs_f.get("Passengers", []):
+        status = (r.get("Status") or "").strip().lower()
+        iata_status = (r.get("IataStatus") or "").strip().upper()
+
+        # Only include Boarded / Flown passengers
+        # DCS example: Status="Flown", IataStatus="B"
+        allowed_status = {"boarded", "flown"}
+        allowed_iata   = {"B"}  # IATA 'B' = boarded
+
+        if status not in allowed_status and iata_status not in allowed_iata:
+            # Skip anything that isn't boarded or flown
+            continue
+
+
+        dob, dob_fmt = _parse_dcs_dob(r.get("DateOfBirth"))
+        age = _calc_age(dob)
+
+        ptype  = (r.get("PassengerType") or "").strip().upper()
+        gender = (r.get("Gender") or "").strip().upper()
+        ssrs   = r.get("Ssrs") or []
+
+        has_um_code = any(
+            (s.get("Code") or "").strip().upper().startswith("UM")
+            for s in ssrs
+        )
+        has_um_text = any(
+            "UMNR" in (s.get("FreeText") or "").strip().upper()
+            for s in ssrs
+        )
+        is_um = ptype in {"UM", "UMN", "UMNR"} or has_um_code or has_um_text
+
+        pax_weight_kg = float(
+            PAX_STD_WEIGHTS_KG.get(
+                ptype,
+                PAX_STD_WEIGHTS_KG.get("AD", 0.0)
+            )
+        )
+
+        bag_weight = float(r.get("BaggageWeight") or 0.0)
+        bag_pcs    = 1 if bag_weight > 0 else 0
+
+        is_infant = ptype in {"INF", "INFANT", "IN"}
+        is_child  = ptype in {"CHD", "CHILD", "C", "CNN"}
+        is_adult  = not (is_infant or is_child)
+
+        passengers.append({
+            "seat": r.get("Seat") or "",
+            "name": " ".join(
+                x for x in [
+                    (r.get("NamePrefix") or "").strip(),
+                    (r.get("GivenName") or "").strip(),
+                    (r.get("Surname") or "").strip(),
+                ] if x
+            ),
+            "dob": dob_fmt,
+            "age": age,
+            "pnr": r.get("BookingReferenceID") or "",
+            "ssrs": _format_ssrs(ssrs),
+
+            "ptype": ptype,
+            "gender": gender,
+            "pax_weight_kg": pax_weight_kg,
+            "bags_pcs": bag_pcs,
+            "bags_kg": bag_weight,
+            "is_adult": is_adult,
+            "is_child": is_child,
+            "is_infant": is_infant,
+            "is_um": is_um,
+        })
+
+    passengers.sort(key=lambda p: _seat_sort_key(p["seat"]))
+
+    # 3) Flight metadata for header
+    flight_date_raw = dcs_f.get("FlightDate")
+    _, flight_date_fmt = _parse_dcs_dob(flight_date_raw)
+
+    flight_ctx = {
+        "designator": designator,
+        "number": number,
+        "dep": dcs_f.get("Origin") or dep,
+        "ades": dcs_f.get("Destination") or ades,
+        # this date is what we'll use for the filename (local date)
+        "date": flight_date_fmt or date_str,
+        "reg": reg,
+    }
+
+    # 4) Crew (optional)
+    crew: list[dict] = []
+    if envision_flight_id:
+        try:
+            crew = fetch_envision_crew_for_apg(envision_flight_id)
+        except Exception as e:
+            current_app.logger.exception(
+                "Manifest build: fetch_envision_crew_for_apg failed for flight_id=%s: %s",
+                envision_flight_id, e
+            )
+
+    html = render_template(
+        "manifest.html",
+        flight=flight_ctx,
+        passengers=passengers,
+        crew=crew,
+    )
+    return html, flight_ctx
+
+
+
+
+
+@api_bp.get("/api/envision/flight_crew")
+def api_envision_flight_crew():
+    """
+    Lightweight wrapper around fetch_envision_crew(envision_flight_id)
+    so the Gantt / flight details modal can show crew.
+    """
+    flight_id = request.args.get("flight_id", type=int)
+    if not flight_id:
+        return jsonify(ok=False, error="Missing flight_id"), 400
+
+    try:
+        crew = fetch_envision_crew_for_apg(flight_id)
+        # crew is already in the nice form:
+        # { position, name, employee_id, is_operating }
+        return jsonify(ok=True, crew=crew)
+    except Exception as e:
+        current_app.logger.exception(
+            "flight_crew failed for Envision flight_id=%s", flight_id
+        )
+        return jsonify(ok=False, error=str(e)), 500
+
+
+def _get_manifest_crew(
+    designator: str,
+    number: str,
+    dep: str,
+    ades: str,
+    date_str: str | None,
+    reg: str | None = None,
+) -> list[dict]:
+    """
+    Look up the most relevant SyncFlightLog row and return a normalised
+    crew list for the manifest template.
+
+    Each returned item:
+      { "position": "CPT", "name": "SMITH JOHN", "employee_id": "12345" }
+    """
+
+    full_no = f"{designator}{number}".replace(" ", "").upper()
+    dep = (dep or "").upper()
+    ades = (ades or "").upper()
+    reg = (reg or "").upper() if reg else None
+
+    day = None
+    if date_str:
+        try:
+            day = date.fromisoformat(date_str)
+        except Exception:
+            current_app.logger.warning("manifest: bad date_str %r for crew lookup", date_str)
+
+    base_q = SyncFlightLog.query.filter(
+        SyncFlightLog.flight_no == full_no
+    )
+
+    # ---------- 1) strict: flight_no + adep + ades + reg + date ----------
+    strict_q = base_q.filter(
+        SyncFlightLog.adep == dep,
+        SyncFlightLog.ades == ades,
+    )
+
+    if reg:
+        strict_q = strict_q.filter(SyncFlightLog.reg == reg)
+
+    if day is not None:
+        strict_q = strict_q.filter(func.date(SyncFlightLog.eobt) == day)
+
+    row = strict_q.order_by(SyncFlightLog.eobt.desc()).first()
+
+    # ---------- 2) fallback: flight_no + date ----------
+    if not row and day is not None:
+        fallback_q = base_q.filter(func.date(SyncFlightLog.eobt) == day)
+        row = fallback_q.order_by(SyncFlightLog.eobt.desc()).first()
+
+    # ---------- 3) fallback: latest by flight_no ----------
+    if not row:
+        row = base_q.order_by(SyncFlightLog.eobt.desc()).first()
+
+    if not row:
+        current_app.logger.info(
+            "manifest: no SyncFlightLog match for %s %s %s %s (reg=%s)",
+            full_no, dep, ades, date_str, reg
+        )
+        return []
+
+    crew: list[dict] = []
+
+    # Flight deck
+    if row.pic_name:
+        crew.append({
+            "position": "CPT",
+            "name": row.pic_name,
+            "employee_id": row.pic_empno or "",
+        })
+    if row.fo_name:
+        crew.append({
+            "position": "FO",
+            "name": row.fo_name,
+            "employee_id": row.fo_empno or "",
+        })
+
+    # Cabin crew – comma-separated lists
+    if row.cc_names:
+        names = [n.strip() for n in (row.cc_names or "").split(",") if n.strip()]
+        empnos = [e.strip() for e in (row.cc_empnos or "").split(",")] if row.cc_empnos else []
+
+        for idx, name in enumerate(names):
+            empno = empnos[idx] if idx < len(empnos) else ""
+            crew.append({
+                "position": f"CC{idx+1}",
+                "name": name,
+                "employee_id": empno,
+            })
+
+    return crew

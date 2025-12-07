@@ -1,0 +1,504 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Passenger Manifest {{ flight.designator }}{{ flight.number }}</title>
+    <style>
+      /* Colours inlined (no CSS variables) */
+      /*  ac-green:       #006c5b
+          ac-green-dark:  #00493c
+          border-color:   #444444
+          header-bg:      #f3f4f6
+          row-alt-bg:     #fafafa
+      */
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-size: 11px;
+        margin: 24px;
+        color: #111827;
+      }
+
+      h1, h2, h3 {
+        margin: 0;
+        font-weight: 600;
+        color: #111827;
+      }
+
+      h1 {
+        font-size: 20px;
+      }
+
+      h2 {
+        font-size: 14px;
+        margin-top: 18px;
+        margin-bottom: 6px;
+        border-bottom: 1px solid #e5e7eb;
+        padding-bottom: 3px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+
+      .page-header {
+        display: -webkit-box;
+        display: -ms-flexbox;
+        display: flex;
+        -webkit-box-pack: justify;
+        -ms-flex-pack: justify;
+        justify-content: space-between;
+        -webkit-box-align: flex-start;
+        -ms-flex-align: flex-start;
+        align-items: flex-start;
+
+        border-bottom: 2px solid #006c5b;
+        padding-bottom: 8px;
+        margin-bottom: 12px;
+      }
+
+      .header-left {
+        -webkit-box-flex: 1;
+        -ms-flex: 1 1 auto;
+        flex: 1 1 auto;
+        padding-right: 16px;
+      }
+
+      .flight-meta {
+        margin-top: 6px;
+        font-size: 11px;
+        line-height: 1.4;
+      }
+
+      .flight-meta-row {
+        white-space: nowrap;
+      }
+
+      .meta-label {
+        font-weight: 600;
+        color: #374151;
+      }
+
+      .meta-value {
+        font-weight: 500;
+      }
+
+      .header-right {
+        text-align: right;
+        min-width: 230px;
+        font-size: 11px;
+      }
+
+      .header-right h2 {
+        margin: 0 0 4px 0;
+        font-size: 14px;
+        border: none;
+        padding: 0;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+
+      .crew-subnote {
+        font-size: 10px;
+        color: #6b7280;
+      }
+
+      .crew-lines {
+        margin-top: 6px;
+        font-size: 11px;
+        line-height: 1.4;
+      }
+
+      .section-subnote {
+        font-size: 10px;
+        color: #6b7280;
+        margin-bottom: 4px;
+      }
+
+      table {
+        border-collapse: collapse;
+        width: 100%;
+      }
+
+      table.manifest {
+        margin-top: 4px;
+      }
+
+      th, td {
+        border: 1px solid #444444;
+        padding: 3px 4px;
+      }
+
+      th {
+        background: #f3f4f6;
+        font-weight: 600;
+        font-size: 10px;
+        text-align: left;
+        white-space: nowrap;
+      }
+
+      tbody tr:nth-child(odd) {
+        background: #fafafa;
+      }
+
+      td {
+        font-size: 10px;
+      }
+
+      .text-right {
+        text-align: right;
+      }
+
+      .text-center {
+        text-align: center;
+      }
+
+      .numeric {
+        font-variant-numeric: tabular-nums;
+      }
+
+      .pax-name {
+        text-transform: none;
+      }
+
+      .pax-ssr {
+        font-size: 9px;
+      }
+
+      .totals-wrapper {
+        margin-top: 12px;
+      }
+
+      @media screen {
+        .totals-wrapper {
+          display: -webkit-box;
+          display: -ms-flexbox;
+          display: flex;
+          -webkit-box-pack: justify;
+          -ms-flex-pack: justify;
+          justify-content: space-between;
+          gap: 16px;
+        }
+      }
+
+      .totals-table {
+        font-size: 10px;
+        width: 100%;
+      }
+
+      .totals-table th {
+        background: #f3f4f6;
+        text-align: left;
+      }
+
+      .totals-table td {
+        text-align: right;
+      }
+
+      .totals-row-strong td {
+        font-weight: 600;
+        background: #f9fafb;
+      }
+
+      .totals-footer {
+        margin-top: 6px;
+        font-size: 10px;
+        font-weight: 600;
+        border-top: 1px solid #e5e7eb;
+        padding-top: 4px;
+      }
+
+      .totals-footer span {
+        margin-right: 18px;
+      }
+
+      .footer-meta {
+        margin-top: 8px;
+        font-size: 9px;
+        color: #9ca3af;
+
+        display: -webkit-box;
+        display: -ms-flexbox;
+        display: flex;
+        -webkit-box-pack: justify;
+        -ms-flex-pack: justify;
+        justify-content: space-between;
+      }
+
+      /* Passenger table specific column sizing (9 columns) */
+      .pax-table th:nth-child(1),
+      .pax-table td:nth-child(1) {
+        width: 28%;
+      }
+
+      .pax-table th:nth-child(2),
+      .pax-table td:nth-child(2),
+      .pax-table th:nth-child(3),
+      .pax-table td:nth-child(3),
+      .pax-table th:nth-child(4),
+      .pax-table td:nth-child(4),
+      .pax-table th:nth-child(5),
+      .pax-table td:nth-child(5) {
+        text-align: center;
+        width: 7%;
+      }
+
+      .pax-table th:nth-child(6),
+      .pax-table td:nth-child(6),
+      .pax-table th:nth-child(7),
+      .pax-table td:nth-child(7) {
+        width: 9%;
+      }
+
+      .pax-table th:nth-child(8),
+      .pax-table td:nth-child(8) {
+        width: 14%;
+      }
+
+      .pax-table th:nth-child(9),
+      .pax-table td:nth-child(9) {
+        width: 15%;
+      }
+
+      @media print {
+        body {
+          margin: 12mm;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    {# =========================
+       HEADER
+       ========================= #}
+    <header class="page-header">
+      <!-- LEFT: Manifest + flight details -->
+      <div class="header-left">
+        <h1>Passenger Manifest {{ flight.date }}</h1>
+
+        <div class="flight-meta">
+          <div class="flight-meta-row">
+            <span class="meta-label">Flight:</span>
+            <span class="meta-value"> {{ flight.designator }}{{ flight.number }}</span>
+            &nbsp;&nbsp;
+            <span class="meta-label">Route:</span>
+            <span class="meta-value"> {{ flight.dep }} → {{ flight.ades }}</span>
+          </div>
+          <div class="flight-meta-row">
+            <span class="meta-label">Aircraft:</span>
+            <span class="meta-value"> {{ flight.reg }}</span>
+            &nbsp;&nbsp;
+            <span class="meta-label">Departure:</span>
+            <span class="meta-value"> {{ flight.dep }}</span>
+          </div>
+          <div class="flight-meta-row">
+            <span class="meta-label">Arrival:</span>
+            <span class="meta-value"> {{ flight.ades }}</span>
+            &nbsp;&nbsp;
+            <span class="meta-label">Generated:</span>
+            <span class="meta-value"> {{ generated_at or "" }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT: Crew compact list -->
+      <div class="header-right">
+        {% set crew_list = crew or [] %}
+        {% set crew_count = crew_list|length %}
+
+        {% if crew_count %}
+          <h2>Crew</h2>
+          <div class="crew-subnote">
+            Operating crew as per Envision crew list.
+          </div>
+          <div class="crew-lines">
+            {% for c in crew_list %}
+              <div><strong>{{ c.position }}</strong> — {{ c.name }}</div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      </div>
+    </header>
+
+    {# ---- Totals namespace ---- #}
+    {% set ns = namespace(
+      total=0,
+      adults=0,
+      children=0,
+      infants=0,
+      male=0,
+      female=0,
+      pax_weight_kg=0.0,
+      bag_pcs=0,
+      bag_weight_kg=0.0,
+      jump_seats=0
+    ) %}
+
+    {% for p in passengers %}
+      {% set ns.total = ns.total + 1 %}
+
+      {# type-based buckets #}
+      {% if p.is_infant %}
+          {% set ns.infants = ns.infants + 1 %}
+      {% elif p.is_child or p.is_um %}
+          {% set ns.children = ns.children + 1 %}
+      {% else %}
+          {% set ns.adults = ns.adults + 1 %}
+      {% endif %}
+
+      {# gender #}
+      {% if p.gender == "M" %}
+          {% set ns.male = ns.male + 1 %}
+      {% elif p.gender == "F" %}
+          {% set ns.female = ns.female + 1 %}
+      {% endif %}
+
+      {# weights #}
+      {% set ns.pax_weight_kg = ns.pax_weight_kg + (p.pax_weight_kg or 0) %}
+      {% set ns.bag_pcs       = ns.bag_pcs       + (p.bags_pcs     or 0) %}
+      {% set ns.bag_weight_kg = ns.bag_weight_kg + (p.bags_kg      or 0) %}
+    {% endfor %}
+
+    {% set total_weight_kg = ns.pax_weight_kg + ns.bag_weight_kg %}
+
+    {# ============================================================
+       PASSENGER TABLE
+       ============================================================ #}
+    <h2>Passenger List</h2>
+
+    <div class="section-subnote">
+      Weights based on DCS standard weights and recorded baggage.
+    </div>
+
+    <table class="manifest pax-table">
+      <thead>
+        <tr>
+          <th>PASSENGER NAME</th>
+          <th>ORIGIN</th>
+          <th>DEST</th>
+          <th>GEN</th>
+          <th>SEAT</th>
+          <th class="text-right">PAX WE KG</th>
+          <th class="text-right">BAGGAGE WT KG</th>
+          <th>LOCATOR</th>
+          <th>SSR</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in passengers %}
+        <tr>
+          <td class="pax-name">{{ p.name }}</td>
+          <td class="text-center">{{ p.origin or flight.dep }}</td>
+          <td class="text-center">{{ p.dest or flight.ades }}</td>
+          <td class="text-center">
+            {% set gen_display = "" %}
+            {% if p.is_child or p.is_infant or p.is_um %}
+                {% if p.is_um %}
+                    {% set gen_display = "C (UM)" %}
+                {% else %}
+                    {% set gen_display = "C" %}
+                {% endif %}
+            {% else %}
+                {% if p.gender in ["M", "F"] %}
+                    {% set gen_display = p.gender %}
+                {% endif %}
+            {% endif %}
+            {{ gen_display }}
+          </td>
+          <td class="text-center">{{ p.seat }}</td>
+          <td class="text-right numeric">
+            {{ "%.0f"|format(p.pax_weight_kg) if p.pax_weight_kg is defined else "" }}
+          </td>
+          <td class="text-right numeric">
+            {{ "%.2f"|format(p.bags_kg|default(0)) }}
+          </td>
+          <td>{{ p.pnr }}</td>
+          <td class="pax-ssr">{{ p.ssrs }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    {# ============================================================
+       TOTALS (BOTTOM)
+       ============================================================ #}
+    <div class="totals-wrapper">
+      <table class="totals-table">
+        <tbody>
+          <tr>
+            <th>FINAL DESTINATION</th>
+            <th>JUMP SEATS</th>
+            <th>PASSENGERS</th>
+          </tr>
+          <tr>
+            <td>{{ flight.ades }}</td>
+            <td class="numeric">{{ ns.jump_seats }}</td>
+            <td class="numeric">{{ ns.total }}</td>
+          </tr>
+
+          <tr class="totals-row-strong">
+            <td>Total Passenger</td>
+            <td class="numeric">{{ ns.total }}</td>
+            <td class="numeric">{{ "%.0f"|format(ns.pax_weight_kg) }} kg</td>
+          </tr>
+
+          <tr>
+            <td>Total Bags</td>
+           <!--  <td class="numeric">{{ ns.bag_pcs }}</td>-->
+             <td></td>
+            <td class="numeric">{{ "%.2f"|format(ns.bag_weight_kg) }} kg</td>
+          </tr>
+
+          <tr class="totals-row-strong">
+            <td>Pax + Baggage</td>
+            <td></td>
+            <td class="numeric">{{ "%.2f"|format(total_weight_kg) }} kg</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <table class="totals-table">
+        <tbody>
+          <tr>
+            <th>BREAKDOWN</th>
+            <th class="text-right">COUNT</th>
+          </tr>
+          <tr>
+            <td>Adults</td>
+            <td class="numeric">{{ ns.adults }}</td>
+          </tr>
+          <tr>
+            <td>Children</td>
+            <td class="numeric">{{ ns.children }}</td>
+          </tr>
+          <tr>
+            <td>Infants</td>
+            <td class="numeric">{{ ns.infants }}</td>
+          </tr>
+          <tr class="totals-row-strong">
+            <td>Total Passengers</td>
+            <td class="numeric">{{ ns.total }}</td>
+          </tr>
+          <tr>
+            <td>Total Crew</td>
+            <td class="numeric">{{ crew_count }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="totals-footer">
+      <span>MALE {{ ns.male }}</span>
+      <span>FEMALE {{ ns.female }}</span>
+      <span>CHILD {{ ns.children }}</span>
+      <span>INFANT {{ ns.infants }}</span>
+    </div>
+
+    <div class="footer-meta">
+      <div>Generated by Air Chathams API Gateway</div>
+      <div>Local time: {{ generated_at or "" }}</div>
+    </div>
+  </body>
+</html>

@@ -1,4 +1,13 @@
 ﻿# app/__init__.py
+from dotenv import load_dotenv
+import os
+
+# Resolve "<project_root>/.env" no matter where we run from
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+ENV_PATH = os.path.join(BASE_DIR, ".env")
+load_dotenv(ENV_PATH)
+
+# app/__init__.py
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate

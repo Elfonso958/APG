@@ -3,6 +3,8 @@ import sys
 import json
 import logging
 import re
+from flask import current_app
+
 from datetime import datetime, date, time, timedelta, timezone
 try:
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -84,24 +86,46 @@ IATA_TO_ICAO = {
     "AKL": "NZAA",  # Auckland
     "WLG": "NZWN",  # Wellington
     "CHC": "NZCH",  # Christchurch
+    "ZQN": "NZQN",  # Queenstown
+    "DUD": "NZDN",  # Dunedin
+    "NSN": "NZNS",  # Nelson
+    "NPL": "NZNP",  # New Plymouth
+    "TRG": "NZTG",  # Tauranga
+    "NPE": "NZNR",  # Napier / Hawke's Bay
+    "ROT": "NZRO",  # Rotorua
+    "PMR": "NZPM",  # Palmerston North
+    "HLZ": "NZHN",  # Hamilton
+    "IVC": "NZNV",  # Invercargill
+    "GIS": "NZGS",  # Gisborne
+    "BHE": "NZWB",  # Blenheim / Woodbourne
+    "TUO": "NZAP",  # Taupo
+    "WRE": "NZWR",  # Whangarei
+
+    # Regionals / Smaller Commercial Airports
     "PPQ": "NZPP",  # Paraparaumu
     "WHK": "NZWK",  # Whakatane
     "WAG": "NZWU",  # Whanganui
-    "CHT": "NZCI",  # Chatham Islands
-    "HLZ": "NZHN",  # Hamilton
-    "ROT": "NZRO",  # Rotorua
-    "NSN": "NZNS",  # Nelson
-    "ZQN": "NZQN",  # Queenstown
-    "DUD": "NZDN",  # Dunedin
-    "IVC": "NZNV",  # Invercargill
-    "GIS": "NZGS",  # Gisborne
-    "NPE": "NZNR",  # Napier
-    "TRG": "NZTG",  # Tauranga
-    "BHE": "NZWB",  # Woodbourne
-    "VAV": "NFTV",  # Woodbourne
-    "TBU": "NFTF",  # Woodbourne
-    "HAP": "NFTL",  # Woodbourne
+    "KAT": "NZKT",  # Kaitaia
+    "KKE": "NZKK",  # Kerikeri / Bay of Islands
+    "TIU": "NZTU",  # Timaru
+    "HKK": "NZHK",  # Hokitika
+    "PCN": "NZPN",  # Picton
+    "MRO": "NZMS",  # Masterton
+    "WSZ": "NZWS",  # Westport
+    "GBZ": "NZGB",  # Great Barrier Island
+    "MZP": "NZMK",  # Motueka
+    "CMV": "NZCX",  # Coromandel
+
+    # Chatham Islands
+    "CHT": "NZCI",  # Chatham Islands Tuuta Airport
+
+    # Tonga (corrected codes)
+    "TBU": "NFTF",  # Fua'amotu International (Tongatapu)
+    "VAV": "NFTV",  # Vava'u
+    "HPA": "NFTH",  # Ha'apai (NOT "HAP")
+    "NTT": "NFTP",  # Niuatoputapu
 }
+
 
 # --- APG aircraft caches/indexes ---
 _APG_AIRCRAFT_RAW: list[dict] = []
@@ -113,6 +137,99 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     stream=sys.stdout,
 )
+
+##################
+### APG HELPER ###
+##################
+ENVISION_BASE = "https://envision.airchathams.co.nz:8788/v1"
+
+def fetch_envision_crew_for_apg(envision_flight_id: int):
+    """
+    Fetch operating crew from Envision for a given flight and normalise into:
+        {
+            "position": "PIC" | "FO" | "FA" | <raw description>,
+            "name": "LAST FIRST",
+            "employee_id": 1234,
+            "position_id": 71,
+            "is_operating": True,
+        }
+    """
+    # Use your existing auth shape (dict with "token")
+    env_auth = envision_authenticate()
+    env_token = env_auth["token"]
+
+    # Build / cache PIC + pilot position ID sets
+    pic_pos_ids, pilot_pos_ids = build_pic_pilot_position_sets(env_token)
+
+    # Raw crew from /Flights/{flightId}/Crew
+    crew_raw = envision_get_flight_crew(env_token, envision_flight_id)
+
+    crew_list: list[dict] = []
+
+    for c in crew_raw:
+        # Only keep operating crew
+        if not c.get("isOperating", True):
+            continue
+
+        emp_id = c.get("employeeId")
+        pos_id = c.get("positionId") or c.get("crewPositionId")
+
+        # --- Look up employee to get proper names ---
+        emp = {}
+        if emp_id:
+            try:
+                emp = envision_get_employee(env_token, emp_id)
+            except Exception:
+                # Don't break the whole crew fetch if one lookup fails
+                emp = {}
+
+        # Prefer employee record names, fall back to crew record
+        # ---- Correct name extraction (handles all Envision variants) ----
+        first = (
+            emp.get("firstName")
+            or emp.get("givenName")
+            or c.get("firstName")
+            or c.get("givenName")
+            or ""
+        ).strip()
+
+        last = (
+            emp.get("lastName")
+            or emp.get("familyName")
+            or emp.get("surname")
+            or c.get("lastName")
+            or c.get("familyName")
+            or c.get("surname")
+            or ""
+        ).strip()
+        # Start with whatever Envision gives us for position text
+        pos_desc = (
+            c.get("crewPositionDescription")
+            or c.get("positionCode")
+            or ""
+        ).strip()
+
+        # Derive a clean position label if we don't already have one
+        if not pos_desc:
+            if pos_id in pic_pos_ids:
+                pos_desc = "PIC"
+            elif pos_id in pilot_pos_ids:
+                pos_desc = "FO"
+            else:
+                # Anything not a pilot → treat as cabin crew
+                pos_desc = "FA"
+
+        crew_list.append(
+            {
+                "position": pos_desc,
+                "name": f"{last.upper()} {first}".strip(),
+                "employee_id": emp_id,
+                "position_id": pos_id,
+                "is_operating": True,
+            }
+        )
+
+    return crew_list
 
 
 # ===========================
@@ -194,22 +311,6 @@ def _core_from(payload: dict, pic_name: str|None, apg_pic_id: int|None) -> dict:
         "fo_id": crew.get("fo_id") or None,
         "tic_id": crew.get("tic_id") or None,
     }
-
-
-
-
-def _read_cached_core(cache_entry) -> tuple[Optional[dict], Optional[str]]:
-    """
-    Back-compat reader:
-      - old cache: str fingerprint
-      - new cache: {"fp": <sha1>, "core": {...}}
-    Returns (old_core_dict_or_None, old_fp_or_None).
-    """
-    if isinstance(cache_entry, dict):
-        return cache_entry.get("core"), cache_entry.get("fp")
-    if isinstance(cache_entry, str):
-        return None, cache_entry
-    return None, None
 
 
 def _describe_changes(old_core: Optional[dict], new_core: dict) -> Optional[str]:
@@ -2457,6 +2558,7 @@ PAX_STD_WEIGHTS_KG = {
     "CHD":    46.0,
     "CHILD":  46.0,
     "C":      46.0,
+    "UM":     46.0,  # unaccompanied minor
 
     # Infants
     "INF":    15.0,
@@ -2526,7 +2628,8 @@ def _get_pax_seat_from_dcs(p: dict) -> str | None:
 
 ADULT_MASS_KG = 86.0
 CHILD_MASS_KG = 46.0
-INFANT_MASS_KG = 0.0   # on lap → 0 in a seat row
+INFANT_MASS_KG = 15.0  # standard infant weight; lap infants get added to adult
+
 
 def apply_dcs_passengers_to_apg_rows(
     loading: list[dict],
@@ -2537,35 +2640,122 @@ def apply_dcs_passengers_to_apg_rows(
     'Passenger {Seat}' rows in `loading` so that they exactly match the DCS
     seat map.
 
-    - Every seat that has a passenger in DCS gets mass + pob_count=1
-    - Every seat with no passenger in DCS is zeroed (mass=0, pob_count=0)
+    Behaviour:
+      - Adults:  ADULT_MASS_KG (86 kg)
+      - Children: CHILD_MASS_KG (46 kg)
+      - Infants with their own seat: INFANT_MASS_KG (15 kg)
+      - Lap infants (INF with NO seat): distributed across adult seats as
+        +15 kg per lap infant.
+
+    Extra diagnostics:
+      - Logs the computed seat → mass / pob_count before applying to APG.
+      - Optional per-seat mass cap via env var APG_MAX_SINGLE_SEAT_MASS_KG
+        (if set > 0).
     """
+    logger = logging.getLogger(__name__)
 
     pax_list = (dcs_flight or {}).get("Passengers") or []
 
-    # --- Build a simple seat -> (mass, pob_count) map from Zenith ----
-    seat_to_load: dict[str, dict[str, float]] = {}
+    # --- Classify passengers from DCS ---
+    seated_adults: list[str] = []        # seat codes with adult
+    seated_children: list[str] = []      # seat codes with child
+    seated_infants: list[str] = []       # seat codes with infant-in-seat (rare)
+    lap_infants_count = 0                # infants without seat
 
     for p in pax_list:
-        seat = (p.get("Seat") or "").strip().upper()
-        if not seat:
-            # INF w/out seat or unseated pax – we don't touch APG seat rows
-            continue
+        ptype = (p.get("PassengerType") or "AD").strip().upper()
+        seat_code = _get_pax_seat_from_dcs(p)
 
-        ptype = (p.get("PassengerType") or "AD").upper()
-
-        if ptype == "CHD":
-            mass = CHILD_MASS_KG
-        elif ptype == "INF":
-            mass = INFANT_MASS_KG
+        if ptype in {"AD", "ADT", "ADULT", "A"}:
+            if seat_code:
+                seated_adults.append(seat_code)
+            # adult without seat is ignored for seat rows
+        elif ptype in {"CHD", "CHILD", "C"}:
+            if seat_code:
+                seated_children.append(seat_code)
+        elif ptype in {"INF", "INFANT"}:
+            if seat_code:
+                # Infant with its own seat – treat as 15 kg in that seat
+                seated_infants.append(seat_code)
+            else:
+                # Lap infant – add 15 kg to an adult later
+                lap_infants_count += 1
         else:
-            mass = ADULT_MASS_KG
+            # Unknown type → treat as adult
+            if seat_code:
+                seated_adults.append(seat_code)
 
-        # if multiple records somehow share a seat, last one wins (that’s
-        # also what Zenith is effectively showing in the seat map)
-        seat_to_load[seat] = {"mass": float(mass), "pob_count": 1}
+    # --- Build initial seat → mass map for adults/children/infants-in-seat ---
+    seat_to_load: dict[str, dict[str, float]] = {}
 
-    # --- Now push that onto the APG passenger stations ----
+    # Adults
+    for seat in seated_adults:
+        seat_to_load[seat] = {
+            "mass": ADULT_MASS_KG,
+            "pob_count": 1.0,
+        }
+
+    # Children
+    for seat in seated_children:
+        seat_to_load[seat] = {
+            "mass": CHILD_MASS_KG,
+            "pob_count": 1.0,
+        }
+
+    # Infants with their own seat (rare)
+    for seat in seated_infants:
+        seat_to_load[seat] = {
+            "mass": INFANT_MASS_KG,
+            "pob_count": 1.0,
+        }
+
+    # --- Distribute lap infants across adult seats (86 + 15) ---
+    total_lap_infants = lap_infants_count  # keep original for logging
+    if lap_infants_count > 0 and seated_adults:
+        # Sort seats so assignment is stable (e.g. 1A, 1B, 2A...)
+        sorted_adult_seats = sorted(set(seated_adults))
+
+        # One lap infant per adult until we run out of infants or adults,
+        # then round-robin if more infants than adults.
+        idx = 0
+        while lap_infants_count > 0 and sorted_adult_seats:
+            seat = sorted_adult_seats[idx]
+            load = seat_to_load.get(seat)
+            if load:
+                load["mass"] = float(load.get("mass", 0.0)) + INFANT_MASS_KG
+
+            lap_infants_count -= 1
+            idx += 1
+            if idx >= len(sorted_adult_seats):
+                idx = 0
+
+    # --- Optional safety cap per seat (env-driven) ---
+    try:
+        max_single_seat_mass = float(os.getenv("APG_MAX_SINGLE_SEAT_MASS_KG", "0") or 0)
+    except ValueError:
+        max_single_seat_mass = 0.0
+
+    # --- Debug log the computed loads BEFORE applying to APG rows ---
+    for seat in sorted(seat_to_load.keys()):
+        load = seat_to_load[seat]
+        m = float(load.get("mass", 0.0))
+        pob = float(load.get("pob_count", 0.0))
+
+        # Apply cap if configured
+        if max_single_seat_mass > 0 and m > max_single_seat_mass:
+            logger.warning(
+                "[APG] Seat %s mass %.1f kg exceeds cap %.1f kg – clamping.",
+                seat, m, max_single_seat_mass,
+            )
+            m = max_single_seat_mass
+            load["mass"] = m
+
+        logger.info(
+            "[APG] Computed load for seat %s → mass=%.1f kg, pob=%.1f (total_lap_infants=%d)",
+            seat, m, pob, total_lap_infants,
+        )
+
+    # --- Push seat loads onto APG passenger rows ---
     for st in loading:
         label = (st.get("label") or "").strip()
         if not label.startswith("Passenger "):
@@ -2581,16 +2771,15 @@ def apply_dcs_passengers_to_apg_rows(
         info = seat_to_load.get(seat_code)
 
         if info:
-            cl["mass"] = info["mass"]
-            cl["pob_count"] = info["pob_count"]
+            cl["mass"] = float(info["mass"])
+            cl["pob_count"] = float(info["pob_count"])
         else:
-            # no DCS pax in that seat
+            # No DCS pax in that seat
             cl["mass"] = 0.0
-            cl["pob_count"] = 0
+            cl["pob_count"] = 0.0
 
-        # make sure volume is at least present
-        cl.setdefault("volume", 0)
-
+        # Make sure volume is at least present
+        cl.setdefault("volume", 0.0)
 
 
 def update_apg_plan_from_dcs_flight(
@@ -2798,8 +2987,6 @@ def envision_put_delays(token: str, flight_id: int, delays: list[dict]) -> list[
             "comment": d.get("comment") or "",
         })
 
-    # 🔴 THIS IS THE BIT YOU PROBABLY NEED TO CHANGE
-    # Start by logging what methods are allowed when we get a 405.
     resp = requests.post(url, headers=headers, json=payload, timeout=30)
 
     try:
@@ -2821,6 +3008,53 @@ def envision_put_delays(token: str, flight_id: int, delays: list[dict]) -> list[
     if not isinstance(js, list):
         raise RuntimeError(f"Unexpected delay update response for flight {flight_id}: {js!r}")
     return js
+
+def apg_upload_manifest_pdf(bearer: str, plan_id: int, pdf_bytes: bytes, filename: str) -> dict:
+    """
+    Upload a PDF to APG and attach it to a specific plan (route_id).
+    Returns the JSON response.
+    """
+    url = f"{APG_BASE}/data/user/document/upload"
+
+    # Start from normal APG headers, but REMOVE Content-Type so
+    # requests can set multipart/form-data with boundary correctly.
+    headers = apg_headers(bearer).copy()
+    headers.pop("Content-Type", None)   # <-- key line
+
+    payload = {"route_id": str(plan_id)}
+
+    data = {"json": json.dumps(payload)}
+    files = {
+        "attachment[]": (filename, pdf_bytes, "application/pdf"),
+    }
+
+    current_app.logger.info(
+        "[APG] Uploading manifest PDF to %s for route_id=%s",
+        url,
+        payload["route_id"],
+    )
+
+    resp = requests.post(url, headers=headers, data=data, files=files, timeout=60)
+    current_app.logger.info("[APG] Manifest upload status=%s", resp.status_code)
+    current_app.logger.info(
+        "[APG] Manifest upload raw body: %s",
+        resp.text[:200].replace("\n", " "),
+    )
+
+    # If APG insists on sending 200 + text error, be defensive:
+    try:
+        js = resp.json()
+    except ValueError:
+        # Not JSON – log and raise a clear error
+        raise RuntimeError(f"APG manifest upload non-JSON response: {resp.text[:200]}")
+
+    status = js.get("status", {})
+    if not status.get("success"):
+        raise RuntimeError(f"APG manifest upload failed: {status.get('message')}")
+
+    return js
+
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Envision → APG sync")

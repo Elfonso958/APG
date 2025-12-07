@@ -1,857 +1,16 @@
-{% extends "base.html" %}
-{% block content %}
-<div class="container py-3">
-  <h2 class="mb-1">DCS &rarr; Flight Plan — {{ day.isoformat() }}</h2>
-  <div class="text-muted mb-1">
-    <small>All times shown below are NZ local (Pacific/Auckland).</small>
-  </div>
-  <div class="text-muted mb-3">
-    <small>
-      Click a flight bar to view details and <strong>Send to Flight Plan</strong>.
-    </small>
-  </div>
-<div class="text-muted small">
-  Last refreshed: <span id="gantt-last-refresh">never</span>
-</div>
-  <form class="row g-2 mb-3" method="get">
-    <div class="col-auto">
-      <label class="form-label">Date</label>
-      <input type="date" name="date" class="form-control" value="{{ day.isoformat() }}">
-    </div>
-    <div class="col-auto align-self-end">
-      <button class="btn btn-primary">Load</button>
-    </div>
-  </form>
-
-<!-- NEW: base filter -->
-<div class="row g-2 mb-3">
-  <div class="col-auto ms-auto">
-    <label for="base-filter" class="form-label mb-1">Base filter</label>
-    <select id="base-filter" class="form-select form-select-sm">
-      <option value="">All bases</option>
-      <option value="AKL">AKL (Auckland)</option>
-      <option value="WLG">WLG (Wellington)</option>
-      <option value="CHC">CHC (Christchurch)</option>
-      <option value="PPQ">PPQ (Paraparaumu)</option>
-      <option value="WHK">WHK (Whakatane)</option>
-      <option value="WAG">WAG (Whanganui)</option>
-      <option value="CHT">CHT (Chatham Islands)</option>
-      <option value="ZQN">ZQN (Queenstown)</option>
-      <option value="BHE">BHE (Blenheim)</option>
-    </select>
-  </div>
-</div>
-
-  {# ---------- Hidden data for JS to build the Gantt ---------- #}
-  <div id="dcs-gantt-data" class="d-none">
-    {% for r in results %}
-  <div
-    class="gantt-flight-data"
-    data-reg="{{ r.reg or 'Unknown' }}"
-    data-dep="{{ r.dep }}"
-    data-ades="{{ r.ades }}"
-    data-std="{{ r.std_nz.isoformat() if r.std_nz }}"
-    data-sta="{{ r.sta_nz.isoformat() if r.sta_nz }}"
-    data-std-sched="{{ r.std_sched_nz.isoformat() if r.std_sched_nz }}"
-    data-sta-sched="{{ r.sta_sched_nz.isoformat() if r.sta_sched_nz }}"
-    data-dep-actual="{{ r.dep_actual_nz.isoformat() if r.dep_actual_nz }}"
-    data-arr-actual="{{ r.arr_actual_nz.isoformat() if r.arr_actual_nz }}"
-    data-flight="{{ r.flight_number }}"
-    data-designator="{{ r.designator }}"
-    data-apg-plan-id="{{ r.apg_plan_id or '' }}"
-    data-block="{{ r.block_mins }}"
-    data-aircraft-type="{{ r.aircraft_type }}"
-    data-flight-status="{{ r.flight_status }}"
-    data-adt="{{ r.adt|default(0) }}"
-    data-chd="{{ r.chd|default(0) }}"
-    data-inf="{{ r.inf|default(0) }}"
-    data-pax-count="{{ r.pax_count|default(0) }}"
-    data-bags-kg="{{ '%.1f'|format((r.bags_kg or 0)|float) }}"
-    data-pax-list='{{ (r.pax_list or [])|tojson|e }}'
-    data-envision-flight-id="{{ r.envision_flight_id or '' }}"
-    data-delays='{{ (r.delays or [])|tojson|e }}'
-  ></div>
-
-    {% endfor %}
-  </div>
-
-
-  {# ---------- Visible Gantt shell ---------- #}
-  <div class="dcs-gantt-shell card shadow-sm position-relative">
-    <!-- Centered loading overlay -->
-    <div id="gantt-loading" class="gantt-loading-overlay">
-      <div class="gantt-loading-pill">
-        <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
-        Loading data…
-      </div>
-    </div>
-
-    <div class="card-body p-2">
-      <div class="dcs-gantt-header d-flex align-items-center mb-1">
-        <div class="gantt-label-col text-muted fw-semibold">
-          Aircraft
-        </div>
-        <div class="gantt-time-col flex-grow-1 ps-2">
-          <div id="dcs-gantt-axis" class="dcs-gantt-axis"></div>
-        </div>
-      </div>
-      <div id="dcs-gantt-rows" class="dcs-gantt-rows"></div>
-    </div>
-  </div>
-
-
-  {# ---------- Diagnostics ---------- #}
-  {% if diag %}
-  <div class="alert alert-info mt-3">
-    <div><strong>Diagnostics</strong></div>
-    <div>Window used: {{ diag.window_used or 'N/A' }} <span class="text-muted">(UTC query window)</span></div>
-    <div>Envision base: {{ diag.base or 'N/A' }}</div>
-    <div>Token present: {{ 'Yes' if diag.has_token else 'No' }}</div>
-    <div>Raw type: {{ diag.raw_type or 'N/A' }}</div>
-
-    {% if diag.note %}
-    <div class="mt-2 text-muted">{{ diag.note }}</div>
-    {% endif %}
-
-    {% if diag.raw_preview %}
-    <details class="mt-2">
-      <summary>JSON preview (first page or first 2 items)</summary>
-      <pre class="small mb-0" style="white-space: pre-wrap">{{ diag.raw_preview }}</pre>
-    </details>
-    {% endif %}
-
-    <details class="mt-3" id="apg-plan-details" style="display:none;">
-      <summary>APG plan/get JSON (last pushed plan)</summary>
-      <div class="small text-muted mb-1">
-        Plan ID: <span id="apg-plan-id"></span>
-      </div>
-      <pre class="small mb-0" style="white-space: pre-wrap" id="apg-plan-json"></pre>
-    </details>
-
-    {% if diag.raw_http %}
-    <details class="mt-3">
-      <summary>Raw HTTP (first page)</summary>
-      <div class="small">
-        <div><strong>URL:</strong> {{ diag.raw_http.url }}</div>
-        <div><strong>Params:</strong> {{ diag.raw_http.params }}</div>
-        <div><strong>Status:</strong> {{ diag.raw_http.status }}</div>
-        <div><strong>Content-Type:</strong> {{ diag.raw_http.content_type }}</div>
-        {% if diag.raw_http.json_preview %}
-        <details class="mt-2">
-          <summary>JSON (parsed)</summary>
-          <pre class="small mb-0" style="white-space: pre-wrap">{{ diag.raw_http.json_preview }}</pre>
-        </details>
-        {% endif %}
-        {% if diag.raw_http.raw_text %}
-        <details class="mt-2">
-          <summary>Body (raw text)</summary>
-          <pre class="small mb-0" style="white-space: pre-wrap">{{ diag.raw_http.raw_text }}</pre>
-        </details>
-        {% endif %}
-      </div>
-    </details>
-    {% endif %}
-  </div>
-  {% endif %}
-</div>
-
-<!-- Gantt Loading -->
-<table class="table">
-  <tbody id="dcs-gantt-body"></tbody>
-</table>
-
-
-<!-- Flight Action Modal -->
-<div class="modal fade" id="flightActionModal" tabindex="-1" aria-labelledby="flightActionModalLabel" aria-hidden="true">
-  <div class="modal-dialog modal-xl modal-dialog-centered">
-    <div class="modal-content">
-      <div class="modal-header">
-        <div class="me-3">
-          <h5 class="modal-title mb-0" id="flightActionModalLabel">Flight Details</h5>
-          <!-- Warnings under the title -->
-          <div id="flight-warnings" class="small mt-1"></div>
-        </div>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-      </div>
-
-      <div class="modal-body">
-        <!-- 4-quarter layout -->
-        <div class="flight-details-grid">
-
-          <!-- Q1: Flight / Route / Aircraft -->
-          <div class="detail-card">
-            <h6 class="detail-title">Flight</h6>
-            <p class="mb-1 fw-semibold">
-              <span id="modal-flight-code"></span>
-            </p>
-            <p class="mb-1 small text-muted">
-              Route:
-              <span id="modal-route"></span>
-            </p>
-            <p class="mb-0 small text-muted">
-              Aircraft:
-              <span id="modal-aircraft"></span>
-            </p>
-          </div>
-
-          <!-- Q2: Times / Status -->
-          <div class="detail-card detail-card-times">
-            <h6 class="detail-title">Times</h6>
-
-            <div class="time-row">
-              <span class="time-label">STD / STA</span>
-              <span class="time-value" id="modal-std-sta"></span>
-            </div>
-            <div class="time-row">
-              <span class="time-label">ETD / ETA</span>
-              <span class="time-value" id="modal-etd-eta"></span>
-            </div>
-            <div class="time-row">
-              <span class="time-label">ATD / ATA</span>
-              <span class="time-value" id="modal-atd-ata">— / —</span>
-            </div>
-            <div class="time-row mt-1">
-              <span class="time-label">Status</span>
-              <span class="time-value" id="modal-status"></span>
-            </div>
-          </div>
-
-          <!-- Q3: Delays -->
-          <div class="detail-card detail-card-delays">
-            <h6 class="detail-title">Delays</h6>
-            <div id="modal-delays" class="small text-muted">
-              <!-- filled by JS -->
-            </div>
-          </div>
-
-          <!-- Q4: Passengers & Baggage -->
-          <div class="detail-card detail-card-pax">
-            <h6 class="detail-title">Passengers</h6>
-
-            <!-- Heading then status underneath -->
-            <div id="modal-pax-breakdown" class="pax-breakdown small mb-2">
-              <!-- filled by JS -->
-            </div>
-
-            <div class="small text-muted" id="modal-pax-types">
-              <!-- e.g. "Total: 120 (AD 100 / CHD 15 / INF 5)" -->
-            </div>
-
-            <hr class="my-2">
-
-            <h6 class="detail-title mb-1">Baggage</h6>
-            <p class="mb-0 small">
-              <span id="modal-bags"></span> kg
-            </p>
-          </div>
-
-        </div>
-
-        <hr class="my-3">
-
-        <div class="d-flex flex-wrap gap-2">
-          <button id="btn-view-pax" type="button" class="btn btn-outline-secondary btn-sm">
-            Passenger list
-          </button>
-          <button id="btn-seatmap" type="button" class="btn btn-outline-secondary btn-sm">
-            Seat map
-          </button>
-        </div>
-      </div>
-
-      <div class="modal-footer">
-        <button id="btn-reset-apg" type="button" class="btn btn-success">Reset Flight</button>
-        <button id="btn-send-apg" type="button" class="btn btn-success">Submit to APG</button>
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- Passenger List Modal -->
-<div class="modal fade" id="paxListModal" tabindex="-1"
-     aria-labelledby="paxListModalLabel" aria-hidden="true">
-  <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h5 class="modal-title" id="paxListModalLabel">Passenger list</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal"
-                aria-label="Close"></button>
-      </div>
-
-    <div class="modal-body">
-      <div class="table-responsive mb-0">
-        <table id="pax-list-table" class="table table-sm align-middle mb-0">
-          <thead>
-            <tr>
-              <th>Seat</th>
-              <th>Name</th>
-              <th>DOB</th>
-              <th>Age</th>
-              <th>PNR</th>
-              <th>Status</th>
-              <th>SSR(s)</th>
-            </tr>
-          </thead>
-          <tbody id="pax-list-body">
-            <!-- filled by JS -->
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-
-      <div class="modal-footer">
-        <button type="button" class="btn btn-secondary btn-sm"
-                data-bs-dismiss="modal">Close</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-
-<!-- Seatmap Modal -->
-<div class="modal fade" id="seatmapModal" tabindex="-1" aria-labelledby="seatmapModalLabel" aria-hidden="true">
-  <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h5 class="modal-title" id="seatmapModalLabel">Seat map</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-      </div>
-      <div class="modal-body">
-        <div class="row">
-          <div class="col-md-8">
-            <div id="seatmap-container" class="seatmap-grid"></div>
-          </div>
-          <div class="col-md-4">
-            <div id="seatmap-info" class="small text-muted">
-              Seatmap not available for this aircraft type.<br>
-              Click a seat to see passenger details.
-            </div>
-          </div>
-        </div>
-
-        <!-- NEW: legend / key for colours + icons -->
-        <div id="seatmap-legend" class="small mt-2">
-          <span class="legend-item">
-            <span class="seat seat-adult"></span> Adult
-          </span>
-          <span class="legend-item">
-            <span class="seat seat-child"></span> Child
-          </span>
-          <span class="legend-item">
-          <span class="seat seat-child seat-umnr"></span> UMNR
-          </span>
-
-          <span class="legend-item">
-            <span class="seat seat-infant"></span> Infant in Lap
-          </span>
-          <span class="legend-item">
-            <span class="seat-icon seat-icon-special">!</span> Special SSR
-          </span>
-          <span class="legend-item">
-            <span class="seat-icon seat-icon-wheelchair">♿</span> Wheelchair SSR
-          </span>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <small class="text-muted me-auto">Layout is indicative only.</small>
-        <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Close</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- Times / Delay Modal -->
-<div class="modal fade" id="timeModal" tabindex="-1" aria-labelledby="timeModalLabel" aria-hidden="true">
-  <div class="modal-dialog modal-lg">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h5 class="modal-title" id="timeModalLabel">Times</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-      </div>
-      <div class="modal-body">
-
-        <!-- Existing core times content (built by JS) -->
-        <div id="time-modal-core"></div>
-
-        <div id="delay-section" class="mt-3 pt-2 border-top d-none">
-          <div class="d-flex justify-content-between align-items-center mb-2">
-            <strong>Delay Codes</strong>
-            <button id="btn-add-delay" type="button" class="btn btn-outline-secondary btn-sm">Add code</button>
-          </div>
-          <div class="table-responsive">
-            <table class="table table-sm mb-2">
-              <thead>
-                <tr>
-                  <th>Code</th>
-                  <th class="text-end">Minutes</th>
-                  <th>Reason</th>
-                  <th>Remark</th>  
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody id="delay-rows"></tbody>
-            </table>
-          </div>
-          <div class="small">
-            Required delay: <span id="delay-required">0</span> min<br>
-            Allocated: <span id="delay-allocated">0</span> min
-          </div>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <small class="text-muted me-auto">
-          Times are local and not yet persisted.
-        </small>
-        <button type="button" class="btn btn-primary btn-sm" id="btn-save-times">
-          Save times
-        </button>
-        <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">
-          Close
-        </button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- Right-click context menu -->
-<div id="flightContextMenu" class="dropdown-menu" style="position:absolute; display:none; z-index:1060;">
-  <button class="dropdown-item" type="button" id="ctx-departure">Departure Times</button>
-  <button class="dropdown-item" type="button" id="ctx-arrival">Arrival Times</button>
-</div>
-
-
-<style>
-.dcs-gantt-shell {
-  margin-top: 0.75rem;
-  position: relative; /* ensure overlay is positioned relative to the card */
-}
-
-/* Centered loading overlay */
-.gantt-loading-overlay {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: none;      /* don’t block clicks once hidden */
-  z-index: 20;
-}
-
-.gantt-loading-pill {
-  pointer-events: auto;      /* allow tooltip etc if you ever want */
-  background: rgba(255, 255, 255, 0.95);
-  border-radius: 999px;
-  padding: 0.35rem 0.9rem;
-  font-size: 0.85rem;
-  color: #495057;
-  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.18);
-  border: 1px solid rgba(148, 163, 184, 0.6);
-  display: inline-flex;
-  align-items: center;
-}
-
-.gantt-loading-inner {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.4rem 0.75rem;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.85);
-  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.2);
-  font-size: 0.85rem;
-  color: #6c757d;
-}
-
-.dcs-gantt-header .gantt-label-col {
-  width: 120px;
-  flex-shrink: 0;
-}
-.dcs-gantt-axis {
-  position: relative;
-  height: 30px;
-  border-bottom: 1px solid #e5e7eb;
-  font-size: 0.75rem;
-}
-.dcs-gantt-axis .tick {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  border-left: 1px dashed #e5e7eb;
-  padding-left: 2px;
-  transform: translateX(-50%);
-  color: #6c757d;
-  white-space: nowrap;
-}
-.dcs-gantt-axis .tick-label {
-  position: absolute;
-  bottom: 0;
-  transform: translate(-50%, 0);
-}
-.dcs-gantt-rows {
-  max-height: 600px;
-  overflow-y: auto;
-  border-radius: 0 0 .25rem .25rem;
-}
-
-.gantt-row-label {
-  width: 120px;
-  flex-shrink: 0;
-  padding: 0.35rem 0.5rem;
-  font-weight: 600;
-  font-size: 0.85rem;
-  background: #f8fafc;
-  border-right: 1px solid #e5e7eb;
-}
-.gantt-row-track {
-  position: relative;
-  flex-grow: 1;
-  background: #fbfdff;
-}
-
-/* main flight bar (ETD/ETA) */
-.gantt-flight {
-  position: absolute;
-  top: 18px;
-  height: 20px;
-  font-size: 0.8rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 10px;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  cursor: pointer;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.15);
-  border-radius: 0;
-  color: #fff;
-}
-
-/* give the row a bit more height to play with */
-.gantt-row {
-  display: flex;
-  border-bottom: 1px solid #f1f3f5;
-  min-height: 60px;          /* was 44px */
-}
-
-/* scheduled bar lower down */
-.gantt-flight-sched {
-  position: absolute;
-  top: 11px;
-  height: 6px;               /* slightly slimmer, optional */
-  background: #4c1d95;
-  border-radius: 0;
-}
-
-/* main “puck” further below the scheduled bar */
-.gantt-flight {
-  position: absolute;
-  top: 17px;                 /* was 18px */
-  height: 20px;
-  /* rest as before… */
-}
-
-/* airport labels clearly above the scheduled bar */
-.gantt-airport-label {
-  position: absolute;
-  top: -4px;                  /* was 0px → moves them further up */
-  font-size: 0.7rem;
-  color: #6c757d;
-  pointer-events: none;
-}
-
-.gantt-airport-label.dep {
-  transform: translateX(-100%);  /* move whole label left of bar start */
-  text-align: right;             /* keeps text snug against the bar */
-}
-
-.gantt-airport-label.arr {
-  transform: translateX(0);      /* anchor label’s left edge on bar end */
-  margin-left: 4px;              /* small gap to the right of the bar */
-}
-
-
-#timeModal .modal-dialog {
-  max-width: 800px;
-}
-
-/* status colours (from your screenshot) */
-.gantt-flight.status-planning      { background-color: #00ff00; color:#000; }
-.gantt-flight.status-onblocks      { background-color: #000000; }
-.gantt-flight.status-offblocks     { background-color: #e37373; }
-.gantt-flight.status-takeoff       { background-color: #0080ff; }
-.gantt-flight.status-landed        { background-color: #00fff1; color:#000; }
-.gantt-flight.status-diverted      { background-color: #ffab00; color:#000; }
-.gantt-flight.status-returntostand { background-color: #ff9800; color:#000; }
-.gantt-flight.status-unknown       { background-color: #6c757d; }
-
-.gantt-flight.sent {
-  box-shadow: 0 0 0 2px #198754;
-}
-
-/* === Seat map === */
-.seatmap-grid {
-  display: grid;
-  grid-auto-rows: 32px;
-  grid-gap: 4px;
-  justify-content: flex-start;
-  padding: 4px 0;
-}
-
-/* we’ll set column count dynamically in JS */
-.seatmap-row-label {
-  font-size: 0.75rem;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  padding-right: 4px;
-  font-weight: 600;
-}
-
-.seat {
-  width: 28px;
-  height: 28px;
-  border-radius: 4px;
-  background: #9ca3af; /* empty/default */
-  display: inline-flex;      /* was: flex */
-  align-items: center;
-  justify-content: center;
-  font-size: 0.65rem;
-  color: #fff;
-  position: relative;
-  cursor: pointer;
-}
-
-/* seat colours by pax type / SSR */
-.seat-adult {
-  background: #eab308; /* nice yellow */
-}
-.seat-child {
-  background: #22c55e; /* nice green */
-}
-/* adult with lap infant SSR (INFT/INF) */
-.seat-adult-infant {
-  background: #0ea5e9; /* blue */
-}
-/* optional: dedicated infant seat if you ever get one */
-.seat-infant {
-  background: #0ea5e9;
-}
-/* explicit empty seat class (uses default grey) */
-.seat-empty {
-  background: #9ca3af;
-}
-/* icons overlay */
-.seat-icons {
-  position: absolute;
-  bottom: 1px;
-  right: 2px;
-  display: flex;
-  gap: 1px;
-}
-
-.seat-icon {
-  font-size: 0.55rem;
-  line-height: 1;
-}
-
-.seat-icon-special {
-  color: #000000; /* yellow */
-}
-
-.seat-icon-wheelchair {
-  color: #38bdf8;
-}
-
-/* UMNR highlight: child + red border */
-.seat-umnr {
-  border: 2px solid #dc2626;   /* red */
-  box-shadow: 0 0 4px rgba(220, 38, 38, 0.7);
-}
-
-.seat-icon-umnr {
-  font-size: 0.7rem;
-}
-
-/* highlight on hover */
-.seat:hover {
-  outline: 2px solid #f97316;
-}
-
-/* legend icons (re-use styles but without seat box) */
-#seatmap-legend .seat {
-  cursor: default;
-}
-/* === Large seat map modal layout (2+1 / 2+2) === */
-.seatmap-layout {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 4px 0;
-}
-
-/* One row of seats (e.g. "1 A _ BC") */
-.seat-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-/* Row number on the left */
-.seat-label {
-  width: 24px;
-  text-align: right;
-  font-size: 0.75rem;
-  font-weight: 600;
-}
-
-/* Block of seats (left or right of aisle) */
-.seat-block {
-  display: flex;
-  gap: 4px;
-}
-
-/* Visual aisle gap between left/right blocks */
-.seat-aisle {
-  width: 18px;
-}
-
-/* legend layout */
-#seatmap-legend {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.75rem 1.5rem;
-}
-
-#seatmap-legend .legend-item {
-  display: inline-flex;
-  align-items: center;
-}
-
-#seatmap-legend .seat {
-  cursor: default;           /* keep it non-clickable in legend */
-  margin-right: 0.35rem;
-}
-#flight-warnings .badge {
-  margin-left: 0.25rem;
-}
-/* 2×2 grid for the details */
-.flight-details-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 0.75rem;
-}
-
-@media (min-width: 768px) {
-  .flight-details-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-/* The “quarter” cards */
-.detail-card {
-  background-color: var(--bs-gray-100);
-  border-radius: 0.75rem;
-  padding: 0.75rem 1rem;
-  border: 1px solid rgba(0, 0, 0, 0.03);
-}
-
-/* Small uppercase section titles */
-.detail-title {
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--bs-gray-600);
-  margin-bottom: 0.35rem;
-}
-
-/* 2×2 grid for the details */
-.flight-details-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 0.75rem;
-}
-
-@media (min-width: 768px) {
-  .flight-details-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-/* Quarter cards */
-.detail-card {
-  background-color: #f9fafb;
-  border-radius: 0.75rem;
-  padding: 0.85rem 1rem;
-  border: 1px solid rgba(15, 23, 42, 0.04);
-}
-
-/* Small uppercase section titles */
-.detail-title {
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--bs-gray-600);
-  margin-bottom: 0.35rem;
-}
-
-/* Times block layout */
-.detail-card-times .time-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  font-size: 0.8rem;
-  margin-bottom: 0.15rem;
-}
-
-.detail-card-times .time-label {
-  color: var(--bs-gray-600);
-}
-
-.detail-card-times .time-value {
-  font-weight: 500;
-}
-
-/* Delays table stays inside Q3 */
-.detail-card-delays #modal-delays {
-  max-height: 130px;
-  overflow-y: auto;
-}
-
-.detail-card-delays table {
-  font-size: 0.75rem;
-  margin-bottom: 0;
-}
-
-/* Passenger breakdown stacked lines */
-.pax-breakdown .pax-line {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 0.1rem;
-}
-
-.pax-breakdown .pax-label {
-  color: var(--bs-gray-600);
-}
-
-.pax-breakdown .pax-value {
-  font-weight: 600;
-}
-
-
-</style>
-
-<script>
 document.addEventListener("DOMContentLoaded", function () {
-  const GANTT_URL        = "{{ url_for('ui.api_dcs_gantt_data') }}";
-  const APG_PUSH_URL     = "{{ url_for('api.api_dcs_push_to_apg') }}";
-  const APG_RESET_URL    = "{{ url_for('api.api_apg_reset_passengers') }}";
-  const SAVE_TIMES_URL   = "{{ url_for('api.api_dcs_save_times') }}";
-  const ENV_TIMES_URL    = "{{ url_for('ui.api_envision_flight_times') }}";
-  // Use a real int for url_for, then swap the trailing 0 to a placeholder
-  const APG_PLAN_URL_TMPL = "{{ url_for('api.api_apg_plan_get', plan_id=0) }}".replace(/0$/, "__PLAN__");
+  const root = document.getElementById("dcs-gantt-root");
+  if (!root) return;
+
+  const GANTT_URL      = root.dataset.ganttUrl;
+  const APG_PUSH_URL   = root.dataset.apgPushUrl;
+  const APG_RESET_URL  = root.dataset.apgResetUrl;
+  const SAVE_TIMES_URL = root.dataset.saveTimesUrl;
+  const ENV_TIMES_URL  = root.dataset.envTimesUrl;
+  const ENV_CREW_URL  = root.dataset.envCrewUrl;
+
+  const APG_PLAN_URL_TMPL = root.dataset.apgPlanUrlTemplate.replace(/0$/, "__PLAN__");
+
 
   const dataNodes     = Array.from(document.querySelectorAll(".gantt-flight-data"));
   const rowsContainer = document.getElementById("dcs-gantt-rows");
@@ -861,6 +20,60 @@ document.addEventListener("DOMContentLoaded", function () {
   if (!rowsContainer || !axisEl) return;
   
   const loadingEl = document.getElementById("gantt-loading");
+  
+  // Header meta: "Loaded" date + "Last refresh"
+  const loadedDateEl  = document.querySelector(".date-pill .date-text");
+  const lastRefreshEl = document.getElementById("gantt-last-refresh");
+
+  // Format "Loaded" date nicely (Mon 08 Dec 2025)
+  function formatLoadedDateStr(isoDate) {
+    if (!isoDate) return isoDate;
+    const d = new Date(isoDate + "T00:00:00");
+    if (isNaN(d)) return isoDate;
+    return d.toLocaleDateString("en-NZ", {
+      weekday: "short",
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    });
+  }
+
+  function fetchEnvisionCrew(envisionFlightId) {
+  if (!envisionFlightId || !ENV_CREW_URL) {
+    return Promise.resolve(null);
+  }
+
+  return fetch(`${ENV_CREW_URL}?flight_id=${encodeURIComponent(envisionFlightId)}`)
+    .then(r => r.json())
+    .then(data => {
+      if (!data.ok) {
+        console.warn("Envision /flight_crew error:", data.error || data);
+        return null;
+      }
+      return data.crew || [];
+    })
+    .catch(err => {
+      console.error("Envision /flight_crew fetch failed:", err);
+      return null;
+    });
+}
+
+  function updateLoadedDateLabel(isoDate) {
+    if (!loadedDateEl || !isoDate) return;
+    loadedDateEl.textContent = formatLoadedDateStr(isoDate);
+  }
+
+  function updateLastRefreshLabel() {
+    if (!lastRefreshEl) return;
+    const now = new Date();
+    lastRefreshEl.textContent = now.toLocaleTimeString("en-NZ", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  }
+
+
 
   function setGanttLoading(isLoading) {
     if (!loadingEl) return;
@@ -1277,12 +490,15 @@ function buildFlightsFromRows(rows) {
 
 
         bar.addEventListener("click", function (ev) {
-          ev.preventDefault();
-          currentFlight = f;
-          currentBarEl  = bar;
-          populateFlightDetailsModal(f);
-          if (actionModal) actionModal.show();
-        });
+        ev.preventDefault();
+        currentFlight = f;
+        currentBarEl  = bar;
+
+        populateFlightDetailsModal(f);
+        updateCrewSidebar(f);        // 🔹 update right-hand crew panel
+
+        if (actionModal) actionModal.show();
+      });
 
         bar.addEventListener("contextmenu", function (ev) {
           ev.preventDefault();
@@ -1458,9 +674,11 @@ function populateFlightDetailsModal(f) {
   if (bagsEl) bagsEl.textContent = (f.bagsKg || 0).toFixed(1);
 
   // ---- Warnings (DCS + APG) with hover details ----
+  // ---- Warnings (DCS + APG) with hover details ----
   if (warningsEl) {
     const hasDcs = Array.isArray(f.paxList) && f.paxList.length > 0;
     const hasApg = !!(f.apgPlanId && f.apgPlanId.toString().trim());
+    const hasEnv = !!f.envisionFlightId;   // 👈 new: do we have Envision ID?
 
     const flightDate = formatDateYMD(f.stdEst || f.stdSched);
     const etdText    = fmtTime(f.stdEst);
@@ -1470,22 +688,33 @@ function populateFlightDetailsModal(f) {
       ? `DCS flight key:\n  ${labelCode}  ${f.dep} → ${f.ades}\n  Date: ${flightDate}\n  ETD/ETA (local): ${etdText} / ${etaText}`
       : `No DCS passenger list linked for:\n  ${labelCode}  ${f.dep} → ${f.ades}\n  Date: ${flightDate}`;
 
+    const envLine = hasEnv ? `\nEnvision flight ID: ${f.envisionFlightId}` : "";
+
     const apgTip = hasApg
-      ? `APG plan ID: ${f.apgPlanId}\nMatched using:\n  ${labelCode}  ${f.dep} → ${f.ades}\n  Date: ${flightDate}`
-      : `No APG plan ID is currently linked to:\n  ${labelCode}  ${f.dep} → ${f.ades}\n  Date: ${flightDate}`;
+      ? `APG plan ID: ${f.apgPlanId}${envLine}\nMatched using:\n  ${labelCode}  ${f.dep} → ${f.ades}\n  Date: ${flightDate}`
+      : `No APG plan ID is currently linked to:\n  ${labelCode}  ${f.dep} → ${f.ades}\n  Date: ${flightDate}${envLine}`;
 
     let html = "";
 
+    // DCS badge
     html += hasDcs
       ? `<span class="badge bg-success me-1" title="${dcsTip.replace(/"/g, "&quot;")}">DCS linked</span>`
       : `<span class="badge bg-secondary me-1" title="${dcsTip.replace(/"/g, "&quot;")}">No DCS pax</span>`;
 
-    html += hasApg
-      ? `<span class="badge bg-success" title="${apgTip.replace(/"/g, "&quot;")}">APG plan</span>`
-      : `<span class="badge bg-warning text-dark" title="${apgTip.replace(/"/g, "&quot;")}">No APG plan</span>`;
+    // APG + Envision badge
+    if (hasApg) {
+      const apgLabelText = hasEnv
+        ? `APG ${f.apgPlanId} / ENV ${f.envisionFlightId}`
+        : `APG ${f.apgPlanId}`;
+
+      html += `<span class="badge bg-success" title="${apgTip.replace(/"/g, "&quot;")}">${apgLabelText}</span>`;
+    } else {
+      html += `<span class="badge bg-warning text-dark" title="${apgTip.replace(/"/g, "&quot;")}">No APG plan</span>`;
+    }
 
     warningsEl.innerHTML = html;
   }
+
 
   // ---- Delays table (kept inside Q3) ----
   const delaysEl = document.getElementById("modal-delays");
@@ -1550,11 +779,43 @@ function populateFlightDetailsModal(f) {
       });
     }
   }
+    // ---- Crew (from Envision) ----
+  const crewEl = document.getElementById("modal-crew");
+  if (crewEl) {
+    // Clear previous content
+    crewEl.innerHTML = "";
+
+    // If we don't have an Envision ID, just show a note
+    if (!f.envisionFlightId) {
+      crewEl.innerHTML =
+        '<span class="text-muted">No Envision flight ID linked – crew not available.</span>';
+    } else {
+      crewEl.innerHTML =
+        '<span class="text-muted">Loading crew from Envision…</span>';
+
+      // Optional: cache on the flight object so we don't refetch if the modal reopens
+      if (Array.isArray(f.crew) && f.crew.length) {
+        renderCrewTable(f.crew, crewEl);
+      } else if (typeof fetchEnvisionCrew === "function") {
+        fetchEnvisionCrew(f.envisionFlightId).then(crew => {
+          if (!crew || !crew.length) {
+            crewEl.innerHTML =
+              '<span class="text-muted">No operating crew found in Envision.</span>';
+            return;
+          }
+
+          // cache
+          f.crew = crew;
+          renderCrewTable(crew, crewEl);
+        });
+      }
+    }
+  }
 }
 
-  // ---------- APG push ----------
+
 // --- send to APG with pending icon + stronger payload building ---
-function sendToFlightPlan(f, barEl) {
+function sendToFlightPlan(f, barEl, { previewOnly = false } = {}) {
   if (!f) return;
 
   // Button feedback
@@ -1571,12 +832,21 @@ function sendToFlightPlan(f, barEl) {
   if (barEl) barEl.classList.add("sending");
 
   // --- Build required fields safely ---
-  // Flight date: prefer ETD, fall back to STD
-  const dt = f.stdEst || f.stdSched || null;
-  const dateStr = dt ? dt.toISOString().slice(0, 10) : null;
 
-  // Plan ID: from our model
-  const apgPlanId = (f.apgPlanId || f.apg_plan_id || "").toString().trim() || null;
+  // Flight date: prefer ETD/STD estimate, fall back to scheduled
+  const dt = f.stdEst || f.stdSched || null;
+  const dateStr = dt ? dt.toISOString().slice(0, 10) : null; // yyyy-mm-dd
+
+  // Plan ID from model
+    const apgPlanId = (
+    f.apgPlanId ||
+    f.apg_plan_id ||
+    f.apgRouteId ||
+    f.apg_route_id ||
+    f.routeId ||
+    f.route_id ||
+    ""
+  ).toString().trim() || null;
 
   // Designator + flight number parsing
   let designator = (f.designator || "").toString().trim().toUpperCase();
@@ -1589,12 +859,12 @@ function sendToFlightPlan(f, barEl) {
   // If we still don't have a designator, try to infer from fullNo
   if (!designator && fullNo) {
     const m = fullNo.match(/^([A-Z]{1,3})?(\d+)/);
-    if (m) {
-      if (m[1]) designator = m[1];
+    if (m && m[1]) {
+      designator = m[1];
     }
   }
 
-  // Numeric part: last run of digits
+  // Numeric part: last run of digits (this is what Python expects as flight_number)
   let number = "";
   if (fullNo) {
     const m2 = fullNo.match(/(\d+)$/);
@@ -1606,89 +876,88 @@ function sendToFlightPlan(f, barEl) {
     fullNo = (designator + number).toUpperCase();
   }
 
-  const baseRequest = {
+  // Envision flight ID (any shape we can get)
+  const envisionFlightId =
+    f.envisionFlightId ||
+    f.envision_flight_id ||
+    null;
+
+  // Final payload – matches api_dcs_push_to_apg expectations
+  const payload = {
     apg_plan_id: apgPlanId,
     dep: (f.dep || "").toString().toUpperCase(),
+    ades: (f.ades || "").toString().toUpperCase(),
     date: dateStr,
     designator: designator,
-    flight_number: fullNo || null,
-    pax_list: Array.isArray(f.paxList) ? f.paxList : []
+    flight_number: number || null,               // <-- KEY: matches Python "flight_number"
+    reg: (f.reg || "").toString().toUpperCase(),
+    envision_flight_id: envisionFlightId,
+    preview_only: !!previewOnly,
+    // extra data if you want it later; backend will just ignore this for now
+    pax_list: Array.isArray(f.paxList) ? f.paxList : [],
   };
 
+  console.info("[APG] push payload", payload);
 
-  console.log("[APG] sending payload:", baseRequest);
-
-  // If anything critical is missing, abort nicely
-  if (!baseRequest.apg_plan_id ||
-      !baseRequest.dep ||
-      !baseRequest.date ||
-      !baseRequest.designator ||
-      !baseRequest.flight_number) {
-
-    console.error("[APG] missing required fields:", baseRequest);
-    alert("Cannot send to Flight Plan: missing required data (check console).");
-
+  // Basic guard so we don't spam 400s
+  if (
+    !payload.apg_plan_id ||
+    !payload.dep ||
+    !payload.ades ||
+    !payload.date ||
+    !payload.designator ||
+    !payload.flight_number
+  ) {
+    console.error("[APG] missing required payload fields", payload);
+    alert("Cannot send to APG: missing required data (plan/dep/ades/date/flight).");
     if (sendBtn) {
       sendBtn.disabled = false;
       sendBtn.innerHTML = originalBtnHtml;
     }
     if (barEl) barEl.classList.remove("sending");
-    return;
+    return Promise.reject(new Error("Missing required fields for APG push"));
   }
 
-  // --- Do preview then actual send ---
-  fetch(APG_PUSH_URL, {
+  return fetch(APG_PUSH_URL, {                     // <--- use your configured URL
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...baseRequest, preview_only: true })
+    body: JSON.stringify(payload),
   })
-    .then(r => r.json())
-    .then(data => {
-      if (!data.ok) throw new Error(data.error || "Preview failed");
-      console.log("[APG] preview OK:", data);
-
-      return fetch("/api/dcs/push_to_apg", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...baseRequest, preview_only: false })
-      });
+    .then((r) => {
+      if (!r.ok) {
+        return r
+          .json()
+          .catch(() => ({}))
+          .then((j) => {
+            const msg = j.error || `HTTP ${r.status}`;
+            throw new Error(msg);
+          });
+      }
+      return r.json();
     })
-    .then(r => r.json())
-    .then(data => {
-      if (!data.ok) throw new Error(data.error || "APG push failed");
-
-      console.log("[APG] send OK:", data);
-
-      // Bar visual
-      if (barEl) {
-        barEl.classList.remove("sending");
-        barEl.classList.add("sent");
-      }
-
-      // Button success state
-      if (sendBtn) {
-        sendBtn.innerHTML = "Sent ✓";
-        setTimeout(() => {
-          sendBtn.disabled = false;
-          sendBtn.innerHTML = originalBtnHtml;
-        }, 2000);
-      }
-
-      if (data.plan_id) {
-        loadApgPlanDetails(data.plan_id);
-      }
+    .then((data) => {
+      console.info("[APG] push OK", data);
+      // at this point your Flask route has:
+      //  - updated the APG plan
+      //  - generated the manifest PDF
+      //  - uploaded it to APG (if no errors)
+      return data;
     })
-    .catch(err => {
+    .catch((err) => {
       console.error("[APG] send error:", err);
-      alert("Error sending to Flight Plan: " + err.message);
-
+      throw err;
+    })
+    .finally(() => {
       if (sendBtn) {
         sendBtn.disabled = false;
         sendBtn.innerHTML = originalBtnHtml;
       }
-      if (barEl) barEl.classList.remove("sending");
+      if (barEl) {
+        barEl.classList.remove("sending");
+      }
     });
 }
+
 
 // --- Reset APG plan for the current flight ---
 async function resetFlightPlan(f, barEl) {
@@ -1755,7 +1024,6 @@ async function resetFlightPlan(f, barEl) {
     resetBtn.textContent = originalText;
   }
 }
-
 // Wire the reset button
 const resetBtn = document.getElementById("btn-reset-apg");
 if (resetBtn) {
@@ -2369,6 +1637,59 @@ function parseTimeToMinutes(hhmm) {
   return h * 60 + m;
 }
 
+function renderCrewTable(crew, containerEl) {
+  if (!containerEl) return;
+
+  if (!crew || !crew.length) {
+    containerEl.innerHTML =
+      '<span class="text-muted">No operating crew found in Envision.</span>';
+    return;
+  }
+
+  const rowsHtml = crew.map(c => `
+    <div class="d-flex justify-content-between">
+      <span>${c.position || ""}</span>
+      <span>${c.name || ""}</span>
+    </div>
+  `).join("");
+
+  containerEl.innerHTML = rowsHtml;
+}
+
+
+
+function updateCrewSidebar(flight) {
+  const panel = document.getElementById("gantt-crew-body");
+  if (!panel) return;
+
+  if (!flight || !flight.envisionFlightId) {
+    panel.innerHTML =
+      '<span class="text-muted">No Envision flight ID linked – crew not available.</span>';
+    return;
+  }
+
+  // Use cached crew if already loaded
+  if (Array.isArray(flight.crew) && flight.crew.length) {
+    renderCrewTable(flight.crew, panel);
+    return;
+  }
+
+  panel.innerHTML =
+    '<span class="text-muted">Loading crew from Envision…</span>';
+
+  fetchEnvisionCrew(flight.envisionFlightId).then(crew => {
+    if (!crew || !crew.length) {
+      panel.innerHTML =
+        '<span class="text-muted">No operating crew found in Envision.</span>';
+      return;
+    }
+
+    // Cache on the flight object for reuse (modal + future clicks)
+    flight.crew = crew;
+    renderCrewTable(crew, panel);
+  });
+}
+
 // Build a local wall-clock ISO "YYYY-MM-DDTHH:MM" from date + minutes
 function datePlusMinutesToLocalIso(dateStr, minutes) {
   if (!dateStr || minutes == null) return null;
@@ -2905,45 +2226,165 @@ if (saveTimesBtn) {
   });
 }
 
-  // ---------- Auto-refresh from backend ----------
-  function refreshGantt() {
-    const dateInput = document.querySelector('input[name="date"]');
-    if (!dateInput) return;
-    const dayStr = dateInput.value;
+// ---------- Auto-refresh from backend ----------
+// manual=true  → show loading bar + update "Loaded" date
+// manual=false → silent auto-refresh (no spinner, no loaded date change)
+function refreshGantt({ manual = false } = {}) {
+  const dateInput = document.querySelector('input[name="date"]');
+  if (!dateInput) return;
+  const dayStr = dateInput.value || "";
 
-    // Show loading overlay only on the very first refresh
-    if (firstRefresh) {
-      setGanttLoading(true);
+  // Only show the loading overlay for manual loads
+  if (manual) {
+    setGanttLoading(true);
+  }
+
+  fetch(`${GANTT_URL}?date=${encodeURIComponent(dayStr)}`)
+    .then(r => r.json())
+    .then(data => {
+      if (!data.ok || !Array.isArray(data.results)) return;
+      const newFlights = buildFlightsFromRows(data.results);
+      renderGanttFromFlights(newFlights);
+
+      // "Loaded" date should only change on manual loads
+      if (manual && dayStr) {
+        updateLoadedDateLabel(dayStr);
+      }
+
+      // Last refresh updates for *every* load (manual + auto)
+      updateLastRefreshLabel();
+    })
+    .catch(err => {
+      console.error("Gantt refresh failed:", err);
+    })
+    .finally(() => {
+      if (manual) {
+        setGanttLoading(false);
+      }
+    });
+}
+
+// Make this a global so you can call it from buttons
+window.previewManifestForRow = async function (f) {
+  if (!f) {
+    alert("No flight selected for manifest preview.");
+    return;
+  }
+
+  // ----- Designator -----
+  let designator = (f.designator || "").toUpperCase();
+
+  // ----- Flight number (numeric part) -----
+  let number = "";
+
+  // 1) If we have a numeric field, use that
+  if (f.flightNumeric) {
+    number = String(f.flightNumeric);
+  }
+  // 2) If we have a "flight_number" field (your logged object), use that
+  else if (f.flight_number) {
+    let raw = String(f.flight_number).toUpperCase().trim();
+    // Strip designator if it’s included in the value
+    if (designator && raw.startsWith(designator)) {
+      raw = raw.slice(designator.length);
+    }
+    number = raw;
+  }
+  // 3) Fallback: parse from flight/flightFull text if they exist
+  else {
+    const fullNo =
+      (f.flightFull ||
+        f.flight ||
+        ""
+      ).toString().replace(/\s+/g, "").toUpperCase();
+
+    if (fullNo) {
+      const m = fullNo.match(/(\d+)$/); // trailing digits
+      if (m) {
+        number = m[1];
+      }
+    }
+  }
+
+  if (!designator || !number) {
+    console.error("[Manifest preview] Missing designator/number", {
+      designator,
+      fullNo: f.flightFull || f.flight || f.flight_number || "",
+      numeric: number,
+      flight: f,
+    });
+    alert("Cannot determine flight designator/number for manifest preview.");
+    return;
+  }
+
+  // ----- Date -----
+  // Prefer explicit date on the object, else derive from STD
+  const dateStr = f.date || formatDateYMD(f.stdEst || f.stdSched);
+
+  // ----- Envision flight ID (any shape we can get) -----
+  const envisionFlightId =
+    f.envisionFlightId || // from Gantt object
+    f.envision_flight_id || // if snake_case somewhere
+    null;
+
+  const payload = {
+    dep: (f.dep || "").toUpperCase(),
+    ades: (f.ades || "").toUpperCase(),
+    date: dateStr,
+    designator: designator,
+    number: number,                           // numeric part
+    reg: (f.reg || "").toUpperCase(),
+    envision_flight_id: envisionFlightId,     // may be null in some views
+  };
+
+  console.log("➡️ Sending payload to API:", payload);
+
+  try {
+    const resp = await fetch("/api/dcs/manifest_preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text();
+      console.error("Manifest preview error:", resp.status, text);
+      alert("Error building manifest preview: " + text);
+      return;
     }
 
-    fetch(`${GANTT_URL}?date=${encodeURIComponent(dayStr)}`)
-      .then(r => r.json())
-      .then(data => {
-        if (!data.ok || !Array.isArray(data.results)) return;
-        const newFlights = buildFlightsFromRows(data.results);
-        renderGanttFromFlights(newFlights);
+    const data = await resp.json();
+    if (!data.ok) {
+      alert("Manifest preview error: " + (data.error || "Unknown error"));
+      return;
+    }
 
-        const stamp = document.getElementById("gantt-last-refresh");
-        if (stamp) {
-          const now = new Date();
-          stamp.textContent = now.toLocaleTimeString("en-NZ", {
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
-          });
-        }
-      })
-      .catch(err => {
-        console.error("Gantt refresh failed:", err);
-      })
-      .finally(() => {
-        // After first refresh completes, hide overlay and never show it again
-        if (firstRefresh) {
-          setGanttLoading(false);
-          firstRefresh = false;
-        }
-      });
+    // Simple: open manifest HTML in a new tab
+    const w = window.open("", "_blank");
+    w.document.open();
+    w.document.write(data.html);
+    w.document.close();
+  } catch (err) {
+    console.error("Manifest preview fetch failed:", err);
+    alert("Error calling manifest preview API: " + err.message);
   }
+};
+
+
+// ---------- Manifest preview button (uses currentFlight/paxList) ----------
+const previewBtn = document.getElementById("btn-preview-manifest");
+if (previewBtn) {
+  previewBtn.addEventListener("click", function () {
+    if (!currentFlight) {
+      alert("Please select a flight on the Gantt first.");
+      return;
+    }
+
+    // 🔹 Don’t rebuild a thin object – just pass the real flight
+    window.previewManifestForRow(currentFlight);
+  });
+}
+
 
   // ---------- Initial build from DOM ----------
   if (dataNodes.length) {
@@ -2951,32 +2392,32 @@ if (saveTimesBtn) {
     renderGanttFromFlights(buildFlightsFromRows(domRows));
   }
 
-  // ---------- Hook up date form + auto-refresh ----------
+    // ---------- Hook up date form + auto-refresh ----------
   const dateForm  = document.querySelector('form[method="get"]');
-  const dateInput = document.querySelector('input[name="date"]');
+  const dateInputCtrl = document.querySelector('input[name="date"]');
 
-  // Pull fresh data once on page load (this is the ONLY time the overlay shows)
-  refreshGantt();
+  // Initial load is treated as a MANUAL load:
+  //  - show spinner
+  //  - update "Loaded" date
+  refreshGantt({ manual: true });
 
-  // Change date → AJAX refresh (no full page reload, background refresh)
-  if (dateInput) {
-    dateInput.addEventListener("change", function () {
-      refreshGantt();
+  // Change date → manual reload (spinner + loaded date update)
+  if (dateInputCtrl) {
+    dateInputCtrl.addEventListener("change", function () {
+      refreshGantt({ manual: true });
     });
   }
 
-  // Submit "Load" button → prevent reload, just refresh Gantt
+  // Submit "Load" button → manual reload (spinner + loaded date update)
   if (dateForm) {
     dateForm.addEventListener("submit", function (ev) {
       ev.preventDefault();
-      refreshGantt();
+      refreshGantt({ manual: true });
     });
   }
 
-  // Background auto-refresh every 60s (no overlay because firstRefresh is false)
-  setInterval(refreshGantt, 60_000);
+  // Background auto-refresh every 60s (silent: no spinner, no "Loaded" change)
+  setInterval(() => {
+    refreshGantt({ manual: false });
+  }, 60_000);
 });
-
-</script>
-
-{% endblock %}

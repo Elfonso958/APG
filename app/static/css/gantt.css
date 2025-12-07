@@ -1,0 +1,453 @@
+/* ===== DCS → Flight Plan Gantt (dark ops theme) ==================== */
+
+/* Shell / card */
+.dcs-gantt-shell {
+  margin-top: 0.75rem;
+  position: relative;
+  background: color-mix(in oklab, var(--panel) 95%, #050609);
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+}
+
+/* Centered loading overlay */
+.gantt-loading-overlay {
+  position: absolute;
+  inset: 0;
+  display: none;             /* was: flex */
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 20;
+}
+
+.gantt-loading-pill {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0.35rem 0.9rem;
+  font-size: 0.8rem;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.6);
+  background:
+    radial-gradient(circle at 0 0, rgba(143, 209, 255, 0.25), transparent 55%),
+    color-mix(in oklab, var(--panel) 88%, var(--bg));
+  color: var(--text);
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.6);
+}
+
+/* ========= Header / axis / rows =================================== */
+
+.dcs-gantt-header .gantt-label-col {
+  width: 120px;
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+}
+
+.dcs-gantt-axis {
+  position: relative;
+  height: 30px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.45);
+  font-size: 0.75rem;
+}
+
+.dcs-gantt-axis .tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px dashed rgba(148, 163, 184, 0.35);
+  padding-left: 2px;
+  transform: translateX(-50%);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.dcs-gantt-axis .tick-label {
+  position: absolute;
+  bottom: 0;
+  transform: translate(-50%, 0);
+}
+
+.dcs-gantt-rows {
+  max-height: 650px;
+  overflow-y: auto;
+  border-radius: 0 0 var(--radius) var(--radius);
+  background:
+    radial-gradient(1200px 900px at 80% -10%, rgba(77, 163, 255, 0.08), transparent 55%),
+    color-mix(in oklab, var(--panel) 92%, var(--bg));
+}
+
+/* ========= Per-row layout ========================================= */
+
+.gantt-row {
+  display: flex;
+  min-height: 60px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+}
+
+.gantt-row-label {
+  width: 120px;
+  flex-shrink: 0;
+  padding: 0.35rem 0.5rem;
+  font-weight: 600;
+  font-size: 0.82rem;
+  background: color-mix(in oklab, var(--panel) 94%, var(--bg));
+  border-right: 1px solid var(--line);
+  color: var(--text);
+}
+
+.gantt-row-track {
+  position: relative;
+  flex-grow: 1;
+  background: transparent;
+}
+
+/* ========= Bars / labels ========================================== */
+
+/* Slim scheduled bar (STD/STA) */
+.gantt-flight-sched {
+  position: absolute;
+  top: 11px;
+  height: 6px;
+  background: linear-gradient(
+    90deg,
+    rgba(96, 165, 250, 0.9),
+    rgba(59, 130, 246, 0.75)
+  );
+  /* border-radius: 999px; */
+  opacity: 0.7;
+}
+
+/* Main “puck” (ETD/ETA / status) */
+.gantt-flight {
+  position: absolute;
+  top: 17px;
+  height: 20px;
+  font-size: 0.78rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: pointer;
+ /*  border-radius: 999px; */
+ /* color: #fff;*/
+ /* box-shadow: 0 4px 10px rgba(15, 23, 42, 0.6);*/
+}
+
+/* Airport labels above bar */
+.gantt-airport-label {
+  position: absolute;
+  top: -4px;
+  font-size: 0.7rem;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.gantt-airport-label.dep {
+  transform: translateX(-100%);
+  text-align: right;
+}
+
+.gantt-airport-label.arr {
+  transform: translateX(0);
+  margin-left: 4px;
+}
+
+/* ========= Status colours ========================================= */
+
+.gantt-flight.status-planning      { background-color: #22c55e; color:#000; }
+.gantt-flight.status-onblocks      { background-color: #002fff; }
+.gantt-flight.status-offblocks     { background-color: #f97316; }
+.gantt-flight.status-takeoff       { background-color: #0ea5e9; }
+.gantt-flight.status-landed        { background-color: #22d3ee; color:#000; }
+.gantt-flight.status-diverted      { background-color: #facc15; color:#000; }
+.gantt-flight.status-returntostand { background-color: #f97316; color:#000; }
+.gantt-flight.status-unknown       { background-color: #6b7280; }
+
+.gantt-flight.sent {
+  box-shadow: 0 0 0 2px #22c55e, 0 4px 10px rgba(22, 163, 74, 0.5);
+}
+
+/* ========= Time modal / delays ==================================== */
+
+#timeModal .modal-dialog {
+  max-width: 800px;
+}
+
+/* ========= Seat map – grid ======================================== */
+
+.seatmap-grid {
+  display: grid;
+  grid-auto-rows: 32px;
+  grid-gap: 4px;
+  justify-content: flex-start;
+  padding: 4px 0;
+}
+
+/* row label in grid-based layout (if used) */
+.seatmap-row-label {
+  font-size: 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 4px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+/* Individual seat */
+.seat {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: #4b5563; /* empty/default */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.65rem;
+  color: #f9fafb;
+  position: relative;
+  cursor: pointer;
+  transition: 0.12s transform ease, 0.12s box-shadow ease, 0.12s outline-color ease;
+}
+
+/* seat colours by pax type / SSR */
+.seat-adult {
+  background: #eab308;
+  color: #111827;
+}
+
+.seat-child {
+  background: #22c55e;
+  color: #022c22;
+}
+
+/* adult with lap infant SSR (INFT/INF) */
+.seat-adult-infant,
+.seat-infant {
+  background: #0ea5e9;
+}
+
+/* explicit empty seat class (uses default grey) */
+.seat-empty {
+  background: #4b5563;
+}
+
+/* icons overlay */
+.seat-icons {
+  position: absolute;
+  bottom: 1px;
+  right: 2px;
+  display: flex;
+  gap: 1px;
+}
+
+.seat-icon {
+  font-size: 0.55rem;
+  line-height: 1;
+}
+
+.seat-icon-special {
+  color: #facc15;
+}
+
+.seat-icon-wheelchair {
+  color: #38bdf8;
+}
+
+/* UMNR highlight: child + red border + glow */
+.seat-umnr {
+  border: 2px solid #dc2626;
+  box-shadow: 0 0 8px rgba(220, 38, 38, 0.8);
+}
+
+.seat-icon-umnr {
+  font-size: 0.7rem;
+}
+
+/* hover state */
+.seat:hover {
+  outline: 2px solid #f97316;
+  outline-offset: 1px;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.6);
+}
+
+/* legend icons reuse seat box but non-clickable */
+#seatmap-legend .seat {
+  cursor: default;
+}
+
+/* ========= Seat map – “layout” (2+2 / 2+1) ======================== */
+
+.seatmap-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 0;
+}
+
+/* One row of seats (e.g. "1 A _ BC") */
+.seat-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Row number on the left */
+.seat-label {
+  width: 24px;
+  text-align: right;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+/* Block of seats (left or right of aisle) */
+.seat-block {
+  display: flex;
+  gap: 4px;
+}
+
+/* Visual aisle gap between left/right blocks */
+.seat-aisle {
+  width: 18px;
+}
+
+/* legend layout */
+#seatmap-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.5rem;
+}
+
+#seatmap-legend .legend-item {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+#seatmap-legend .seat {
+  margin-right: 0.35rem;
+}
+
+/* ========= Flight details cards / warnings ======================== */
+
+#flight-warnings .badge {
+  margin-left: 0.25rem;
+}
+
+/* 2×2 grid for the details */
+.flight-details-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+}
+
+@media (min-width: 768px) {
+  .flight-details-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Quarter cards */
+.detail-card {
+  background: color-mix(in oklab, var(--panel) 94%, var(--bg));
+  border-radius: 0.75rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+/* Small uppercase section titles */
+.detail-title {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+}
+
+/* Times block layout */
+.detail-card-times .time-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 0.8rem;
+  margin-bottom: 0.15rem;
+}
+
+.detail-card-times .time-label {
+  color: var(--muted);
+}
+
+.detail-card-times .time-value {
+  font-weight: 500;
+}
+
+/* Delays table stays inside Q3 */
+.detail-card-delays #modal-delays {
+  max-height: 130px;
+  overflow-y: auto;
+}
+
+.detail-card-delays table {
+  font-size: 0.75rem;
+  margin-bottom: 0;
+}
+
+/* Passenger breakdown stacked lines */
+.pax-breakdown .pax-line {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 0.1rem;
+}
+
+.pax-breakdown .pax-label {
+  color: var(--muted);
+}
+
+.pax-breakdown .pax-value {
+  font-weight: 600;
+}
+
+/* ========= Dark modals (to match theme) =========================== */
+
+.modal-content {
+  background: color-mix(in oklab, var(--panel) 95%, #020617);
+  color: var(--text);
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+}
+
+.modal-header,
+.modal-footer {
+  border-color: var(--line);
+}
+
+.modal-title {
+  font-size: 1rem;
+}
+
+/* Tables inside modals */
+.modal-content .table {
+  color: var(--text);
+  background: transparent;
+}
+
+.modal-content .table thead th {
+  background: color-mix(in oklab, var(--panel) 92%, var(--bg));
+  border-bottom-color: var(--line);
+}
+
+.modal-content .table tbody tr:hover {
+  background: color-mix(in oklab, var(--text) 4%, transparent);
+}

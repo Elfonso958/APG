@@ -1,4 +1,4 @@
-﻿from flask import Blueprint, render_template, request, redirect, jsonify, flash, current_app
+﻿from flask import Blueprint, render_template, request, redirect, jsonify, flash, current_app,send_file, abort, url_for, make_response
 from datetime import date, datetime, time, timezone, timedelta
 from .models import SyncRun, SyncFlightLog, AppConfig
 from . import db
@@ -6,6 +6,9 @@ from .zenith_client import fetch_dcs_for_flight
 from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime as _dt
+from datetime import date as _date
+import io
+from io import BytesIO
 
 import json, requests
 import re
@@ -1080,6 +1083,63 @@ def api_envision_flight_times():
     }
 
     return jsonify(payload), 200
+
+@ui_bp.route("/dcs/manifest_preview")
+def dcs_manifest_preview():
+    # Pull query parameters safely
+    dep         = request.args.get("dep")
+    ades        = request.args.get("ades")
+    date_str    = request.args.get("date")
+    designator  = request.args.get("designator")
+    flight_no   = request.args.get("flight_number")
+    reg         = request.args.get("reg")
+
+    current_app.logger.info(
+        "Manifest preview request: dep=%s ades=%s date=%s designator=%s flight_no=%s reg=%s",
+        dep, ades, date_str, designator, flight_no, reg,
+    )
+
+    # Validate required params
+    missing = [name for name, value in [
+        ("dep", dep),
+        ("ades", ades),
+        ("date", date_str),
+        ("designator", designator),
+        ("flight_number", flight_no),
+        ("reg", reg),
+    ] if not value]
+
+    if missing:
+        # Custom message instead of generic 400
+        return (
+            f"Missing required query parameter(s): {', '.join(missing)}",
+            400,
+        )
+
+    # TODO: load passengers for this flight (however you already do it)
+    # e.g. passengers = get_passengers_from_dcs(dep, ades, date_str, designator, flight_no, reg)
+
+    # TODO: build the PDF bytes (you probably already have a helper for this)
+    # pdf_bytes = build_manifest_pdf(dep, ades, date_str, designator, flight_no, reg, passengers)
+
+    # For now, just prove it works with a dummy PDF or text:
+    # pdf_bytes = generate_dummy_pdf(...)
+    dummy = io.BytesIO()
+    dummy.write(
+        f"Manifest preview\n\n{designator}{flight_no} {dep}->{ades} {date_str} {reg}".encode("utf-8")
+    )
+    dummy.seek(0)
+
+    return send_file(
+        dummy,
+        as_attachment=False,
+        download_name="manifest-preview.txt",  # or .pdf if you’re returning a real PDF
+        mimetype="text/plain",
+    )
+
+
+
+
 
 
 def _envision_first_page_debug(token: str, start_utc: datetime, end_utc: datetime, limit: int = 5) -> dict:
