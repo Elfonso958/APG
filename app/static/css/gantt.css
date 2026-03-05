@@ -8,6 +8,7 @@
   border-radius: var(--radius);
   border: 1px solid var(--line);
   box-shadow: var(--shadow);
+  min-height: clamp(420px, 72vh, 82vh);
 }
 
 /* Centered loading overlay */
@@ -73,7 +74,9 @@
 }
 
 .dcs-gantt-rows {
-  max-height: 650px;
+  height: calc(100vh - 380px);
+  max-height: calc(100vh - 360px);
+  min-height: 320px;
   overflow-y: auto;
   border-radius: 0 0 var(--radius) var(--radius);
   background:
@@ -87,6 +90,10 @@
   display: flex;
   min-height: 60px;
   border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+}
+
+.gantt-row:nth-child(even){
+  background: color-mix(in oklab, var(--panel) 98%, var(--bg));
 }
 
 .gantt-row-label {
@@ -136,9 +143,9 @@
   white-space: nowrap;
   text-overflow: ellipsis;
   cursor: pointer;
- /*  border-radius: 999px; */
- /* color: #fff;*/
- /* box-shadow: 0 4px 10px rgba(15, 23, 42, 0.6);*/
+  border-radius: 0;
+  color: #ffffff;
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.45);
 }
 
 /* Airport labels above bar */

@@ -37,9 +37,19 @@ ui_bp = Blueprint("ui", __name__)
 
 @ui_bp.route("/")
 @ui_bp.route("/sync/runs")
+@ui_bp.route("/sync/runs/")
 def sync_runs_page():
     runs = SyncRun.query.order_by(SyncRun.id.desc()).limit(50).all()
-    return render_template("sync_runs.html", runs=runs)
+    ok_count = sum(1 for r in runs if r.ok)
+    fail_count = sum(1 for r in runs if r.ok is False)
+    warn_count = sum(1 for r in runs if (r.warnings or 0) > 0)
+    summary = {
+        "total": len(runs),
+        "ok": ok_count,
+        "failed": fail_count,
+        "warnings": warn_count,
+    }
+    return render_template("sync_runs.html", runs=runs, summary=summary)
 
 def _agg_passengers(passengers: list[dict]) -> dict:
     """Return counts + baggage kg from a DCS Passengers list."""

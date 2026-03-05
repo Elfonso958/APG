@@ -4,7 +4,7 @@ import json
 import logging
 import re
 from flask import current_app
-
+from requests import HTTPError
 from datetime import datetime, date, time, timedelta, timezone
 try:
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -60,7 +60,7 @@ WINDOW_FUTURE_HOURS = int(os.getenv("WINDOW_FUTURE_HOURS", "72"))
 # Envision pagination
 ENVISION_PAGE_LIMIT = int(os.getenv("ENVISION_PAGE_LIMIT", "100"))
 
-# Registration → APG aircraft_id mapping (populate for your fleet)
+# Registration â†’ APG aircraft_id mapping (populate for your fleet)
 REG_TO_APG_AIRCRAFT_ID = {
     # "ZK-CIZ": 137997,
 }
@@ -154,7 +154,6 @@ def fetch_envision_crew_for_apg(envision_flight_id: int):
             "is_operating": True,
         }
     """
-    # Use your existing auth shape (dict with "token")
     env_auth = envision_authenticate()
     env_token = env_auth["token"]
 
@@ -164,27 +163,39 @@ def fetch_envision_crew_for_apg(envision_flight_id: int):
     # Raw crew from /Flights/{flightId}/Crew
     crew_raw = envision_get_flight_crew(env_token, envision_flight_id)
 
-    crew_list: list[dict] = []
-
-    for c in crew_raw:
-        # Only keep operating crew
-        if not c.get("isOperating", True):
-            continue
-
+    def _normalise_crew_member(c: dict, is_operating: bool) -> dict:
         emp_id = c.get("employeeId")
         pos_id = c.get("positionId") or c.get("crewPositionId")
 
         # --- Look up employee to get proper names ---
-        emp = {}
+        emp: dict = {}
         if emp_id:
             try:
                 emp = envision_get_employee(env_token, emp_id)
+            except HTTPError as e:
+                # 400 "Sequence contains no elements." -> missing employee in Envision
+                if e.response is not None and e.response.status_code == 400:
+                    logging.warning(
+                        "fetch_envision_crew_for_apg: employee %s not found (400). "
+                        "Skipping name enrichment for this crew member.",
+                        emp_id,
+                    )
+                    emp = {}
+                else:
+                    logging.exception(
+                        "fetch_envision_crew_for_apg: HTTP error for employee %s",
+                        emp_id,
+                    )
+                    emp = {}
             except Exception:
                 # Don't break the whole crew fetch if one lookup fails
+                logging.exception(
+                    "fetch_envision_crew_for_apg: non-HTTP error for employee %s",
+                    emp_id,
+                )
                 emp = {}
 
         # Prefer employee record names, fall back to crew record
-        # ---- Correct name extraction (handles all Envision variants) ----
         first = (
             emp.get("firstName")
             or emp.get("givenName")
@@ -202,6 +213,7 @@ def fetch_envision_crew_for_apg(envision_flight_id: int):
             or c.get("surname")
             or ""
         ).strip()
+
         # Start with whatever Envision gives us for position text
         pos_desc = (
             c.get("crewPositionDescription")
@@ -216,21 +228,35 @@ def fetch_envision_crew_for_apg(envision_flight_id: int):
             elif pos_id in pilot_pos_ids:
                 pos_desc = "FO"
             else:
-                # Anything not a pilot → treat as cabin crew
+                # Anything not a pilot -> treat as cabin crew
                 pos_desc = "FA"
 
-        crew_list.append(
-            {
-                "position": pos_desc,
-                "name": f"{last.upper()} {first}".strip(),
-                "employee_id": emp_id,
-                "position_id": pos_id,
-                "is_operating": True,
-            }
-        )
+        if not is_operating:
+            pos_desc = f"{pos_desc} (non-op)" if pos_desc else "Non-op"
 
-    return crew_list
+        return {
+            "position": pos_desc,
+            "name": f"{last.upper()} {first}".strip(),
+            "employee_id": emp_id,
+            "position_id": pos_id,
+            "is_operating": is_operating,
+        }
 
+    operating: list[dict] = []
+    non_operating: list[dict] = []
+
+    for c in crew_raw:
+        is_operating = bool(c.get("isOperating", True))
+        if is_operating:
+            operating.append(_normalise_crew_member(c, True))
+        else:
+            non_operating.append(_normalise_crew_member(c, False))
+
+    # If no operating crew are returned, fall back to non-operating
+    if not operating and non_operating:
+        return non_operating
+
+    return operating
 
 # ===========================
 # Helpers
@@ -265,19 +291,45 @@ def _get_local_tz():
 LOCAL_TZ = _get_local_tz()
 
 def _load_cache() -> dict:
-    """Load idempotency cache from disk. Returns an empty dict on any error."""
+    """Load idempotency cache from disk + DB. Returns an empty dict on any error."""
+    cache: dict = {}
+    # 1) File cache (legacy)
     try:
         with open(CACHE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-            return data if isinstance(data, dict) else {}
+            if isinstance(data, dict):
+                cache.update(data)
     except FileNotFoundError:
-        return {}
+        pass
     except Exception:
         logging.warning("Cache load failed; starting with empty cache.", exc_info=True)
-        return {}
+
+    # 2) DB state (preferred if available)
+    try:
+        from app import db  # noqa: F401
+        from app.models import SyncFlightState
+        rows = SyncFlightState.query.all()
+        for r in rows:
+            entry = {}
+            if r.core_json:
+                try:
+                    entry["core"] = json.loads(r.core_json)
+                except Exception:
+                    entry["core"] = None
+            if r.fp:
+                entry["fp"] = r.fp
+            if r.apg_id is not None:
+                entry["apg_id"] = r.apg_id
+            if entry:
+                cache[str(r.envision_flight_id)] = entry
+    except Exception:
+        # DB may be unavailable outside app context; ignore
+        pass
+
+    return cache
 
 def _save_cache(cache: dict) -> None:
-    """Atomically persist the cache to disk."""
+    """Atomically persist the cache to disk and DB."""
     try:
         tmp = CACHE_FILE + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -285,6 +337,35 @@ def _save_cache(cache: dict) -> None:
         os.replace(tmp, CACHE_FILE)
     except Exception:
         logging.warning("Cache save failed; cache not updated on disk.", exc_info=True)
+
+    # Persist to DB as well (best-effort)
+    try:
+        from app import db
+        from app.models import SyncFlightState
+        now = datetime.utcnow()
+        for fid, entry in cache.items():
+            if not isinstance(entry, dict):
+                continue
+            if not any(k in entry for k in ("core", "fp", "apg_id")):
+                continue
+            row = SyncFlightState.query.filter_by(envision_flight_id=str(fid)).first()
+            if not row:
+                row = SyncFlightState(envision_flight_id=str(fid), created_at=now)
+            core = entry.get("core")
+            if core is not None:
+                try:
+                    row.core_json = json.dumps(core, ensure_ascii=False)
+                except Exception:
+                    row.core_json = None
+            if entry.get("fp") is not None:
+                row.fp = entry.get("fp")
+            if entry.get("apg_id") is not None:
+                row.apg_id = entry.get("apg_id")
+            row.updated_at = now
+            db.session.add(row)
+        db.session.commit()
+    except Exception:
+        logging.warning("DB state save failed; continuing without DB cache.", exc_info=True)
 
 def envision_get_crew_positions(token: str) -> list[dict]:
     """GET /v1/Crews/Positions (cached)."""
@@ -324,26 +405,26 @@ def _describe_changes(old_core: Optional[dict], new_core: dict) -> Optional[str]
     if old_k != new_k:
         def _fmt(k: Optional[str]) -> str:
             if not k:
-                return "—"
+                return "-"
             dt = datetime.strptime(k, "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(_get_local_tz())
             return dt.strftime("%H:%M")
-        changes.append(f"EOBT {_fmt(old_k)}→{_fmt(new_k)}")
+        changes.append(f"EOBT {_fmt(old_k)}->{_fmt(new_k)}")
 
     # PIC name
     if (old_core.get("pic_name") or "") != (new_core.get("pic_name") or ""):
-        changes.append(f"PIC {(old_core.get('pic_name') or '—')}→{(new_core.get('pic_name') or '—')}")
+        changes.append(f"PIC {(old_core.get('pic_name') or '-')}->{(new_core.get('pic_name') or '-')}")
 
     # NEW: FO (prefer names; fall back to ids)
     if (old_core.get("fo_name") or old_core.get("fo_id")) != (new_core.get("fo_name") or new_core.get("fo_id")):
-        old_fo = (old_core.get("fo_name") or old_core.get("fo_id") or "—")
-        new_fo = (new_core.get("fo_name") or new_core.get("fo_id") or "—")
-        changes.append(f"FO {old_fo}→{new_fo}")
+        old_fo = (old_core.get("fo_name") or old_core.get("fo_id") or "-")
+        new_fo = (new_core.get("fo_name") or new_core.get("fo_id") or "-")
+        changes.append(f"FO {old_fo}->{new_fo}")
 
     # NEW: TIC (prefer names; fall back to ids)
     if (old_core.get("tic_name") or old_core.get("tic_id")) != (new_core.get("tic_name") or new_core.get("tic_id")):
-        old_tic = (old_core.get("tic_name") or old_core.get("tic_id") or "—")
-        new_tic = (new_core.get("tic_name") or new_core.get("tic_id") or "—")
-        changes.append(f"TIC {old_tic}→{new_tic}")
+        old_tic = (old_core.get("tic_name") or old_core.get("tic_id") or "-")
+        new_tic = (new_core.get("tic_name") or new_core.get("tic_id") or "-")
+        changes.append(f"TIC {old_tic}->{new_tic}")
 
     return "; ".join(changes) if changes else None
 
@@ -411,7 +492,7 @@ def format_employee_name(emp: dict) -> Optional[str]:
         return (first + " " + last).strip()
     return (emp.get("shortDisplayName") or emp.get("employeeUsername") or "").strip() or None
 
-def resolve_pic_for_flight(token: str, flight: dict) -> tuple[Optional[str], Optional[str]]:
+def resolve_pic_for_flight(token: str, flight: dict, crew: Optional[list[dict]] = None) -> tuple[Optional[str], Optional[str]]:
     """
     Returns (pic_name, pic_employee_no).
     Priority:
@@ -425,7 +506,8 @@ def resolve_pic_for_flight(token: str, flight: dict) -> tuple[Optional[str], Opt
 
     try:
         pic_pos, pilot_pos = build_pic_pilot_position_sets(token)
-        crew = envision_get_flight_crew(token, int(fid))
+        if crew is None:
+            crew = envision_get_flight_crew(token, int(fid))
     except Exception as e:
         logging.warning(f"Could not resolve PIC for flight {fid}: {e}")
         return None, None
@@ -452,7 +534,7 @@ def resolve_pic_for_flight(token: str, flight: dict) -> tuple[Optional[str], Opt
 
     return None, None
 
-def resolve_fo_for_flight(token: str, flight: dict) -> tuple[Optional[str], Optional[str]]:
+def resolve_fo_for_flight(token: str, flight: dict, crew: Optional[list[dict]] = None) -> tuple[Optional[str], Optional[str]]:
     """
     Returns (fo_name, fo_employee_no).
     Priority:
@@ -465,7 +547,8 @@ def resolve_fo_for_flight(token: str, flight: dict) -> tuple[Optional[str], Opti
 
     try:
         pic_pos, pilot_pos = build_pic_pilot_position_sets(token)
-        crew = envision_get_flight_crew(token, int(fid))
+        if crew is None:
+            crew = envision_get_flight_crew(token, int(fid))
     except Exception as e:
         logging.warning(f"Could not resolve FO for flight {fid}: {e}")
         return None, None
@@ -489,7 +572,7 @@ def resolve_fo_for_flight(token: str, flight: dict) -> tuple[Optional[str], Opti
     return None, None
 
 
-def resolve_cabincrew_for_flight(token: str, flight: dict) -> list[tuple[Optional[str], Optional[str]]]:
+def resolve_cabincrew_for_flight(token: str, flight: dict, crew: Optional[list[dict]] = None) -> list[tuple[Optional[str], Optional[str]]]:
     """
     Returns list of (name, employee_no) for all cabin crew on the flight.
     We treat any crew not in pilot_pos as 'cabin' (adjust if you have explicit flags).
@@ -500,7 +583,8 @@ def resolve_cabincrew_for_flight(token: str, flight: dict) -> list[tuple[Optiona
 
     try:
         _, pilot_pos = build_pic_pilot_position_sets(token)
-        crew = envision_get_flight_crew(token, int(fid))
+        if crew is None:
+            crew = envision_get_flight_crew(token, int(fid))
     except Exception as e:
         logging.warning(f"Could not resolve Cabin Crew for flight {fid}: {e}")
         return []
@@ -512,16 +596,39 @@ def resolve_cabincrew_for_flight(token: str, flight: dict) -> list[tuple[Optiona
         emp_id = c.get("employeeId")
         if not emp_id:
             continue
+
         # Non-pilot positions -> cabin crew
         if pid not in (pilot_pos or set()):
-            emp = envision_get_employee(token, int(emp_id))
+            try:
+                emp = envision_get_employee(token, int(emp_id))
+            except HTTPError as e:
+                # 400 "Sequence contains no elements." => missing employee
+                if e.response is not None and e.response.status_code == 400:
+                    logging.warning(
+                        "resolve_cabincrew_for_flight: employee %s not found (400). "
+                        "Skipping this cabin crew member on flight %s.",
+                        emp_id, fid,
+                    )
+                    continue
+                else:
+                    logging.exception(
+                        "resolve_cabincrew_for_flight: HTTP error for employee %s on flight %s",
+                        emp_id, fid,
+                    )
+                    continue
+            except Exception as e:
+                logging.exception(
+                    "resolve_cabincrew_for_flight: non-HTTP error for employee %s on flight %s: %s",
+                    emp_id, fid, e,
+                )
+                continue
+
             name = format_employee_name(emp)
             eno = (emp.get("employeeNo") or "").strip().upper() or None
             out.append((name, eno))
 
     # Stable order for UI
     return sorted(out, key=lambda t: (t[0] or "", t[1] or ""))
-
 
 def to_icao(code: Optional[str]) -> Optional[str]:
     """Return ICAO code for a supplied aerodrome code (IATA or ICAO)."""
@@ -533,7 +640,7 @@ def to_icao(code: Optional[str]) -> Optional[str]:
     if len(c) == 3:
         if c in IATA_TO_ICAO:
             return IATA_TO_ICAO[c]
-        logging.warning(f"Unknown IATA code '{c}' — add to IATA_TO_ICAO to proceed.")
+        logging.warning(f"Unknown IATA code '{c}' â€” add to IATA_TO_ICAO to proceed.")
         return None
     # Fallback: sometimes Envision passes names; try guess_code then recurse once
     g = guess_code(c)
@@ -551,7 +658,7 @@ def guess_code(raw: Optional[str]) -> Optional[str]:
         inside = s[s.find("(")+1:s.find(")")]
         if inside:
             return inside.strip().upper()
-    # Otherwise return the last contiguous A–Z block
+    # Otherwise return the last contiguous Aâ€“Z block
     tokens = [t for t in ''.join([c if c.isalpha() else ' ' for c in s]).split() if t.isalpha()]
     return tokens[-1] if tokens else s
 
@@ -644,7 +751,7 @@ def ask_refresh_popup() -> bool:
         root = _tk.Tk()
         root.withdraw()
         try:
-            return _mb.askyesno("Envision → APG", "Refresh flights now?")
+            return _mb.askyesno("Envision â†’ APG", "Refresh flights now?")
         finally:
             root.destroy()
     ans = input("Refresh flights now? [Y/n]: ").strip().lower()
@@ -724,7 +831,7 @@ def build_existing_plan_index(
             index[key] = pid
             kept += 1
 
-    logging.info(f"APG presence across statuses {','.join(statuses)} → scanned {seen}, kept {kept} within window")
+    logging.info(f"APG presence across statuses {','.join(statuses)} â†’ scanned {seen}, kept {kept} within window")
     return index
 
 
@@ -820,8 +927,8 @@ def envision_authenticate() -> Dict[str, str]:
     else:
         auth_url = f"{base}/v1/Authenticate"
 
-    # 👇 add this line
-    logging.info("Authenticating to Envision… base=%s auth_url=%s", base, auth_url)
+    # ðŸ‘‡ add this line
+    logging.info("Authenticating to Envisionâ€¦ base=%s auth_url=%s", base, auth_url)
 
     payload = {
         "username": (ENVISION_USER or "").strip(),
@@ -922,7 +1029,7 @@ def apg_login(email: str, password: str) -> Dict[str, str]:
         }
         payload = {"email": email, "password": password}
 
-        print(f"[APG] Trying login → host={host} ver={ver} appkey_len={len(app_key)} email_set={bool(email)}")
+        print(f"[APG] Trying login â†’ host={host} ver={ver} appkey_len={len(app_key)} email_set={bool(email)}")
 
         try:
             r = requests.post(url, headers=headers, json=payload, timeout=30)
@@ -1005,7 +1112,7 @@ def apg_plan_edit(bearer: str, plan_payload: Dict[str, Any]) -> Dict[str, Any]:
     url = f"{APG_BASE}/plan/edit"
     headers = apg_headers(bearer)
 
-    # 🔹 Debug payload when APG_DEBUG_PAYLOAD is enabled
+    # ðŸ”¹ Debug payload when APG_DEBUG_PAYLOAD is enabled
     if os.getenv("APG_DEBUG_PAYLOAD", "0").lower() in ("1", "true", "yes"):
         try:
             logging.info(
@@ -1024,7 +1131,7 @@ def apg_plan_edit(bearer: str, plan_payload: Dict[str, Any]) -> Dict[str, Any]:
     return data
 
 # ===========================
-# Transform: Envision → APG
+# Transform: Envision â†’ APG
 # ===========================
 def envision_to_apg_plan(f: Dict[str, Any], aircraft_id: Optional[int], pic_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
     adep = to_icao(f.get("departurePlaceDescription"))
@@ -1043,7 +1150,7 @@ def envision_to_apg_plan(f: Dict[str, Any], aircraft_id: Optional[int], pic_name
     if not eobt: missing.append("EOBT")
     if not aircraft_id: missing.append("aircraft_id")
     if missing:
-        logging.warning(f"Skipping flight {f.get('id')} — missing: {', '.join(missing)}")
+        logging.warning(f"Skipping flight {f.get('id')} â€” missing: {', '.join(missing)}")
         return None
 
     plan = {
@@ -1071,7 +1178,7 @@ def main(
     date_to_utc: Optional[Union[str, datetime]] = None,
 ):
     """
-    One sync pass: Envision → APG.
+    One sync pass: Envision â†’ APG.
 
     If date_from_utc/date_to_utc are given (UTC ISO or datetime), use that exact window.
     Otherwise use env-driven rolling window and drop past flights.
@@ -1162,7 +1269,7 @@ def main(
         apply_past_filter = True
 
     logging.info(
-        "Fetching Envision flights (local NZ) %s → %s | (UTC) %s → %s",
+        "Fetching Envision flights (local NZ) %s â†’ %s | (UTC) %s â†’ %s",
         window_from_local.isoformat(), window_to_local.isoformat(),
         window_from_utc.isoformat(), window_to_utc.isoformat()
     )
@@ -1171,7 +1278,7 @@ def main(
     cache = _load_cache()  # fid -> {"fp": "...", "core": {...}, "apg_id": int, "key": (...) } OR legacy "fp" string
 
     # ---------- Envision ----------
-    logging.info("Authenticating to Envision…")
+    logging.info("Authenticating to Envisionâ€¦")
     env_auth = envision_authenticate()
     env_token = env_auth["token"]
 
@@ -1222,7 +1329,7 @@ def main(
         logging.info(f"Limiting to first {len(flights)} flights for testing")
 
     # ---------- APG auth & lookups (always do this, even if Envision has 0 flights -> for reconciliation) ----------
-    logging.info("Authenticating to APG…")
+    logging.info("Authenticating to APGâ€¦")
     apg_auth = apg_login(APG_EMAIL, APG_PASSWORD)
     apg_bearer = apg_auth["authorization"]
     apg_refresh_token = apg_auth.get("refresh_token", "")
@@ -1246,7 +1353,7 @@ def main(
         logging.warning(f"Could not fetch APG crew list: {e}")
         crewcode_to_id = {}
 
-    # Presence index (key → plan_id or None) within window
+    # Presence index (key â†’ plan_id or None) within window
     try:
         existing_index = build_existing_plan_index(apg_bearer, window_from_utc, window_to_utc)
     except Exception as e:
@@ -1370,11 +1477,11 @@ def main(
                 aircraft_id=None,
                 pic_name=None, pic_empno=None, apg_pic_id=None,
                 result="deleted",
-                reason="Missing from Envision → removed in APG",
+                reason="Missing from Envision â†’ removed in APG",
                 warnings=None,
             )
 
-            # tidy indexes/cache so we don’t try to act on it again
+            # tidy indexes/cache so we donâ€™t try to act on it again
             if key:
                 existing_index.pop(tuple(key), None)
                 existing_index_by3.pop((key[0], key[1], key[2]), None)
@@ -1384,7 +1491,7 @@ def main(
         except Exception as ex:
             msg = str(ex)
             if "forbidden" in msg.lower():
-                # Mark as undeletable so we stop retrying and won’t let it block creation
+                # Mark as undeletable so we stop retrying and wonâ€™t let it block creation
                 entry["apg_delete_forbidden"] = True
                 # Also drop from in-memory presence indices for THIS run
                 if key:
@@ -1452,10 +1559,18 @@ def main(
 
     # ---------- process each (remaining) flight ----------
     for f in flights:
-        # Resolve PIC
-        pic_name, pic_empno = resolve_pic_for_flight(env_token, f)
-        fo_name, fo_empno   = resolve_fo_for_flight(env_token, f)
-        cc_list             = resolve_cabincrew_for_flight(env_token, f)  # returns [(name, empno), ...]
+        # Resolve crew (single Envision call per flight)
+        crew_raw = None
+        fid = f.get("id")
+        if fid:
+            try:
+                crew_raw = envision_get_flight_crew(env_token, int(fid))
+            except Exception as e:
+                logging.warning("Could not fetch crew for flight %s: %s", fid, e)
+
+        pic_name, pic_empno = resolve_pic_for_flight(env_token, f, crew=crew_raw)
+        fo_name, fo_empno   = resolve_fo_for_flight(env_token, f, crew=crew_raw)
+        cc_list             = resolve_cabincrew_for_flight(env_token, f, crew=crew_raw)  # returns [(name, empno), ...]
 
         # Compute timings up-front
         std_dt = parse_iso(f.get("departureScheduled") or "")
@@ -1466,7 +1581,7 @@ def main(
         aircraft_id = choose_apg_aircraft_id_for_flight(f)
         if not aircraft_id:
             reg_raw = (f.get("flightRegistrationDescription") or "").strip() or None
-            logging.warning(f"Skip flight {f.get('id')} — no APG aircraft match for reg {reg_raw}")
+            logging.warning(f"Skip flight {f.get('id')} â€” no APG aircraft match for reg {reg_raw}")
 
             # Try to locate the corresponding APG plan and DELETE it
             fid = str(f.get("id") or "")
@@ -1503,7 +1618,7 @@ def main(
                         aircraft_id=None,
                         pic_name=None, pic_empno=None, apg_pic_id=None,
                         result="deleted",
-                        reason="No registration in Envision → removed from APG",
+                        reason="No registration in Envision â†’ removed from APG",
                         warnings=None,
                     )
                     if key:
@@ -1568,7 +1683,7 @@ def main(
             base_evt["apg_pic_id"] = apg_pic_id
         else:
             if REQUIRE_PIC_IN_APG and pic_empno:
-                logging.warning(f"Skipping flight {f.get('id')} — PIC employeeNo {pic_empno} not found in APG crew.")
+                logging.warning(f"Skipping flight {f.get('id')} â€” PIC employeeNo {pic_empno} not found in APG crew.")
                 skipped += 1
                 _emit_flight_event(
                     **base_evt,
@@ -1668,27 +1783,27 @@ def main(
         # human-readable diff (EOBT + PIC + FO/TIC)
         change_reason = _describe_changes(prev_core, new_core)
 
-        # small formatter for “extra” diffs (PIC code / AC / route / FL / FO / TIC)
+        # small formatter for â€œextraâ€ diffs (PIC code / AC / route / FL / FO / TIC)
         def _format_changes(old, new):
             if not old:
                 return None
-            def _v(x): return x if (x is not None and x != "") else "—"
+            def _v(x): return x if (x is not None and x != "") else "-"
             changes = []
             if old.get("pic_name") != new.get("pic_name"):
-                changes.append(f"PIC: {_v(old.get('pic_name'))} → {_v(new.get('pic_name'))}")
+                changes.append(f"PIC: {_v(old.get('pic_name'))} -> {_v(new.get('pic_name'))}")
             if old.get("pic_code") != new.get("pic_code"):
-                changes.append(f"PIC Code: {_v(old.get('pic_code'))} → {_v(new.get('pic_code'))}")
+                changes.append(f"PIC Code: {_v(old.get('pic_code'))} -> {_v(new.get('pic_code'))}")
             if old.get("aircraft_id") != new.get("aircraft_id"):
-                changes.append(f"AC ID: {_v(old.get('aircraft_id'))} → {_v(new.get('aircraft_id'))}")
+                changes.append(f"AC ID: {_v(old.get('aircraft_id'))} -> {_v(new.get('aircraft_id'))}")
             if old.get("route") != new.get("route"):
-                changes.append(f"Route: {_v(old.get('route'))} → {_v(new.get('route'))}")
+                changes.append(f"Route: {_v(old.get('route'))} -> {_v(new.get('route'))}")
             if old.get("fl") != new.get("fl"):
-                changes.append(f"FL: {_v(old.get('fl'))} → {_v(new.get('fl'))}")
+                changes.append(f"FL: {_v(old.get('fl'))} -> {_v(new.get('fl'))}")
             # NEW: FO/TIC diffs (prefer names; fall back to ids)
             if (old.get("fo_name") or old.get("fo_id")) != (new.get("fo_name") or new.get("fo_id")):
-                changes.append(f"FO: {_v(old.get('fo_name') or old.get('fo_id'))} → {_v(new.get('fo_name') or new.get('fo_id'))}")
+                changes.append(f"FO: {_v(old.get('fo_name') or old.get('fo_id'))} -> {_v(new.get('fo_name') or new.get('fo_id'))}")
             if (old.get("tic_name") or old.get("tic_id")) != (new.get("tic_name") or new.get("tic_id")):
-                changes.append(f"TIC: {_v(old.get('tic_name') or old.get('tic_id'))} → {_v(new.get('tic_name') or new.get('tic_id'))}")
+                changes.append(f"TIC: {_v(old.get('tic_name') or old.get('tic_id'))} -> {_v(new.get('tic_name') or new.get('tic_id'))}")
             return "; ".join(changes) if changes else None
 
         # inner push with 401-refresh and special error handling
@@ -1700,15 +1815,15 @@ def main(
             except RuntimeError as e:
                 msg = str(e).lower()
 
-                # Access denied on update → drop id and retry as create
+                # Access denied on update â†’ drop id and retry as create
                 if "access denied" in msg:
                     if _payload.get("id") is not None:
                         bad_id = _payload.get("id")
-                        logging.error("APG plan/edit denied on update id=%s — retrying as CREATE (drop id)…", bad_id)
+                        logging.error("APG plan/edit denied on update id=%s â€” retrying as CREATE (drop id)â€¦", bad_id)
                         create_payload = dict(_payload); create_payload.pop("id", None)
                         try:
                             res = apg_plan_edit(apg_bearer, create_payload)
-                            reason_text = (reason_text + "; " if reason_text else "") + "APG access denied on update → recreated"
+                            reason_text = (reason_text + "; " if reason_text else "") + "APG access denied on update â†’ recreated"
                             _payload = create_payload
                         except Exception:
                             skipped += 1
@@ -1720,22 +1835,22 @@ def main(
                     else:
                         skipped += 1
                         _emit_flight_event(**base_evt, result="failed", reason="Access denied", warnings=None)
-                        logging.error("APG plan/edit denied on create — access denied")
+                        logging.error("APG plan/edit denied on create â€” access denied")
                         return None
 
-                # Invalid PIC id → retry once without crew
+                # Invalid PIC id â†’ retry once without crew
                 elif "invalid pic_id" in msg or "pic id" in msg:
                     bad_id = None
                     try:
                         bad_id = (_payload.get("crew") or {}).get("pic_id")
                     except Exception:
                         pass
-                    logging.warning("APG rejected PIC id=%s; retrying without crew linkage…", bad_id)
+                    logging.warning("APG rejected PIC id=%s; retrying without crew linkageâ€¦", bad_id)
                     clean_payload = dict(_payload); clean_payload.pop("crew", None)
                     core = dict(core); core["pic_id"] = None
                     try:
                         res = apg_plan_edit(apg_bearer, clean_payload)
-                        reason_text = (reason_text + "; " if reason_text else "") + "APG rejected pic_id → retried without crew link"
+                        reason_text = (reason_text + "; " if reason_text else "") + "APG rejected pic_id â†’ retried without crew link"
                         _payload = clean_payload
                     except Exception:
                         skipped += 1
@@ -1754,18 +1869,18 @@ def main(
                 code = http_err.response.status_code if http_err.response is not None else None
                 body = http_err.response.text[:500] if (http_err.response and http_err.response.text) else ""
                 if code == 401 and apg_refresh_token:
-                    logging.info("APG 401 — refreshing token and retrying once…")
+                    logging.info("APG 401 â€” refreshing token and retrying onceâ€¦")
                     tokens = apg_refresh(apg_refresh_token)
                     apg_bearer = tokens["authorization"]
                     apg_refresh_token = tokens.get("refresh_token", apg_refresh_token)
                     res = apg_plan_edit(apg_bearer, _payload)
                 elif code == 403 and _payload.get("id") is not None:
                     bad_id = _payload.get("id")
-                    logging.error("APG HTTP 403 on update id=%s — retrying as CREATE (drop id)…", bad_id)
+                    logging.error("APG HTTP 403 on update id=%s â€” retrying as CREATE (drop id)â€¦", bad_id)
                     create_payload = dict(_payload); create_payload.pop("id", None)
                     try:
                         res = apg_plan_edit(apg_bearer, create_payload)
-                        reason_text = (reason_text + "; " if reason_text else "") + "APG 403 on update → recreated"
+                        reason_text = (reason_text + "; " if reason_text else "") + "APG 403 on update â†’ recreated"
                         _payload = create_payload
                     except Exception:
                         skipped += 1
@@ -1843,7 +1958,7 @@ def main(
         # Only skip if nothing changed *and* APG confirms the plan is visible now.
         if visible_now and prev_fp and prev_fp == fp:
             skipped += 1
-            logging.info(f"Skip flight {fid} — plan confirmed visible in APG and no changes since last sync")
+            logging.info(f"Skip flight {fid} â€” plan confirmed visible in APG and no changes since last sync")
             _emit_flight_event(**base_evt, result="skipped", reason="no changes since last sync", warnings=None)
             continue
 
@@ -2310,7 +2425,7 @@ def update_apg_plan_from_dcs_row(
         if seat_code and pax_name and seat_code not in seat_to_name:
             seat_to_name[seat_code] = pax_name
 
-    # 5c) APG pax rows (after we’ve applied DCS load)
+    # 5c) APG pax rows (after weâ€™ve applied DCS load)
     apg_pax_rows: list[dict] = []
     for st in loading:
         label = (st.get("label") or "").strip()
@@ -2495,7 +2610,7 @@ def attach_apg_presence_to_rows(
       - row["apg_plan_id"]  -> int | None
       - row["apg_has_plan"] -> bool
 
-    Uses the same APG presence logic as the Envision→APG sync.
+    Uses the same APG presence logic as the Envisionâ†’APG sync.
     """
     # 1) Login to APG
     apg_auth = apg_login(APG_EMAIL, APG_PASSWORD)
@@ -2648,7 +2763,7 @@ def apply_dcs_passengers_to_apg_rows(
         +15 kg per lap infant.
 
     Extra diagnostics:
-      - Logs the computed seat → mass / pob_count before applying to APG.
+      - Logs the computed seat â†’ mass / pob_count before applying to APG.
       - Optional per-seat mass cap via env var APG_MAX_SINGLE_SEAT_MASS_KG
         (if set > 0).
     """
@@ -2675,17 +2790,17 @@ def apply_dcs_passengers_to_apg_rows(
                 seated_children.append(seat_code)
         elif ptype in {"INF", "INFANT"}:
             if seat_code:
-                # Infant with its own seat – treat as 15 kg in that seat
+                # Infant with its own seat â€“ treat as 15 kg in that seat
                 seated_infants.append(seat_code)
             else:
-                # Lap infant – add 15 kg to an adult later
+                # Lap infant â€“ add 15 kg to an adult later
                 lap_infants_count += 1
         else:
-            # Unknown type → treat as adult
+            # Unknown type â†’ treat as adult
             if seat_code:
                 seated_adults.append(seat_code)
 
-    # --- Build initial seat → mass map for adults/children/infants-in-seat ---
+    # --- Build initial seat â†’ mass map for adults/children/infants-in-seat ---
     seat_to_load: dict[str, dict[str, float]] = {}
 
     # Adults
@@ -2744,14 +2859,14 @@ def apply_dcs_passengers_to_apg_rows(
         # Apply cap if configured
         if max_single_seat_mass > 0 and m > max_single_seat_mass:
             logger.warning(
-                "[APG] Seat %s mass %.1f kg exceeds cap %.1f kg – clamping.",
+                "[APG] Seat %s mass %.1f kg exceeds cap %.1f kg â€“ clamping.",
                 seat, m, max_single_seat_mass,
             )
             m = max_single_seat_mass
             load["mass"] = m
 
         logger.info(
-            "[APG] Computed load for seat %s → mass=%.1f kg, pob=%.1f (total_lap_infants=%d)",
+            "[APG] Computed load for seat %s â†’ mass=%.1f kg, pob=%.1f (total_lap_infants=%d)",
             seat, m, pob, total_lap_infants,
         )
 
@@ -2811,7 +2926,7 @@ def update_apg_plan_from_dcs_flight(
     # some shared object. For nested dicts, we mutate in-place (APG is fine).
     loading = [dict(st) for st in loading]
 
-    # 2) Apply DCS passengers → passenger seat rows
+    # 2) Apply DCS passengers â†’ passenger seat rows
     apply_dcs_passengers_to_apg_rows(loading, dcs_flight)
 
     # 3) Optional: update baggage mass from DCS
@@ -2843,7 +2958,7 @@ def update_apg_plan_from_dcs_flight(
         },
     }
 
-    # Optional debug logging – controlled via env var
+    # Optional debug logging â€“ controlled via env var
     if os.getenv("APG_DEBUG_PAYLOAD", "0").lower() in ("1", "true", "yes"):
         try:
             logging.info(
@@ -3045,7 +3160,7 @@ def apg_upload_manifest_pdf(bearer: str, plan_id: int, pdf_bytes: bytes, filenam
     try:
         js = resp.json()
     except ValueError:
-        # Not JSON – log and raise a clear error
+        # Not JSON â€“ log and raise a clear error
         raise RuntimeError(f"APG manifest upload non-JSON response: {resp.text[:200]}")
 
     status = js.get("status", {})
@@ -3057,7 +3172,7 @@ def apg_upload_manifest_pdf(bearer: str, plan_id: int, pdf_bytes: bytes, filenam
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Envision → APG sync")
+    parser = argparse.ArgumentParser(description="Envision â†’ APG sync")
     parser.add_argument("--once", action="store_true", help="Run a single sync pass and exit")
     parser.add_argument("--watch", action="store_true", help="Run forever, syncing on a schedule")
     args = parser.parse_args()
@@ -3066,3 +3181,4 @@ if __name__ == "__main__":
         #watch_loop()
     #else:
         main()
+

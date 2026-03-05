@@ -11,6 +11,33 @@ document.addEventListener("DOMContentLoaded", function () {
 
   const APG_PLAN_URL_TMPL = root.dataset.apgPlanUrlTemplate.replace(/0$/, "__PLAN__");
 
+  // Theme toggle (dark/light)
+  const themeToggle = document.getElementById("theme-toggle");
+  const themeIcon = document.getElementById("theme-icon");
+  const themeLabel = document.getElementById("theme-label");
+
+  function getSystemTheme() {
+    return window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches
+      ? "light"
+      : "dark";
+  }
+
+  function applyTheme(theme) {
+    document.body.dataset.theme = theme;
+    if (themeIcon) themeIcon.textContent = theme === "light" ? "◑" : "◐";
+    if (themeLabel) themeLabel.textContent = theme === "light" ? "Light" : "Dark";
+  }
+
+  if (themeToggle) {
+    const saved = localStorage.getItem("apg-theme");
+    applyTheme(saved || getSystemTheme());
+    themeToggle.addEventListener("click", () => {
+      const current = document.body.dataset.theme || getSystemTheme();
+      const next = current === "dark" ? "light" : "dark";
+      localStorage.setItem("apg-theme", next);
+      applyTheme(next);
+    });
+  }
 
   const dataNodes     = Array.from(document.querySelectorAll(".gantt-flight-data"));
   const rowsContainer = document.getElementById("dcs-gantt-rows");
@@ -22,8 +49,17 @@ document.addEventListener("DOMContentLoaded", function () {
   const loadingEl = document.getElementById("gantt-loading");
   
   // Header meta: "Loaded" date + "Last refresh"
-  const loadedDateEl  = document.querySelector(".date-pill .date-text");
+  const loadedDateEl  = document.querySelector(".hero-pill .date-text") || document.querySelector(".date-pill .date-text");
   const lastRefreshEl = document.getElementById("gantt-last-refresh");
+  const refreshBtn    = document.getElementById("btn-refresh-gantt");
+
+  const searchInput = document.getElementById("gantt-search");
+  const filterApgOnly = document.getElementById("filter-apg-only");
+  const filterPaxOnly = document.getElementById("filter-pax-only");
+
+  const statFlights = document.getElementById("stat-flights");
+  const statPax = document.getElementById("stat-pax");
+  const statNoApg = document.getElementById("stat-no-apg");
 
   // Format "Loaded" date nicely (Mon 08 Dec 2025)
   function formatLoadedDateStr(isoDate) {
@@ -428,6 +464,37 @@ function buildFlightsFromRows(rows) {
 
     const base     = (baseCode || "").toUpperCase();
     const baseIcao = base ? (BASE_ICAO[base] || null) : null;
+    const query    = (searchInput ? searchInput.value : "").trim().toUpperCase();
+    const apgOnly  = !!(filterApgOnly && filterApgOnly.checked);
+    const paxOnly  = !!(filterPaxOnly && filterPaxOnly.checked);
+
+    let visibleFlights = 0;
+    let visiblePax = 0;
+    let visibleNoApg = 0;
+
+    const matchQuery = (f) => {
+      if (!query) return true;
+      const flightCode = `${f.designator || ""}${f.flightNumeric || f.flightFull || ""}`.toUpperCase();
+      const route = `${(f.dep || "").toUpperCase()} ${(f.ades || "").toUpperCase()}`;
+      const regStr = (f.reg || "").toUpperCase();
+      return (
+        flightCode.includes(query) ||
+        route.includes(query) ||
+        regStr.includes(query)
+      );
+    };
+
+    const matchFilters = (f) => {
+      if (apgOnly) {
+        const hasApg = !!(f.apgPlanId || f.apg_plan_id || f.apgRouteId || f.apg_route_id);
+        if (!hasApg) return false;
+      }
+      if (paxOnly) {
+        const paxCount = Number(f.paxTotal || f.paxCount || 0);
+        if (!(paxCount > 0)) return false;
+      }
+      return matchQuery(f);
+    };
 
     regs.forEach(reg => {
       const flightsForReg = (byReg[reg] || []).slice().sort((a, b) => a.stdEst - b.stdEst);
@@ -445,6 +512,9 @@ function buildFlightsFromRows(rows) {
         if (!hasBaseFlight) return; // skip this aircraft
       }
 
+      const visibleFlightsForReg = flightsForReg.filter(matchFilters);
+      if (!visibleFlightsForReg.length) return;
+
       const row = document.createElement("div");
       row.className = "gantt-row";
 
@@ -457,7 +527,7 @@ function buildFlightsFromRows(rows) {
 
       let lastArrAirport = null;
 
-      flightsForReg.forEach(f => {
+      visibleFlightsForReg.forEach(f => {
         const leftPct  = (f.stdEst - chartStart) / durationMs * 100;
         const widthPct = Math.max((f.staEst - f.stdEst) / durationMs * 100, 2);
 
@@ -532,13 +602,40 @@ function buildFlightsFromRows(rows) {
       row.appendChild(labelCol);
       row.appendChild(track);
       rowsContainer.appendChild(row);
+
+      visibleFlights += visibleFlightsForReg.length;
+      visiblePax += visibleFlightsForReg.reduce((sum, f) => sum + Number(f.paxTotal || f.paxCount || 0), 0);
+      visibleNoApg += visibleFlightsForReg.reduce((sum, f) => {
+        const hasApg = !!(f.apgPlanId || f.apg_plan_id || f.apgRouteId || f.apg_route_id);
+        return sum + (hasApg ? 0 : 1);
+      }, 0);
     });
+
+    if (statFlights) statFlights.textContent = String(visibleFlights);
+    if (statPax) statPax.textContent = String(visiblePax);
+    if (statNoApg) statNoApg.textContent = String(visibleNoApg);
   }
 
   const baseFilterSelect = document.getElementById("base-filter");
   if (baseFilterSelect) {
     baseFilterSelect.addEventListener("change", function () {
       renderRowsForBase(this.value || "");
+    });
+  }
+
+  if (searchInput) {
+    searchInput.addEventListener("input", function () {
+      renderRowsForBase(baseFilterSelect ? baseFilterSelect.value : "");
+    });
+  }
+  if (filterApgOnly) {
+    filterApgOnly.addEventListener("change", function () {
+      renderRowsForBase(baseFilterSelect ? baseFilterSelect.value : "");
+    });
+  }
+  if (filterPaxOnly) {
+    filterPaxOnly.addEventListener("change", function () {
+      renderRowsForBase(baseFilterSelect ? baseFilterSelect.value : "");
     });
   }
 
@@ -673,9 +770,9 @@ function populateFlightDetailsModal(f) {
 
   if (bagsEl) bagsEl.textContent = (f.bagsKg || 0).toFixed(1);
 
-  // ---- Warnings (DCS + APG) with hover details ----
-  // ---- Warnings (DCS + APG) with hover details ----
-  if (warningsEl) {
+  function renderWarnings() {
+    if (!warningsEl) return;
+
     const hasDcs = Array.isArray(f.paxList) && f.paxList.length > 0;
     const hasApg = !!(f.apgPlanId && f.apgPlanId.toString().trim());
     const hasEnv = !!f.envisionFlightId;   // 👈 new: do we have Envision ID?
@@ -696,6 +793,11 @@ function populateFlightDetailsModal(f) {
 
     let html = "";
 
+    // Crew warning banner (if Envision returned no crew)
+    if (f.crewEmpty === true) {
+      html += '<div class="alert alert-warning py-1 px-2 mb-1">No crew returned from Envision for this flight ID.</div>';
+    }
+
     // DCS badge
     html += hasDcs
       ? `<span class="badge bg-success me-1" title="${dcsTip.replace(/"/g, "&quot;")}">DCS linked</span>`
@@ -715,6 +817,8 @@ function populateFlightDetailsModal(f) {
     warningsEl.innerHTML = html;
   }
 
+  // Initial render
+  renderWarnings();
 
   // ---- Delays table (kept inside Q3) ----
   const delaysEl = document.getElementById("modal-delays");
@@ -787,6 +891,7 @@ function populateFlightDetailsModal(f) {
 
     // If we don't have an Envision ID, just show a note
     if (!f.envisionFlightId) {
+      f.crewEmpty = null;
       crewEl.innerHTML =
         '<span class="text-muted">No Envision flight ID linked – crew not available.</span>';
     } else {
@@ -795,18 +900,24 @@ function populateFlightDetailsModal(f) {
 
       // Optional: cache on the flight object so we don't refetch if the modal reopens
       if (Array.isArray(f.crew) && f.crew.length) {
+        f.crewEmpty = false;
         renderCrewTable(f.crew, crewEl);
+        renderWarnings();
       } else if (typeof fetchEnvisionCrew === "function") {
         fetchEnvisionCrew(f.envisionFlightId).then(crew => {
           if (!crew || !crew.length) {
+            f.crewEmpty = true;
             crewEl.innerHTML =
               '<span class="text-muted">No operating crew found in Envision.</span>';
+            renderWarnings();
             return;
           }
 
           // cache
+          f.crewEmpty = false;
           f.crew = crew;
           renderCrewTable(crew, crewEl);
+          renderWarnings();
         });
       }
     }
@@ -817,6 +928,52 @@ function populateFlightDetailsModal(f) {
 // --- send to APG with pending icon + stronger payload building ---
 function sendToFlightPlan(f, barEl, { previewOnly = false } = {}) {
   if (!f) return;
+
+  // --- APG progress overlay ---
+  const overlay = document.getElementById("apg-send-overlay");
+  const overlayClose = document.getElementById("apg-send-close");
+  const overlayError = document.getElementById("apg-send-error");
+  const paxLine = overlay ? overlay.querySelector('[data-stage="pax"]') : null;
+  const manLine = overlay ? overlay.querySelector('[data-stage="manifest"]') : null;
+
+  function resetLine(line) {
+    if (!line) return;
+    line.classList.remove("done", "error");
+  }
+
+  function setLineState(line, state) {
+    if (!line) return;
+    line.classList.remove("done", "error");
+    if (state === "done") line.classList.add("done");
+    if (state === "error") line.classList.add("error");
+  }
+
+  function openOverlay() {
+    if (!overlay) return;
+    resetLine(paxLine);
+    resetLine(manLine);
+    if (overlayError) {
+      overlayError.style.display = "none";
+      overlayError.textContent = "";
+    }
+    overlay.classList.add("open");
+    overlay.setAttribute("aria-hidden", "false");
+  }
+
+  function closeOverlay() {
+    if (!overlay) return;
+    overlay.classList.remove("open");
+    overlay.setAttribute("aria-hidden", "true");
+  }
+
+  if (overlayClose) {
+    overlayClose.onclick = closeOverlay;
+  }
+  if (overlay) {
+    overlay.onclick = (e) => {
+      if (e.target === overlay) closeOverlay();
+    };
+  }
 
   // Button feedback
   const sendBtn = document.getElementById("btn-send-apg");
@@ -918,6 +1075,8 @@ function sendToFlightPlan(f, barEl, { previewOnly = false } = {}) {
     return Promise.reject(new Error("Missing required fields for APG push"));
   }
 
+  openOverlay();
+
   return fetch(APG_PUSH_URL, {                     // <--- use your configured URL
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -941,10 +1100,28 @@ function sendToFlightPlan(f, barEl, { previewOnly = false } = {}) {
       //  - updated the APG plan
       //  - generated the manifest PDF
       //  - uploaded it to APG (if no errors)
+      setLineState(paxLine, "done");
+      if (data && data.manifest_uploaded) {
+        setLineState(manLine, "done");
+      } else {
+        setLineState(manLine, "error");
+        if (overlayError) {
+          overlayError.textContent = data && data.manifest_error
+            ? data.manifest_error
+            : "Manifest upload failed or was not confirmed by APG.";
+          overlayError.style.display = "";
+        }
+      }
       return data;
     })
     .catch((err) => {
       console.error("[APG] send error:", err);
+      setLineState(paxLine, "error");
+      setLineState(manLine, "error");
+      if (overlayError) {
+        overlayError.textContent = err.message || "APG send failed.";
+        overlayError.style.display = "";
+      }
       throw err;
     })
     .finally(() => {
@@ -2401,6 +2578,12 @@ if (previewBtn) {
   //  - update "Loaded" date
   refreshGantt({ manual: true });
 
+  if (refreshBtn) {
+    refreshBtn.addEventListener("click", function () {
+      refreshGantt({ manual: true });
+    });
+  }
+
   // Change date → manual reload (spinner + loaded date update)
   if (dateInputCtrl) {
     dateInputCtrl.addEventListener("change", function () {
@@ -2421,3 +2604,4 @@ if (previewBtn) {
     refreshGantt({ manual: false });
   }, 60_000);
 });
+

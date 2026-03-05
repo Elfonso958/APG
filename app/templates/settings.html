@@ -1,23 +1,89 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>Scheduler</h2>
-<form method="post" style="margin-top:12px">
-  <label>
-    <input type="checkbox" name="auto_enabled" value="1" {% if cfg and cfg.auto_enabled %}checked{% endif %}>
-    Enable automatic sync
-  </label>
-  <div style="margin-top:8px">
-    <label>Interval (seconds): 
-      <input type="number" name="interval_sec" min="60" step="30" value="{{ (cfg.interval_sec if cfg and cfg.interval_sec else 300) }}">
-    </label>
-  </div>
-  <button type="submit" style="margin-top:10px">Save</button>
-</form>
 
-{% if cfg %}
-  <p style="margin-top:10px">
-    <b>Last auto started:</b> {{ cfg.last_auto_started or '-' }}<br>
-    <b>Last auto finished:</b> {{ cfg.last_auto_finished or '-' }}
-  </p>
-{% endif %}
+{% macro fmt_dt(dt) -%}{{ dt.strftime("%d-%m-%y %H:%M") if dt else "-" }}{%- endmacro %}
+
+<div class="page-header mb-3">
+  <div>
+    <div class="page-kicker">Scheduler</div>
+    <h1 class="page-title">Sync Settings</h1>
+    <div class="page-subtitle">Clear status, fewer clicks, and safer changes.</div>
+  </div>
+  <div class="page-meta">
+    <div class="actions">
+      <a class="btn secondary" href="/sync/runs">Back to runs</a>
+    </div>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">Automatic sync</div>
+    </div>
+    <div class="card-body">
+      <form method="post" class="settings-form">
+        <label class="toggle-row">
+          <input type="checkbox" name="auto_enabled" value="1" {% if cfg and cfg.auto_enabled %}checked{% endif %}>
+          <span>
+            <div class="fw-semibold">Enable automatic sync</div>
+            <div class="muted small">Runs on a fixed interval in the background.</div>
+          </span>
+        </label>
+
+        <div class="form-row mt-2">
+          <label class="form-field">
+            <span>Interval (seconds)</span>
+            <input type="number" name="interval_sec" min="60" step="30" value="{{ (cfg.interval_sec if cfg and cfg.interval_sec else 300) }}">
+          </label>
+          <div class="preset-row">
+            <button class="btn secondary btn-sm" type="button" data-interval="300">5 min</button>
+            <button class="btn secondary btn-sm" type="button" data-interval="600">10 min</button>
+            <button class="btn secondary btn-sm" type="button" data-interval="900">15 min</button>
+          </div>
+        </div>
+
+        <div class="mt-2">
+          <button type="submit" class="btn">Save settings</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">Recent activity</div>
+    </div>
+    <div class="card-body">
+      <div class="muted small">Last auto started</div>
+      <div class="fw-semibold mb-2">{{ fmt_dt(cfg.last_auto_started) if cfg else "-" }}</div>
+
+      <div class="muted small">Last auto finished</div>
+      <div class="fw-semibold">{{ fmt_dt(cfg.last_auto_finished) if cfg else "-" }}</div>
+
+      <div class="mt-2">
+        <span class="badge {{ 'ok' if cfg and cfg.auto_enabled else 'warn' }}">
+          {{ 'Auto enabled' if cfg and cfg.auto_enabled else 'Auto disabled' }}
+        </span>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+  {{ super() }}
+  <script>
+    (function () {
+      const presetButtons = document.querySelectorAll("[data-interval]");
+      const input = document.querySelector("input[name='interval_sec']");
+      presetButtons.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          if (!input) return;
+          input.value = btn.getAttribute("data-interval");
+        });
+      });
+    })();
+  </script>
 {% endblock %}

@@ -21,7 +21,8 @@ from .sync.envision_apg_sync import (
     envision_put_delays,
     apg_upload_manifest_pdf,
     PAX_STD_WEIGHTS_KG,
-    fetch_envision_crew_for_apg
+    fetch_envision_crew_for_apg,
+    envision_get_flight_crew
 
 )
 import logging
@@ -45,6 +46,8 @@ UTC_TZ = ZoneInfo("UTC")
 # ---- Manual run ----
 @api_bp.post("/sync/run")
 def api_sync_run_once():
+    logger = current_app.logger
+
     # read manual window from JSON body, form, or querystring
     data = request.get_json(silent=True) or {}
     date_from_utc = (
@@ -58,50 +61,117 @@ def api_sync_run_once():
         or request.args.get("date_to_utc")
     )
 
-    logging.info("Manual run requested: from=%s to=%s", date_from_utc, date_to_utc)
+    logger.info("Manual run requested: from=%s to=%s", date_from_utc, date_to_utc)
 
     initiated_by = request.args.get("by") or "web"
-    run = SyncRun(started_at=datetime.utcnow(), run_type="manual", initiated_by=initiated_by)
-    db.session.add(run); db.session.commit()
+    run = SyncRun(
+        started_at=datetime.utcnow(),
+        run_type="manual",
+        initiated_by=initiated_by,
+    )
+    db.session.add(run)
+    db.session.commit()  # get run.id so we can link SyncFlightLog rows
 
-    # pass the manual window through
-    res = run_sync_once_return_summary(date_from_utc=date_from_utc, date_to_utc=date_to_utc)
+    # --- Call the core sync with protection so we ALWAYS save a row ---
+    try:
+        res = run_sync_once_return_summary(
+            date_from_utc=date_from_utc,
+            date_to_utc=date_to_utc,
+        ) or {}
+    except Exception as e:
+        logger.exception("Manual sync run crashed")
+
+        run.finished_at = datetime.utcnow()
+        run.ok = False
+
+        run.created  = 0
+        run.skipped  = 0
+        run.warnings = 0
+
+        msg = f"Sync crashed: {e!r}"
+        run.error    = msg
+        run.log_tail = msg
+
+        run.window_from_local = None
+        run.window_to_local   = None
+        run.window_from_utc   = None
+        run.window_to_utc     = None
+
+        db.session.add(run)
+        db.session.commit()
+        return jsonify({"id": run.id, "ok": False, "error": msg}), 500
+
+    logger.info("Manual sync summary: %r", res)
+
+    # ---------- NEW: persist per-flight logs ----------
+    flights = res.get("flights") or []   # or whatever key you used in the summary
+    for f in flights:
+        row = SyncFlightLog(
+            sync_run_id=run.id,
+            envision_flight_id=str(f.get("envision_flight_id") or ""),
+            flight_no=f.get("flight_no"),
+            adep=f.get("adep"),
+            ades=f.get("ades"),
+            eobt=f.get("eobt"),          # this is already a datetime in your log tail
+            reg=f.get("reg"),
+            aircraft_id=f.get("aircraft_id"),
+            pic_name=f.get("pic_name"),
+            pic_empno=f.get("pic_empno"),
+            apg_pic_id=f.get("apg_pic_id"),
+            result=f.get("result"),
+            reason=f.get("reason"),
+            warnings=f.get("warnings"),
+        )
+        db.session.add(row)
+    # do NOT commit yet – we’ll commit once after updating the SyncRun below
+    # --------------------------------------------------
+
+    # --- Normalise counters and text fields ---
+    created  = int(res.get("created")  or 0)
+    skipped  = int(res.get("skipped")  or 0)
+    warnings = int(res.get("warnings") or 0)
+
+    error_msg = (res.get("error")    or "").strip()
+    log_tail  = (res.get("log_tail") or "").strip()
+
+    ok_flag = None
+    if error_msg:
+        ok_flag = False
+    elif res.get("ok") is True:
+        ok_flag = True
+    elif res.get("ok") is False:
+        ok_flag = False
+    else:
+        ok_flag = True
+
+    if not log_tail:
+        if error_msg:
+            log_tail = error_msg
+        elif created == 0 and skipped == 0 and warnings == 0:
+            log_tail = "Sync completed – no flights found in this window."
+        else:
+            log_tail = (
+                f"Sync completed – created={created}, skipped={skipped}, "
+                f"warnings={warnings}."
+            )
 
     run.finished_at = datetime.utcnow()
-    run.ok = bool(res.get("ok"))
-    run.created = res.get("created")
-    run.skipped = res.get("skipped")
-    run.warnings = res.get("warnings")
-    run.log_tail = res.get("log_tail")
-    run.error = res.get("error")
+    run.ok          = ok_flag
+    run.created     = created
+    run.skipped     = skipped
+    run.warnings    = warnings
+    run.error       = error_msg or None
+    run.log_tail    = log_tail
+
     run.window_from_local = res.get("window_from_local")
     run.window_to_local   = res.get("window_to_local")
     run.window_from_utc   = res.get("window_from_utc")
     run.window_to_utc     = res.get("window_to_utc")
-    db.session.add(run); db.session.commit()
 
-    # Persist per-flight rows
-    for ev in (res.get("flights") or []):
-        row = SyncFlightLog(
-            sync_run_id=run.id,
-            envision_flight_id=str(ev.get("envision_flight_id") or ""),
-            flight_no=ev.get("flight_no"),
-            adep=ev.get("adep"),
-            ades=ev.get("ades"),
-            eobt=ev.get("eobt"),
-            reg=ev.get("reg"),
-            aircraft_id=ev.get("aircraft_id"),
-            pic_name=ev.get("pic_name"),
-            pic_empno=ev.get("pic_empno"),
-            apg_pic_id=ev.get("apg_pic_id"),
-            result=ev.get("result"),
-            reason=ev.get("reason"),
-            warnings=ev.get("warnings"),
-        )
-        db.session.add(row)
-    db.session.commit()
+    db.session.add(run)
+    db.session.commit()   # commits BOTH SyncRun + all SyncFlightLog rows
 
-    return {"id": run.id, "ok": run.ok}
+    return jsonify({"id": run.id, "ok": run.ok})
 
 # ---- List runs ----
 @api_bp.get("/sync/runs")
@@ -333,14 +403,20 @@ def api_dcs_push_to_apg():
             manifest_error = f"Manifest HTML build failed: {e}"
             html = None
 
-        # 2a) Generate PDF **from that HTML** using wkhtmltopdf
+        # 2a) Generate PDF **from that HTML**
         if html is not None:
             try:
                 manifest_pdf = generate_pdf_modern(html)
             except Exception as e:
                 current_app.logger.exception("Manifest PDF generation failed")
-                manifest_error = f"Manifest PDF generation failed: {e}"
-                manifest_pdf = None
+                # Fallback to simpler renderer if Playwright/Chromium fails
+                try:
+                    manifest_pdf = generate_manifest_pdf_from_html(html)
+                    manifest_error = f"Manifest PDF generation failed (primary), used fallback: {e}"
+                except Exception as e2:
+                    current_app.logger.exception("Manifest PDF fallback generation failed")
+                    manifest_error = f"Manifest PDF generation failed: {e}; fallback failed: {e2}"
+                    manifest_pdf = None
 
         # 2b) Upload to APG (non-fatal if it fails)
         if manifest_pdf is not None:
@@ -838,6 +914,7 @@ def _build_manifest_html_and_ctx(
         raise ValueError("Missing flight number for manifest build")
 
     # 1) Fetch from DCS – we want full passenger list
+    # First try with DCS-only status; if empty, fall back to full list.
     dcs_json = fetch_dcs_for_flight(
         dep_airport=dep,
         flight_date=date_str,
@@ -847,6 +924,18 @@ def _build_manifest_html_and_ctx(
     )
 
     flights = dcs_json.get("Flights") or []
+    if flights:
+        dcs_f = flights[0]
+        if not (dcs_f.get("Passengers") or []):
+            # No pax with OnlyDCSStatus=True, retry with full list.
+            dcs_json = fetch_dcs_for_flight(
+                dep_airport=dep,
+                flight_date=date_str,
+                airline_designator=designator,
+                flight_number=number,
+                only_status=False,
+            )
+            flights = dcs_json.get("Flights") or []
     if not flights:
         # Graceful empty case – let caller decide what to show
         return render_template(
@@ -869,26 +958,11 @@ def _build_manifest_html_and_ctx(
             "date": date_str,
             "reg": reg,
         }
-
-
     dcs_f = flights[0]
 
     # 2) Build passenger list (unchanged from your route)
     passengers: list[dict] = []
     for r in dcs_f.get("Passengers", []):
-        status = (r.get("Status") or "").strip().lower()
-        iata_status = (r.get("IataStatus") or "").strip().upper()
-
-        # Only include Boarded / Flown passengers
-        # DCS example: Status="Flown", IataStatus="B"
-        allowed_status = {"boarded", "flown"}
-        allowed_iata   = {"B"}  # IATA 'B' = boarded
-
-        if status not in allowed_status and iata_status not in allowed_iata:
-            # Skip anything that isn't boarded or flown
-            continue
-
-
         dob, dob_fmt = _parse_dcs_dob(r.get("DateOfBirth"))
         age = _calc_age(dob)
 
@@ -984,7 +1058,8 @@ def _build_manifest_html_and_ctx(
 
 
 
-@api_bp.get("/api/envision/flight_crew")
+@api_bp.get("/envision/flight_crew")
+@api_bp.get("/api/envision/flight_crew")  # legacy path (kept for backward compatibility)
 def api_envision_flight_crew():
     """
     Lightweight wrapper around fetch_envision_crew(envision_flight_id)
@@ -994,14 +1069,99 @@ def api_envision_flight_crew():
     if not flight_id:
         return jsonify(ok=False, error="Missing flight_id"), 400
 
+    debug = request.args.get("debug") == "1"
     try:
         crew = fetch_envision_crew_for_apg(flight_id)
+        payload = {"ok": True, "crew": crew}
+        if debug:
+            # Lightweight diagnostics: count + raw response from Envision
+            env_auth = envision_authenticate()
+            env_token = env_auth["token"]
+            raw = envision_get_flight_crew(env_token, flight_id)
+            payload["diag"] = {
+                "raw_count": len(raw) if isinstance(raw, list) else None,
+                "raw_type": type(raw).__name__,
+                "raw_preview": raw[:5] if isinstance(raw, list) else raw,
+            }
         # crew is already in the nice form:
         # { position, name, employee_id, is_operating }
-        return jsonify(ok=True, crew=crew)
+        return jsonify(payload)
     except Exception as e:
         current_app.logger.exception(
             "flight_crew failed for Envision flight_id=%s", flight_id
+        )
+        return jsonify(ok=False, error=str(e)), 500
+
+
+@api_bp.get("/envision/flight_crew_raw")
+@api_bp.get("/api/envision/flight_crew_raw")  # legacy path
+def api_envision_flight_crew_raw():
+    """
+    Debug: return the raw Envision /Flights/{id}/Crew payload for a single flight.
+    """
+    flight_id = request.args.get("flight_id", type=int)
+    if not flight_id:
+        return jsonify(ok=False, error="Missing flight_id"), 400
+
+    try:
+        auth = envision_authenticate()
+        token = auth["token"]
+        raw = envision_get_flight_crew(token, flight_id)
+        return jsonify(ok=True, flight_id=flight_id, raw=raw)
+    except Exception as e:
+        current_app.logger.exception(
+            "flight_crew_raw failed for Envision flight_id=%s", flight_id
+        )
+        return jsonify(ok=False, error=str(e)), 500
+
+
+@api_bp.get("/envision/flight_raw")
+@api_bp.get("/api/envision/flight_raw")  # legacy path
+def api_envision_flight_raw():
+    """
+    Debug: return the raw Envision /Flights/{id} payload for a single flight.
+    """
+    flight_id = request.args.get("flight_id", type=int)
+    if not flight_id:
+        return jsonify(ok=False, error="Missing flight_id"), 400
+
+    try:
+        auth = envision_authenticate()
+        token = auth["token"]
+        raw = envision_get_flight_times(token, flight_id)
+        return jsonify(ok=True, flight_id=flight_id, raw=raw)
+    except Exception as e:
+        current_app.logger.exception(
+            "flight_raw failed for Envision flight_id=%s", flight_id
+        )
+        return jsonify(ok=False, error=str(e)), 500
+
+
+@api_bp.get("/envision/flights_raw")
+@api_bp.get("/api/envision/flights_raw")  # legacy path
+def api_envision_flights_raw():
+    """
+    Debug: return the raw Envision /Flights payload for a date window.
+    Only dateFrom/dateTo are passed through (no offset/limit).
+    """
+    date_from = request.args.get("dateFrom") or request.args.get("date_from")
+    date_to = request.args.get("dateTo") or request.args.get("date_to")
+    if not date_from or not date_to:
+        return jsonify(ok=False, error="Missing dateFrom or dateTo"), 400
+
+    try:
+        auth = envision_authenticate()
+        token = auth["token"]
+        headers = {"Authorization": f"Bearer {token}"}
+        params = {"dateFrom": date_from, "dateTo": date_to}
+        url = f"{ENVISION_BASE}/Flights"
+        r = requests.get(url, headers=headers, params=params, timeout=60)
+        r.raise_for_status()
+        raw = r.json()
+        return jsonify(ok=True, dateFrom=date_from, dateTo=date_to, raw=raw)
+    except Exception as e:
+        current_app.logger.exception(
+            "flights_raw failed for Envision dateFrom=%s dateTo=%s", date_from, date_to
         )
         return jsonify(ok=False, error=str(e)), 500
 

@@ -65,6 +65,22 @@ class SyncFlightLog(db.Model):
     warnings = db.Column(db.Text)                      # JSON/text from APG if any
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
+
+class SyncFlightState(db.Model):
+    __tablename__ = "sync_flight_state"
+
+    id = db.Column(db.Integer, primary_key=True)
+    envision_flight_id = db.Column(db.String(32), unique=True, index=True, nullable=False)
+
+    # Persisted snapshot for diffing
+    core_json = db.Column(db.Text)          # JSON-serialized core
+    fp = db.Column(db.String(128))          # fingerprint
+    apg_id = db.Column(db.Integer)          # last known APG plan id
+
+    last_run_id = db.Column(db.Integer, db.ForeignKey("sync_runs.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
 # NEW: simple key/value schedule settings (singleton row: id=1)
 class AppConfig(db.Model):
     __tablename__ = "app_config"

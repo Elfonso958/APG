@@ -2,114 +2,204 @@
 {% block content %}
 
 {# ---- helpers ---- #}
-{% macro fmt_dt(dt) -%}{{ dt.strftime("%d-%m-%y %H:%M") if dt else "—" }}{%- endmacro %}
+{% macro fmt_dt(dt) -%}{{ dt.strftime("%d-%m-%y %H:%M") if dt else "-" }}{%- endmacro %}
 
-{# Render "Reason" as tidy diffs: Label  old → new #}
+{# Render "Reason" as tidy diffs: Label  old -> new #}
 {% macro render_reason_diff(reason) -%}
   {% if reason %}
     <ul class="reason-list">
       {% for part in reason.split(';') %}
-        {% set txt = part.strip() %}
+        {% set txt = part|trim|replace('\u2192','->')|replace('\u2014','-') %}
         {% if txt %}
-          {% set arrow = '→' %}
+          {% set arrow = '->' %}
           {% set segs = txt.split(arrow) %}
           {% if segs|length > 1 %}
             {% set left = segs[0].strip() %}
             {% set newv = segs[1].strip() %}
-            {# Try "Label: old" form first #}
             {% if ':' in left %}
               {% set label = left.split(':')[0].strip() %}
               {% set oldv  = left.split(':')|last|trim %}
             {% else %}
-              {# Fallback "Label old" form (e.g., "EOBT 05:10") #}
               {% set lparts = left.split() %}
               {% set label = lparts[0] if lparts else left %}
               {% set oldv  = (lparts[1:]|join(' ')).strip() %}
-              {% if not oldv %}{% set oldv = '—' %}{% endif %}
+              {% if not oldv %}{% set oldv = '-' %}{% endif %}
             {% endif %}
             <li>
               <span class="pill-label">{{ label }}</span>
               <span class="pill-change">
                 <span class="old">{{ oldv }}</span>
-                <span class="arrow">→</span>
+                <span class="arrow">-></span>
                 <span class="new">{{ newv }}</span>
               </span>
             </li>
           {% else %}
-            <li>{{ txt }}</li>
+            {% if ':' in txt %}
+              {% set label = txt.split(':')[0].strip() %}
+              {% set val = txt.split(':')|last|trim %}
+              {% set vparts = val.split() %}
+              {% if label in ['PIC','PIC Code','AC ID','Route','FL','FO','TIC'] and vparts|length == 2 %}
+                <li>
+                  <span class="pill-label">{{ label }}</span>
+                  <span class="pill-change">
+                    <span class="old">{{ vparts[0] }}</span>
+                    <span class="arrow">-></span>
+                    <span class="new">{{ vparts[1] }}</span>
+                  </span>
+                </li>
+              {% else %}
+                <li>
+                  <span class="pill-label">{{ label }}</span>
+                  <span class="pill-change">
+                    <span class="new">{{ val or '-' }}</span>
+                  </span>
+                </li>
+              {% endif %}
+            {% else %}
+              {% set parts = txt.split() %}
+              {% set label = parts[0] if parts else '' %}
+              {% set val = (parts[1:]|join(' ')).strip() %}
+              {% if label in ['PIC','EOBT','FO','TIC','Route','FL','AC','Reg'] %}
+                <li>
+                  <span class="pill-label">{{ label }}</span>
+                  <span class="pill-change">
+                    <span class="new">{{ val or '-' }}</span>
+                  </span>
+                </li>
+              {% else %}
+                <li>{{ txt }}</li>
+              {% endif %}
+            {% endif %}
           {% endif %}
         {% endif %}
       {% endfor %}
     </ul>
   {% else %}
-    —
+    -
   {% endif %}
 {%- endmacro %}
 
-<h2>Sync #{{ r.id }} — {{ "OK" if r.ok else "Failed" }}</h2>
-
-<p>
-  <strong>Started:</strong> {{ fmt_dt(r.started_at) }}
-  &nbsp;&nbsp;
-  <strong>Finished:</strong> {{ fmt_dt(r.finished_at) }}
-</p>
-
-<p>
-  <strong>Window (local):</strong>
-  {{ fmt_dt(r.window_from_local) }} → {{ fmt_dt(r.window_to_local) }}<br>
-  <strong>Window (UTC):</strong>
-  {{ fmt_dt(r.window_from_utc) }} → {{ fmt_dt(r.window_to_utc) }}
-</p>
-
-<p>
-  <span class="badge created">Created: {{ r.created or 0 }}</span>
-  <span class="badge skipped">Skipped: {{ r.skipped or 0 }}</span>
-  <span class="badge warnings">Warnings: {{ r.warnings or 0 }}</span>
-</p>
-
-<h3>Flights in this sync</h3>
-<div class="table-responsive">
-  <table class="table table-striped table-hover align-middle small">
-    <thead class="table-dark">
-      <tr>
-        <th>Result</th>
-        <th>Reason</th>
-        <th>Flight</th>
-        <th>Route</th>
-        <th>EOBT</th>
-        <th>Reg</th>
-        <th>AC ID</th>
-        <th>PIC</th>
-        <th>PIC Code</th>
-        <th>STD</th>
-        <th>ETD</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for f in flights %}
-      <tr class="{{ f.result }}">
-        <td>
-          <span class="badge bg-{{ 'success' if f.result in ['created','updated'] else ('danger' if f.result=='failed' else 'secondary') }}">
-            {{ f.result }}
-          </span>
-        </td>
-        <td class="reason-cell">{{ render_reason_diff(f.reason) }}</td>
-        <td>{{ f.flight_no }}</td>
-        <td>{{ f.adep }} → {{ f.ades }}</td>
-        <td>{{ fmt_dt(f.eobt) }}</td>
-        <td>{{ f.reg or "—" }}</td>
-        <td>{{ f.aircraft_id or "—" }}</td>
-        <td>{{ f.pic_name or "—" }}</td>
-        <td>{{ f.pic_empno or "—" }}</td>
-        <td>—</td>
-        <td>—</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+<div class="page-header mb-3">
+  <div>
+    <div class="page-kicker">Sync</div>
+    <h1 class="page-title">Run #{{ r.id }}</h1>
+    <div class="page-subtitle">Detailed changes and status for this sync.</div>
+  </div>
+  <div class="page-meta">
+    <div class="actions">
+      <a class="btn secondary" href="/sync/runs">Back to runs</a>
+    </div>
+  </div>
 </div>
 
-<h3>Log tail</h3>
-<pre class="log-tail">{{ r.log_tail }}</pre>
+<div class="grid summary-grid mb-3">
+  <div class="card stat-card">
+    <div class="stat-label">Status</div>
+    <div class="stat-value">
+      {% if r.ok is none %}
+        <span class="status-pill warn">
+          <span class="status-dot dot-warn"></span>
+          UNKNOWN
+        </span>
+      {% elif r.ok %}
+        <span class="status-pill ok">
+          <span class="status-dot dot-ok"></span>
+          OK
+        </span>
+      {% else %}
+        <span class="status-pill err">
+          <span class="status-dot dot-err"></span>
+          FAILED
+        </span>
+      {% endif %}
+    </div>
+  </div>
+  <div class="card stat-card">
+    <div class="stat-label">Started</div>
+    <div class="stat-value">{{ fmt_dt(r.started_at) }}</div>
+  </div>
+  <div class="card stat-card">
+    <div class="stat-label">Finished</div>
+    <div class="stat-value">{{ fmt_dt(r.finished_at) }}</div>
+  </div>
+  <div class="card stat-card">
+    <div class="stat-label">Counts</div>
+    <div class="stat-value">
+      <span class="badge ok">Created {{ r.created or 0 }}</span>
+      <span class="badge">Skipped {{ r.skipped or 0 }}</span>
+      <span class="badge warn">Warnings {{ r.warnings or 0 }}</span>
+    </div>
+  </div>
+</div>
+
+<div class="card mb-3">
+  <div class="card-header">
+    <div class="card-title">Sync window</div>
+  </div>
+  <div class="card-body">
+    <div class="grid">
+      <div>
+        <div class="muted small">Local</div>
+        <div class="fw-semibold">{{ fmt_dt(r.window_from_local) }} -> {{ fmt_dt(r.window_to_local) }}</div>
+      </div>
+      <div>
+        <div class="muted small">UTC</div>
+        <div class="fw-semibold">{{ fmt_dt(r.window_from_utc) }} -> {{ fmt_dt(r.window_to_utc) }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card mb-3">
+  <div class="card-header">
+    <div class="card-title">Flights in this sync</div>
+    <div class="muted small">Changes are shown as old -> new</div>
+  </div>
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Result</th>
+          <th>Changes</th>
+          <th>Flight</th>
+          <th>Route</th>
+          <th>EOBT</th>
+          <th>Reg</th>
+          <th>AC ID</th>
+          <th>PIC</th>
+          <th>PIC Code</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for f in flights %}
+        <tr class="{{ f.result }}">
+          <td>
+            <span class="badge {{ 'ok' if f.result in ['created','updated'] else ('err' if f.result=='failed' else '') }}">
+              {{ f.result }}
+            </span>
+          </td>
+          <td class="reason-cell">{{ render_reason_diff(f.reason) }}</td>
+          <td>{{ f.flight_no }}</td>
+          <td>{{ f.adep }} -> {{ f.ades }}</td>
+          <td>{{ fmt_dt(f.eobt) }}</td>
+          <td>{{ f.reg or "-" }}</td>
+          <td>{{ f.aircraft_id or "-" }}</td>
+          <td>{{ f.pic_name or "-" }}</td>
+          <td>{{ f.pic_empno or "-" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <div class="card-title">Log tail</div>
+  </div>
+  <div class="card-body">
+    <pre class="log-tail">{{ r.log_tail }}</pre>
+  </div>
+</div>
 
 {% endblock %}

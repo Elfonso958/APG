@@ -24,9 +24,9 @@
       </div>
 
       <div class="nav-right">
-        <a href="/">Sync runs</a>
-        <a href="/settings">Schedule</a>
-        <a href="/dcs/from-envision">DCS &rarr; Schedule</a>
+        <a href="/" class="{{ 'nav-active' if request.path in ['/', '/sync/runs', '/sync/runs/'] else '' }}">Sync runs</a>
+        <a href="/settings" class="{{ 'nav-active' if request.path.startswith('/settings') else '' }}">Schedule</a>
+        <a href="/dcs/from-envision" class="{{ 'nav-active' if request.path.startswith('/dcs/from-envision') else '' }}">DCS &rarr; Schedule</a>
         <button id="run-once-btn" type="button" class="btn btn-sm">
           Run Sync (once)
         </button>
@@ -39,26 +39,102 @@
     {% block content %}{% endblock %}
   </div>
 
+  <!-- Run Sync dialog (shared across pages) -->
+  <dialog id="sync-range-dialog">
+    <form method="dialog" id="sync-range-form" class="dialog-form">
+      <div class="dialog-header">
+        <div>
+          <div class="page-kicker">Sync</div>
+          <div class="page-title">Run Once</div>
+          <div class="page-subtitle">Choose a local date/time window to sync.</div>
+        </div>
+      </div>
+      <div class="dialog-body">
+        <label class="form-field">
+          <span>From (local)</span>
+          <input type="datetime-local" id="sync-from" required>
+        </label>
+        <label class="form-field">
+          <span>To (local)</span>
+          <input type="datetime-local" id="sync-to" required>
+        </label>
+      </div>
+      <menu class="dialog-actions">
+        <button value="cancel" class="btn secondary" type="button" id="sync-cancel">Cancel</button>
+        <button id="sync-go" value="default" class="btn" type="submit">Run Sync</button>
+      </menu>
+    </form>
+  </dialog>
+
   {# Bootstrap 5 JS bundle (includes Popper) #}
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
   <script>
-    async function runSync(e){
-      e.preventDefault();
-      const res  = await fetch('/api/sync/run', {method:'POST'});
-      const data = await res.json();
-      alert('Sync run #' + data.id + ' ' + (data.ok ? 'OK' : 'FAILED'));
-      location.reload();
-      return false;
-    }
-
-    // (Optional) wire the button without inline onclick
-    document.addEventListener("DOMContentLoaded", function () {
+    (function () {
       const btn = document.getElementById("run-once-btn");
-      if (btn) {
-        btn.addEventListener("click", (e) => runSync(e));
+      const dlg = document.getElementById("sync-range-dialog");
+      const inputFrom = document.getElementById("sync-from");
+      const inputTo = document.getElementById("sync-to");
+      const form = document.getElementById("sync-range-form");
+      const btnCancel = document.getElementById("sync-cancel");
+
+      function pad(n){ return String(n).padStart(2,'0'); }
+      function toLocalInput(dt) { // Date -> "YYYY-MM-DDTHH:MM"
+        return dt.getFullYear() + '-' + pad(dt.getMonth()+1) + '-' + pad(dt.getDate()) +
+               'T' + pad(dt.getHours()) + ':' + pad(dt.getMinutes());
       }
-    });
+
+      function openDialog() {
+        const now = new Date();
+        const plus3d = new Date(now.getTime() + 3 * 24 * 3600 * 1000);
+        inputFrom.value = toLocalInput(now);
+        inputTo.value = toLocalInput(plus3d);
+        if (dlg && typeof dlg.showModal === "function") {
+          dlg.showModal();
+        }
+      }
+
+      async function submitSync(fromVal, toVal) {
+        const payload = {};
+        if (fromVal && toVal) {
+          payload.date_from_utc = new Date(fromVal).toISOString();
+          payload.date_to_utc = new Date(toVal).toISOString();
+        }
+
+        const res = await fetch("/api/sync/run", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        alert("Sync run #" + data.id + " " + (data.ok ? "OK" : "FAILED"));
+        location.reload();
+      }
+
+      btn?.addEventListener("click", (e) => {
+        e.preventDefault();
+        openDialog();
+      });
+
+      btnCancel?.addEventListener("click", () => {
+        if (dlg) dlg.close();
+      });
+
+      form?.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const fromVal = inputFrom.value;
+        const toVal = inputTo.value;
+        if (!fromVal || !toVal) return;
+        try {
+          await submitSync(fromVal, toVal);
+        } catch (err) {
+          console.error("Sync error", err);
+          alert("Sync failed: " + (err?.message || err));
+        } finally {
+          if (dlg) dlg.close();
+        }
+      });
+    })();
   </script>
 
   {# 🔑 This is what your child template's {% block scripts %} attaches to #}

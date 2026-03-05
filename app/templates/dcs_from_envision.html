@@ -3,51 +3,53 @@
 {% block content %}
 <div class="container container--wide py-3">
 
-  <!-- Page header -->
-  <div class="page-header mb-3">
-    <div>
+  <!-- Hero -->
+  <div class="dcs-hero">
+    <div class="dcs-hero-left">
       <div class="page-kicker">DCS → Flight Plan</div>
       <h1 class="page-title">Live Gantt Overview</h1>
       <div class="page-subtitle">
-        All times are NZ local (Pacific/Auckland). Click a flight bar to view details and
-        <strong>submit to APG</strong>.
+        Times are NZ local (Pacific/Auckland). Click a flight bar to inspect and submit to APG.
       </div>
     </div>
 
-    <div class="page-meta">
-      <div class="date-pill">
+    <div class="dcs-hero-right">
+      <div class="hero-pill">
         <span class="dot"></span>
         <span>Loaded</span>
-        <span class="date-text">
-          {{ day.strftime('%a %d %b %Y') }}
-        </span>
+        <span class="date-text">{{ day.strftime('%a %d %b %Y') }}</span>
       </div>
-      <div class="refresh-text">
-        <small>Last refresh: <span id="gantt-last-refresh">never</span></small>
+      <div class="hero-meta">
+        Last refresh: <span id="gantt-last-refresh">never</span>
+      </div>
+      <div class="hero-actions">
+        <button id="btn-refresh-gantt" class="btn btn-sm">Refresh</button>
+        <button id="theme-toggle" class="btn btn-sm btn-ghost">
+          <span id="theme-icon">◐</span>
+          <span id="theme-label">Dark</span>
+        </button>
       </div>
     </div>
   </div>
 
-  <!-- Filters row -->
-  <div class="row g-2 mb-3 align-items-end">
-    <!-- Date selector -->
-    <div class="col-auto">
+  <!-- Controls -->
+  <div class="dcs-toolbar">
+    <form id="gantt-date-form" class="toolbar-group" method="get">
       <label class="form-label">Date</label>
-      <form id="gantt-date-form" class="d-flex gap-2" method="get">
-        <input type="date"
-               name="date"
-               class="form-control"
-               value="{{ day.isoformat() }}">
+      <div class="toolbar-inline">
+        <input type="date" name="date" class="form-control" value="{{ day.isoformat() }}">
         <button class="btn btn-primary" type="submit">Load</button>
-      </form>
+      </div>
+    </form>
+
+    <div class="toolbar-group">
+      <label class="form-label">Search</label>
+      <input id="gantt-search" type="text" class="form-control" placeholder="Flight, reg, route">
     </div>
 
-    <div class="col"></div>
-
-    <!-- Base filter -->
-    <div class="col-auto">
-      <label for="base-filter" class="form-label mb-1">Base filter</label>
-      <select id="base-filter" class="form-select form-select-sm">
+    <div class="toolbar-group">
+      <label for="base-filter" class="form-label">Base</label>
+      <select id="base-filter" class="form-select">
         <option value="">All bases</option>
         <option value="AKL">AKL (Auckland)</option>
         <option value="WLG">WLG (Wellington)</option>
@@ -60,7 +62,20 @@
         <option value="BHE">BHE (Blenheim)</option>
       </select>
     </div>
+
+    <div class="toolbar-group toolbar-toggles">
+      <label class="form-label">Filters</label>
+      <label class="toggle-chip">
+        <input id="filter-apg-only" type="checkbox">
+        <span>APG only</span>
+      </label>
+      <label class="toggle-chip">
+        <input id="filter-pax-only" type="checkbox">
+        <span>Has pax</span>
+      </label>
+    </div>
   </div>
+
 
   {# ---------- Hidden data for JS to build the Gantt ---------- #}
   <div id="dcs-gantt-data" class="d-none">
@@ -175,6 +190,40 @@
     {% endif %}
   </div>
   {% endif %}
+</div>
+
+<!-- APG Send Progress Overlay -->
+<div id="apg-send-overlay" class="apg-send-overlay" aria-hidden="true">
+  <div class="apg-send-card" role="dialog" aria-modal="true" aria-labelledby="apg-send-title">
+    <div class="apg-send-header">
+      <h5 id="apg-send-title">Sending to APG</h5>
+      <button type="button" class="btn btn-sm btn-outline-secondary" id="apg-send-close">Close</button>
+    </div>
+
+    <div class="apg-send-body">
+      <div class="apg-send-line" data-stage="pax">
+        <span class="apg-send-label">Sending Pax Data</span>
+        <span class="apg-send-status">
+          <span class="apg-dots" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </span>
+          <span class="apg-icon apg-icon-ok" aria-hidden="true">✔</span>
+          <span class="apg-icon apg-icon-err" aria-hidden="true">✖</span>
+        </span>
+      </div>
+      <div class="apg-send-line" data-stage="manifest">
+        <span class="apg-send-label">Sending Pax Manifest</span>
+        <span class="apg-send-status">
+          <span class="apg-dots" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </span>
+          <span class="apg-icon apg-icon-ok" aria-hidden="true">✔</span>
+          <span class="apg-icon apg-icon-err" aria-hidden="true">✖</span>
+        </span>
+      </div>
+      <div id="apg-send-error" class="apg-send-error" style="display:none;"></div>
+    </div>
+  </div>
 </div>
 
 <!-- Flight Action Modal -->
@@ -464,3 +513,4 @@
   {{ super() }}
   <script src="{{ url_for('static', filename='js/flight_schedule.js') }}"></script>
 {% endblock %}
+
