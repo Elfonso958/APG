@@ -7,6 +7,7 @@ document.addEventListener("DOMContentLoaded", function () {
   const APG_RESET_URL  = root.dataset.apgResetUrl;
   const SAVE_TIMES_URL = root.dataset.saveTimesUrl;
   const ENV_TIMES_URL  = root.dataset.envTimesUrl;
+  const ENV_DELAYS_URL = root.dataset.envDelaysUrl;
   const ENV_CREW_URL  = root.dataset.envCrewUrl;
 
   const APG_PLAN_URL_TMPL = root.dataset.apgPlanUrlTemplate.replace(/0$/, "__PLAN__");
@@ -820,48 +821,69 @@ function populateFlightDetailsModal(f) {
   // Initial render
   renderWarnings();
 
-  // ---- Delays table (kept inside Q3) ----
+  // ---- Delays table (lazy load on demand) ----
   const delaysEl = document.getElementById("modal-delays");
+  function renderDelays(delays) {
+    if (!delaysEl) return;
+    if (!delays || !delays.length) {
+      delaysEl.innerHTML = '<span class="text-muted">No delays recorded.</span>';
+      return;
+    }
+    const rowsHtml = delays.map(d => {
+      const code = d.code || d.delayCode || "";
+      const mins = d.delayMinutes || d.minutes || 0;
+      const leg  = d.isArrival ? "ARR" : "DEP";
+      const meta = DELAY_CODE_META[code] || null;
+      const desc = d.description || (meta ? meta.description : "");
+
+      return `
+        <tr>
+          <td>${leg}</td>
+          <td>${code}</td>
+          <td class="text-end">${mins}</td>
+          <td>${desc}</td>
+        </tr>
+      `;
+    }).join("");
+
+    delaysEl.innerHTML = `
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead>
+            <tr>
+              <th>Leg</th>
+              <th>Code</th>
+              <th class="text-end">Min</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rowsHtml}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
   if (delaysEl) {
     const delays = Array.isArray(f.delays) ? f.delays : [];
-
-    if (!delays.length) {
-      delaysEl.innerHTML = '<span class="text-muted">No delays recorded.</span>';
+    if (delays.length) {
+      renderDelays(delays);
+    } else if (ENV_DELAYS_URL && f.envisionFlightId) {
+      delaysEl.innerHTML = '<span class="text-muted">Loading delays…</span>';
+      fetch(`${ENV_DELAYS_URL}?flight_id=${encodeURIComponent(f.envisionFlightId)}`)
+        .then(r => r.json())
+        .then(data => {
+          if (data && data.ok) {
+            f.delays = data.delays || [];
+            renderDelays(f.delays);
+          } else {
+            renderDelays([]);
+          }
+        })
+        .catch(() => renderDelays([]));
     } else {
-      const rowsHtml = delays.map(d => {
-        const code = d.code || d.delayCode || "";
-        const mins = d.delayMinutes || d.minutes || 0;
-        const leg  = d.isArrival ? "ARR" : "DEP";
-        const meta = DELAY_CODE_META[code] || null;
-        const desc = d.description || (meta ? meta.description : "");
-
-        return `
-          <tr>
-            <td>${leg}</td>
-            <td>${code}</td>
-            <td class="text-end">${mins}</td>
-            <td>${desc}</td>
-          </tr>
-        `;
-      }).join("");
-
-      delaysEl.innerHTML = `
-        <div class="table-responsive">
-          <table class="table table-sm mb-0">
-            <thead>
-              <tr>
-                <th>Leg</th>
-                <th>Code</th>
-                <th class="text-end">Min</th>
-                <th>Description</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${rowsHtml}
-            </tbody>
-          </table>
-        </div>
-      `;
+      renderDelays([]);
     }
   }
 
@@ -933,6 +955,7 @@ function sendToFlightPlan(f, barEl, { previewOnly = false } = {}) {
   const overlay = document.getElementById("apg-send-overlay");
   const overlayClose = document.getElementById("apg-send-close");
   const overlayError = document.getElementById("apg-send-error");
+  const overlayMeta = document.getElementById("apg-send-manifest-meta");
   const paxLine = overlay ? overlay.querySelector('[data-stage="pax"]') : null;
   const manLine = overlay ? overlay.querySelector('[data-stage="manifest"]') : null;
 
@@ -955,6 +978,10 @@ function sendToFlightPlan(f, barEl, { previewOnly = false } = {}) {
     if (overlayError) {
       overlayError.style.display = "none";
       overlayError.textContent = "";
+    }
+    if (overlayMeta) {
+      overlayMeta.style.display = "none";
+      overlayMeta.textContent = "";
     }
     overlay.classList.add("open");
     overlay.setAttribute("aria-hidden", "false");
@@ -992,7 +1019,7 @@ function sendToFlightPlan(f, barEl, { previewOnly = false } = {}) {
 
   // Flight date: prefer ETD/STD estimate, fall back to scheduled
   const dt = f.stdEst || f.stdSched || null;
-  const dateStr = dt ? dt.toISOString().slice(0, 10) : null; // yyyy-mm-dd
+  const dateStr = dt ? formatDateYMD(dt) : null; // local yyyy-mm-dd
 
   // Plan ID from model
     const apgPlanId = (
@@ -1103,6 +1130,13 @@ function sendToFlightPlan(f, barEl, { previewOnly = false } = {}) {
       setLineState(paxLine, "done");
       if (data && data.manifest_uploaded) {
         setLineState(manLine, "done");
+        if (overlayMeta) {
+          const docId = data.manifest_doc_id || "";
+          overlayMeta.textContent = docId
+            ? `Manifest uploaded (doc_id: ${docId})`
+            : "Manifest uploaded.";
+          overlayMeta.style.display = "";
+        }
       } else {
         setLineState(manLine, "error");
         if (overlayError) {
@@ -1110,6 +1144,10 @@ function sendToFlightPlan(f, barEl, { previewOnly = false } = {}) {
             ? data.manifest_error
             : "Manifest upload failed or was not confirmed by APG.";
           overlayError.style.display = "";
+        }
+        if (overlayMeta) {
+          overlayMeta.style.display = "none";
+          overlayMeta.textContent = "";
         }
       }
       return data;
@@ -1144,7 +1182,7 @@ async function resetFlightPlan(f, barEl) {
   if (!resetBtn) return;
 
   const dt = f.stdEst || f.stdSched || null;
-  const dateStr = dt ? dt.toISOString().slice(0, 10) : null;
+  const dateStr = dt ? formatDateYMD(dt) : null;
 
   const apgPlanId = (f.apgPlanId || f.apg_plan_id || "").toString().trim() || null;
 

@@ -221,6 +221,7 @@
           <span class="apg-icon apg-icon-err" aria-hidden="true">✖</span>
         </span>
       </div>
+      <div id="apg-send-manifest-meta" class="apg-send-meta" style="display:none;"></div>
       <div id="apg-send-error" class="apg-send-error" style="display:none;"></div>
     </div>
   </div>
@@ -499,6 +500,7 @@
      data-apg-reset-url="{{ url_for('api.api_apg_reset_passengers') }}"
      data-save-times-url="{{ url_for('api.api_dcs_save_times') }}"
      data-env-times-url="{{ url_for('ui.api_envision_flight_times') }}"
+     data-env-delays-url="{{ url_for('ui.api_envision_flight_delays') }}"
      data-apg-plan-url-template="{{ url_for('api.api_apg_plan_get', plan_id=0) }}"
      data-env-crew-url="{{ url_for('api.api_envision_flight_crew') }}">
 </div>

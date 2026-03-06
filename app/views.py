@@ -11,6 +11,7 @@ import io
 from io import BytesIO
 
 import json, requests
+import time as _time
 import re
 from zoneinfo import ZoneInfo
 NZ = ZoneInfo("Pacific/Auckland")
@@ -29,6 +30,9 @@ from .sync.envision_apg_sync import (
     fetch_flights_for_day,       #add
     envision_get_delays
 )
+
+# Simple in-memory cache for Envision flights per date window
+_ENVISION_FLIGHT_CACHE: dict[tuple[str, str], dict] = {}
 
 # ✅ use your DCS single-flight call
 from .zenith_client import fetch_dcs_for_flight
@@ -764,14 +768,29 @@ def api_dcs_gantt_data():
     start_utc = start_nz.astimezone(timezone.utc)
     end_utc   = end_nz.astimezone(timezone.utc)
 
-    # 1) Envision auth + fetch
-    try:
-        auth = envision_authenticate()
-        token = auth["token"]
-        env_flights = envision_get_flights(token, start_utc, end_utc) or []
-    except Exception as e:
-        current_app.logger.exception("api_dcs_gantt_data: Envision error")
-        return jsonify({"ok": False, "error": f"Envision error: {e}", "results": []}), 502
+    # 1) Envision auth + fetch (with short TTL cache)
+    cache_ttl = int(current_app.config.get("ENVISION_CACHE_TTL", 60))
+    cache_key = (start_utc.isoformat(), end_utc.isoformat())
+    cache_hit = False
+    token = None
+    env_flights = []
+
+    cached = _ENVISION_FLIGHT_CACHE.get(cache_key)
+    if cached:
+        age = _time.time() - cached.get("ts", 0)
+        if age <= cache_ttl:
+            env_flights = cached.get("data") or []
+            cache_hit = True
+
+    if not cache_hit:
+        try:
+            auth = envision_authenticate()
+            token = auth["token"]
+            env_flights = envision_get_flights(token, start_utc, end_utc) or []
+            _ENVISION_FLIGHT_CACHE[cache_key] = {"ts": _time.time(), "data": env_flights}
+        except Exception as e:
+            current_app.logger.exception("api_dcs_gantt_data: Envision error")
+            return jsonify({"ok": False, "error": f"Envision error: {e}", "results": []}), 502
 
     # 2) Normalise payload → list
     items = _list_from_envision_payload(env_flights)
@@ -907,39 +926,37 @@ def api_dcs_gantt_data():
     except Exception as e:
         current_app.logger.warning(f"api_dcs_gantt_data: attach_apg_presence_to_rows failed: {e}")
 
-    # 6) NEW: attach delays for each Envision flight
-    try:
-        for r in rows:
-            fid = r.get("envision_flight_id")
-            if not fid:
-                r["delays"] = []
-                continue
-
+    # 6) OPTIONAL: attach delays for each Envision flight (expensive)
+    include_delays = request.args.get("include_delays") == "1"
+    if include_delays:
+        if token is None:
             try:
-                delays = envision_get_delays(token, int(fid))
+                auth = envision_authenticate()
+                token = auth["token"]
             except Exception as e:
-                current_app.logger.warning(
-                    "api_dcs_gantt_data: failed to load delays for flight %s: %s",
-                    fid, e
-                )
-                delays = []
+                current_app.logger.exception("api_dcs_gantt_data: Envision auth failed for delays")
+                return jsonify({"ok": False, "error": f"Envision auth failed: {e}", "results": []}), 502
+        try:
+            for r in rows:
+                fid = r.get("envision_flight_id")
+                if not fid:
+                    r["delays"] = []
+                    continue
 
-            # Delays look like:
-            # {
-            #   "id": 8824,
-            #   "flightId": 68687,
-            #   "delayCodeId": 92,
-            #   "delayCode": "93",
-            #   "delayCodeDescription": "...",
-            #   "delayMinutes": 32,
-            #   "isArrival": false,
-            #   ...
-            # }
-            r["delays"] = delays or []
-    except Exception as e:
-        current_app.logger.warning(
-            "api_dcs_gantt_data: top-level delay fetch error: %s", e
-        )
+                try:
+                    delays = envision_get_delays(token, int(fid))
+                except Exception as e:
+                    current_app.logger.warning(
+                        "api_dcs_gantt_data: failed to load delays for flight %s: %s",
+                        fid, e
+                    )
+                    delays = []
+
+                r["delays"] = delays or []
+        except Exception as e:
+            current_app.logger.warning(
+                "api_dcs_gantt_data: top-level delay fetch error: %s", e
+            )
 
     # 7) Make it JSON-serialisable (convert datetimes to ISO strings)
     def row_to_json(r):
@@ -977,6 +994,31 @@ def api_dcs_gantt_data():
 
     json_rows = [row_to_json(r) for r in rows]
     return jsonify({"ok": True, "results": json_rows})
+
+@ui_bp.get("/api/envision/flight_delays")
+def api_envision_flight_delays():
+    """
+    /api/envision/flight_delays?flight_id=12345
+    Returns the raw Envision delays list for a single flight.
+    """
+    flight_id = request.args.get("flight_id", type=int)
+    if not flight_id:
+        return jsonify({"ok": False, "error": "Missing flight_id"}), 400
+
+    try:
+        auth = envision_authenticate()
+        token = auth["token"]
+    except Exception as e:
+        current_app.logger.exception("Envision auth failed in api_envision_flight_delays")
+        return jsonify({"ok": False, "error": f"Envision auth failed: {e}"}), 502
+
+    try:
+        delays = envision_get_delays(token, int(flight_id)) or []
+    except Exception as e:
+        current_app.logger.exception("Envision delays failed for flight_id=%s", flight_id)
+        return jsonify({"ok": False, "error": f"Envision delays failed: {e}"}), 502
+
+    return jsonify({"ok": True, "delays": delays})
 
 @ui_bp.route("/debug/zenith-config")
 def debug_zenith_config():

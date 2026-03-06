@@ -643,6 +643,13 @@ tr.failed td:first-child  { background-color: #f8d7da; }
   font-size: 0.9rem;
 }
 
+.apg-send-meta {
+  margin-top: -2px;
+  font-size: 0.85rem;
+  color: var(--muted);
+  padding: 0 2px;
+}
+
 /* --- DCS Gantt page layout --- */
 .dcs-hero{
   display:flex;
