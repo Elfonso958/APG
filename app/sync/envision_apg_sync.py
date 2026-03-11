@@ -19,6 +19,7 @@ import signal
 import argparse
 
 import hashlib
+from urllib.parse import urlparse
 CACHE_FILE = os.getenv("SYNC_CACHE_FILE", ".apg_sync_cache.json")
 
 # Optional lightweight popup UI
@@ -42,9 +43,68 @@ import requests
 # ===========================
 
 # Envision
-ENVISION_BASE = os.getenv("ENVISION_BASE", "https://<envision-host>/v1")
+ENVISION_BASE_PROD = os.getenv("ENVISION_BASE", "https://<envision-host>/v1").strip()
+ENVISION_BASE_TEST = os.getenv("ENVISION_TEST", "").strip()
+ENVISION_ENV = (os.getenv("ENVISION_ENV") or "").strip().lower()
+ENVISION_USE_TEST = (os.getenv("ENVISION_USE_TEST") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+if ENVISION_ENV in {"test", "uat", "staging"} or ENVISION_USE_TEST:
+    ENVISION_BASE = ENVISION_BASE_TEST or ENVISION_BASE_PROD
+    ENVISION_ACTIVE_NAME = "TEST" if ENVISION_BASE_TEST else "BASE"
+else:
+    ENVISION_BASE = ENVISION_BASE_PROD
+    ENVISION_ACTIVE_NAME = "BASE"
+
+_env_host = ""
+try:
+    _env_host = (urlparse(ENVISION_BASE).netloc or "").strip()
+except Exception:
+    _env_host = ""
+ENVISION_ACTIVE_HOST = _env_host or ENVISION_BASE
+
 ENVISION_USER = os.getenv("ENVISION_USER", "")   # e.g. "OJB"
 ENVISION_PASS = os.getenv("ENVISION_PASS", "")   # e.g. "********"
+
+
+def _canonical_envision_env(env_name: str | None) -> str:
+    raw = (env_name or "").strip().lower()
+    if raw in {"test", "uat", "staging"}:
+        return "test"
+    return "base"
+
+
+def set_envision_environment(env_name: str | None) -> dict:
+    """
+    Switch Envision runtime target between BASE and TEST for subsequent calls.
+    """
+    global ENVISION_BASE, ENVISION_ACTIVE_NAME, ENVISION_ACTIVE_HOST
+
+    chosen = _canonical_envision_env(env_name)
+    if chosen == "test":
+        if not ENVISION_BASE_TEST:
+            raise RuntimeError("ENVISION_TEST is not configured.")
+        ENVISION_BASE = ENVISION_BASE_TEST
+        ENVISION_ACTIVE_NAME = "TEST"
+    else:
+        ENVISION_BASE = ENVISION_BASE_PROD
+        ENVISION_ACTIVE_NAME = "BASE"
+
+    try:
+        host = (urlparse(ENVISION_BASE).netloc or "").strip()
+    except Exception:
+        host = ""
+    ENVISION_ACTIVE_HOST = host or ENVISION_BASE
+    return get_envision_environment()
+
+
+def get_envision_environment() -> dict:
+    return {
+        "key": _canonical_envision_env("test" if ENVISION_ACTIVE_NAME == "TEST" else "base"),
+        "name": ENVISION_ACTIVE_NAME,
+        "host": ENVISION_ACTIVE_HOST,
+        "base": ENVISION_BASE,
+        "test_available": bool(ENVISION_BASE_TEST),
+    }
 
 # APG (RocketRoute / FlightPlan API)
 APG_BASE = os.getenv("APG_BASE", "https://fly.rocketroute.com/api")
@@ -113,8 +173,7 @@ IATA_TO_ICAO = {
     "MRO": "NZMS",  # Masterton
     "WSZ": "NZWS",  # Westport
     "GBZ": "NZGB",  # Great Barrier Island
-    "MZP": "NZMK",  # Motueka
-    "CMV": "NZCX",  # Coromandel
+    "TEU": "NZMO",  # Coromandel
 
     # Chatham Islands
     "CHT": "NZCI",  # Chatham Islands Tuuta Airport
@@ -141,7 +200,6 @@ logging.basicConfig(
 ##################
 ### APG HELPER ###
 ##################
-ENVISION_BASE = "https://envision.airchathams.co.nz:8788/v1"
 
 def fetch_envision_crew_for_apg(envision_flight_id: int):
     """
@@ -380,6 +438,36 @@ def envision_get_crew_positions(token: str) -> list[dict]:
     if not isinstance(data, list):
         raise RuntimeError(f"Unexpected /Crews/Positions response: {data}")
     _CREW_POS_CACHE = data
+    return data
+
+
+def envision_get_line_registrations(token: str) -> list[dict]:
+    """
+    GET /v1/Lines/Registrations
+    Returns Envision line registration rows.
+    """
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    url = f"{ENVISION_BASE.rstrip('/')}/Lines/Registrations"
+    resp = requests.get(url, headers=headers, timeout=30)
+    resp.raise_for_status()
+    data = resp.json() or []
+    if not isinstance(data, list):
+        raise RuntimeError(f"Unexpected /Lines/Registrations response: {data!r}")
+    return data
+
+
+def envision_get_flight_types(token: str) -> list[dict]:
+    """
+    GET /v1/Flights/Types
+    Returns Envision flight type rows.
+    """
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    url = f"{ENVISION_BASE.rstrip('/')}/Flights/Types"
+    resp = requests.get(url, headers=headers, timeout=30)
+    resp.raise_for_status()
+    data = resp.json() or []
+    if not isinstance(data, list):
+        raise RuntimeError(f"Unexpected /Flights/Types response: {data!r}")
     return data
 
 def _core_from(payload: dict, pic_name: str|None, apg_pic_id: int|None) -> dict:
@@ -2365,6 +2453,8 @@ def update_apg_plan_from_dcs_row(
     # --- 3) Optional baggage update from DCS ---
     total_bags_kg = 0.0
     for p in (dcs_flight or {}).get("Passengers") or []:
+        if not is_dcs_passenger_boarded_or_flown(p):
+            continue
         try:
             total_bags_kg += float(p.get("BaggageWeight") or 0)
         except (TypeError, ValueError):
@@ -2393,7 +2483,10 @@ def update_apg_plan_from_dcs_row(
 
     # 5a) DCS pax summary (with proper names)
     dcs_pax_summary: list[dict] = []
-    raw_pax = (dcs_flight or {}).get("Passengers") or []
+    raw_pax = [
+        p for p in ((dcs_flight or {}).get("Passengers") or [])
+        if is_dcs_passenger_boarded_or_flown(p)
+    ]
 
     for p in raw_pax:
         seat = (p.get("Seat") or "").strip().upper()
@@ -2674,6 +2767,9 @@ PAX_STD_WEIGHTS_KG = {
     "CHILD":  46.0,
     "C":      46.0,
     "UM":     46.0,  # unaccompanied minor
+    "CNN":    46.0,
+    "UMN":    46.0,
+    "UMNR":   46.0,
 
     # Infants
     "INF":    15.0,
@@ -2681,12 +2777,40 @@ PAX_STD_WEIGHTS_KG = {
 }
 
 
+def normalise_pax_type(pax_type: str | None) -> str:
+    """
+    Normalise DCS passenger type values into a stable weight/classification key.
+    """
+    raw = (pax_type or "").strip().upper()
+    if not raw:
+        return ""
+
+    token = re.split(r"[^A-Z]+", raw, maxsplit=1)[0]
+    aliases = {
+        "A": "AD",
+        "AD": "AD",
+        "ADT": "AD",
+        "ADULT": "AD",
+        "C": "CHD",
+        "CHD": "CHD",
+        "CHILD": "CHD",
+        "CNN": "CHD",
+        "UM": "UMNR",
+        "UMN": "UMNR",
+        "UMNR": "UMNR",
+        "IN": "INF",
+        "INF": "INF",
+        "INFANT": "INF",
+    }
+    return aliases.get(token, token)
+
+
 def _lookup_pax_weight_kg(pax_type: str) -> float:
     """
     Map DCS PassengerType -> standard weight.
     If the type is unknown, fall back to adult weight.
     """
-    key = (pax_type or "").strip().upper()
+    key = normalise_pax_type(pax_type)
     if key in PAX_STD_WEIGHTS_KG:
         return float(PAX_STD_WEIGHTS_KG[key])
     # Fallback = adult
@@ -2741,6 +2865,65 @@ def _get_pax_seat_from_dcs(p: dict) -> str | None:
     return _normalise_seat_code(raw)
 
 
+def is_dcs_passenger_boarded_or_flown(p: dict) -> bool:
+    """
+    Include all passengers except those in Booked status.
+
+    Note:
+      Function name is kept for compatibility with existing callers.
+      Semantics now match ops requirement:
+      - checked-in passengers ARE included
+      - booked-only passengers are excluded
+    """
+    if not isinstance(p, dict):
+        return False
+
+    # Explicit booleans from API payloads (strongest signals).
+    if p.get("Flown") is True or p.get("flown") is True:
+        return True
+    if p.get("Boarded") is True or p.get("boarded") is True:
+        return True
+    if p.get("CheckedIn") is True or p.get("checkedIn") is True:
+        return True
+
+    # Combine common textual/code status fields.
+    raw = (
+        p.get("DCSStatus")
+        or p.get("DcsStatus")
+        or p.get("Status")
+        or p.get("status")
+        or p.get("CheckInStatus")
+        or p.get("checkInStatus")
+        or p.get("BoardingStatus")
+        or p.get("boardingStatus")
+        or p.get("IataStatus")
+        or p.get("StatusCode")
+        or p.get("IataPaxStatus")
+        or ""
+    )
+    s = str(raw).strip().upper()
+
+    # No status signal -> treat as booked (exclude in exclude-booked mode).
+    if not s:
+        return False
+
+    # Positive (included) states.
+    if "FLOWN" in s or s == "FLWN":
+        return True
+    if "BOARD" in s or s in {"BD", "BRD"}:
+        return True
+    if "CHECK" in s or s in {"CI", "CKI", "CKIN"}:
+        return True
+
+    # Booked/not-checked-in states (excluded).
+    # Zenith may return "ISSUED" for passengers who are still not checked in.
+    if "BOOK" in s or s in {"R", "BKD", "ISSUED", "TICKETED"}:
+        return False
+
+    # Unknown status defaults to excluded to avoid including booked-like pax.
+    return False
+
+
 ADULT_MASS_KG = 86.0
 CHILD_MASS_KG = 46.0
 INFANT_MASS_KG = 15.0  # standard infant weight; lap infants get added to adult
@@ -2769,7 +2952,8 @@ def apply_dcs_passengers_to_apg_rows(
     """
     logger = logging.getLogger(__name__)
 
-    pax_list = (dcs_flight or {}).get("Passengers") or []
+    raw_pax_list = (dcs_flight or {}).get("Passengers") or []
+    pax_list = [p for p in raw_pax_list if is_dcs_passenger_boarded_or_flown(p)]
 
     # --- Classify passengers from DCS ---
     seated_adults: list[str] = []        # seat codes with adult
@@ -2778,17 +2962,17 @@ def apply_dcs_passengers_to_apg_rows(
     lap_infants_count = 0                # infants without seat
 
     for p in pax_list:
-        ptype = (p.get("PassengerType") or "AD").strip().upper()
+        ptype = normalise_pax_type(p.get("PassengerType")) or "AD"
         seat_code = _get_pax_seat_from_dcs(p)
 
-        if ptype in {"AD", "ADT", "ADULT", "A"}:
+        if ptype == "AD":
             if seat_code:
                 seated_adults.append(seat_code)
             # adult without seat is ignored for seat rows
-        elif ptype in {"CHD", "CHILD", "C"}:
+        elif ptype in {"CHD", "UMNR"}:
             if seat_code:
                 seated_children.append(seat_code)
-        elif ptype in {"INF", "INFANT"}:
+        elif ptype == "INF":
             if seat_code:
                 # Infant with its own seat â€“ treat as 15 kg in that seat
                 seated_infants.append(seat_code)
@@ -2932,6 +3116,8 @@ def update_apg_plan_from_dcs_flight(
     # 3) Optional: update baggage mass from DCS
     total_bags_kg = 0.0
     for p in (dcs_flight or {}).get("Passengers") or []:
+        if not is_dcs_passenger_boarded_or_flown(p):
+            continue
         try:
             total_bags_kg += float(p.get("BaggageWeight") or 0)
         except (TypeError, ValueError):
@@ -3039,6 +3225,145 @@ def envision_update_flight_times(token: str, flight_id: int | str, update: dict)
         return r.json()
     return {"raw": r.text}
 
+
+def _envision_headers(token: str) -> dict:
+    tenant = os.getenv("ENVISION_TENANT")
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    if tenant:
+        headers["X-Tenant-Id"] = tenant
+    return headers
+
+
+def _envision_request(
+    token: str,
+    method: str,
+    path: str,
+    payload: Optional[dict] = None,
+    timeout: int = 30,
+) -> dict:
+    headers = _envision_headers(token)
+    url = f"{ENVISION_BASE.rstrip('/')}/{path.lstrip('/')}"
+    resp = requests.request(method.upper(), url, headers=headers, json=payload, timeout=timeout)
+    resp.raise_for_status()
+
+    if not resp.content:
+        return {"ok": True, "status_code": resp.status_code}
+
+    ctype = resp.headers.get("Content-Type", "")
+    if "application/json" in ctype:
+        js = resp.json()
+        if isinstance(js, dict):
+            return js
+        return {"ok": True, "status_code": resp.status_code, "result": js}
+    return {"ok": True, "status_code": resp.status_code, "raw": resp.text}
+
+
+def envision_change_registration(token: str, flight_id: int | str, payload: dict) -> dict:
+    return _envision_request(token, "POST", f"Flights/{flight_id}/ChangeRegistration", payload)
+
+
+def envision_change_type(token: str, flight_id: int | str, payload: dict) -> dict:
+    return _envision_request(token, "PUT", f"Flights/{flight_id}/ChangeType", payload)
+
+
+def envision_cancel_flight(token: str, flight_id: int | str, payload: dict) -> dict:
+    return _envision_request(token, "POST", f"Flights/{flight_id}/Cancel", payload)
+
+
+def envision_divert_flight(token: str, flight_id: int | str, payload: dict) -> dict:
+    return _envision_request(token, "POST", f"Flights/{flight_id}/Divert", payload)
+
+
+def envision_get_delay(token: str, flight_id: int | str, delay_id: int | str) -> dict:
+    return _envision_request(token, "GET", f"Flights/{flight_id}/Delays/{delay_id}", None)
+
+
+def envision_put_delay(token: str, flight_id: int | str, delay_id: int | str, payload: dict) -> dict:
+    return _envision_request(token, "PUT", f"Flights/{flight_id}/Delays/{delay_id}", payload)
+
+
+def envision_delete_delay(token: str, flight_id: int | str, delay_id: int | str) -> dict:
+    return _envision_request(token, "DELETE", f"Flights/{flight_id}/Delays/{delay_id}", None)
+
+
+def envision_post_delay(
+    token: str,
+    flight_id: int | str,
+    payload: dict,
+    delay_id: Optional[int | str] = None,
+) -> dict:
+    path = f"Flights/{flight_id}/Delays/{delay_id}" if delay_id is not None else f"Flights/{flight_id}/Delays"
+    return _envision_request(token, "POST", path, payload)
+
+
+def envision_get_flight_notes(token: str, flight_id: int | str, crew_view: bool = False) -> list[dict]:
+    headers = _envision_headers(token)
+    url = f"{ENVISION_BASE.rstrip('/')}/Flights/{flight_id}/Notes"
+    params = {"crewView": str(bool(crew_view)).lower()}
+    resp = requests.get(url, headers=headers, params=params, timeout=30)
+    resp.raise_for_status()
+    data = resp.json() or []
+    if not isinstance(data, list):
+        raise RuntimeError(f"Unexpected notes payload for flight {flight_id}: {data!r}")
+    return data
+
+
+def envision_get_crew_position_setups(token: str) -> list[dict]:
+    """
+    GET /v1/Crews/Positions/Setups
+    """
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    url = f"{ENVISION_BASE.rstrip('/')}/Crews/Positions/Setups"
+    resp = requests.get(url, headers=headers, timeout=30)
+    resp.raise_for_status()
+    data = resp.json() or []
+    if not isinstance(data, list):
+        raise RuntimeError(f"Unexpected /Crews/Positions/Setups response: {data!r}")
+    return data
+
+
+def envision_get_crew_position_setup_items(token: str) -> list[dict]:
+    """
+    GET /v1/Crews/Positions/Setups/Items
+    """
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    url = f"{ENVISION_BASE.rstrip('/')}/Crews/Positions/Setups/Items"
+    resp = requests.get(url, headers=headers, timeout=30)
+    resp.raise_for_status()
+    data = resp.json() or []
+    if not isinstance(data, list):
+        raise RuntimeError(f"Unexpected /Crews/Positions/Setups/Items response: {data!r}")
+    return data
+
+
+def envision_post_flight_note(token: str, flight_id: int | str, payload: dict) -> dict:
+    return _envision_request(token, "POST", f"Flights/{flight_id}/Notes", payload)
+
+
+def envision_put_flight_note(token: str, flight_id: int | str, note_id: int | str, payload: dict) -> dict:
+    return _envision_request(token, "PUT", f"Flights/{flight_id}/Notes/{note_id}", payload)
+
+
+def envision_get_flight_passengers(token: str, flight_id: int | str) -> dict:
+    """GET /v1/Flights/{flightId}/Passengers"""
+    headers = _envision_headers(token)
+    url = f"{ENVISION_BASE.rstrip('/')}/Flights/{flight_id}/Passengers"
+    resp = requests.get(url, headers=headers, timeout=30)
+    resp.raise_for_status()
+    data = resp.json() or {}
+    if not isinstance(data, dict):
+        raise RuntimeError(f"Unexpected flight passengers payload for flight {flight_id}: {data!r}")
+    return data
+
+
+def envision_put_flight_passengers(token: str, flight_id: int | str, payload: dict) -> dict:
+    """PUT /v1/Flights/{flightId}/Passengers"""
+    return _envision_request(token, "PUT", f"Flights/{flight_id}/Passengers", payload)
+
 ###Im Not Sure what this does###
 def fetch_flights_for_day(token: str, local_day: date):
     """
@@ -3089,40 +3414,136 @@ def envision_put_delays(token: str, flight_id: int, delays: list[dict]) -> list[
         "Content-Type": "application/json",
     }
 
-    # Normalise the payload into whatever Envision expects (example only)
-    payload = []
+    normalized: list[dict] = []
     for d in delays:
-        payload.append({
-            "id": d.get("id", 0),
+        try:
+            mins = int(d.get("delayMinutes") or 0)
+        except (TypeError, ValueError):
+            mins = 0
+        if mins <= 0:
+            continue
+
+        code_raw = (d.get("delayCode") or "").strip()
+        code_id_raw = d.get("delayCodeId")
+        code_id = None
+        try:
+            code_id = int(code_id_raw) if code_id_raw not in (None, "") else None
+        except (TypeError, ValueError):
+            code_id = None
+
+        remarks = (
+            str(
+                d.get("remarks")
+                or d.get("remark")
+                or d.get("comment")
+                or ""
+            ).strip()
+        )
+
+        delay_id = None
+        delay_id_raw = d.get("id")
+        try:
+            delay_id = int(delay_id_raw) if delay_id_raw not in (None, "") else None
+        except (TypeError, ValueError):
+            delay_id = None
+
+        normalized.append({
+            "id": delay_id,
             "flightId": flight_id,
-            "delayCodeId": d.get("delayCodeId"),
-            "delayCode": d.get("delayCode"),
-            "delayMinutes": d.get("delayMinutes"),
-            "isArrival": d.get("isArrival", False),
-            "comment": d.get("comment") or "",
+            "delayMinutes": mins,
+            "isArrival": bool(d.get("isArrival", False)),
+            "remarks": remarks,
+            "delayCode": code_raw,
+            "delayCodeId": code_id,
         })
 
-    resp = requests.post(url, headers=headers, json=payload, timeout=30)
+    existing = envision_get_delays(token, flight_id) or []
+    existing_dep_ids = {
+        int(d.get("id"))
+        for d in existing
+        if d.get("id") is not None and not bool(d.get("isArrival", False))
+    }
+    incoming_dep_ids = {
+        int(n["id"])
+        for n in normalized
+        if n.get("id") is not None and not bool(n.get("isArrival", False))
+    }
+    delete_ids = sorted(existing_dep_ids - incoming_dep_ids)
 
-    try:
-        resp.raise_for_status()
-    except requests.HTTPError:
-        # Extra debug
-        allow = resp.headers.get("Allow")
-        body  = (resp.text or "")[:500]
+    def _try_post(payload_obj: dict):
+        resp = requests.post(url, headers=headers, json=payload_obj, timeout=30)
+        if resp.status_code >= 400:
+            allow = resp.headers.get("Allow")
+            body = (resp.text or "")[:800]
+            raise RuntimeError(
+                f"HTTP {resp.status_code} for {url}; Allow={allow!r}; body={body}"
+            )
+        if not resp.content:
+            return {}
+        ctype = resp.headers.get("Content-Type", "")
+        if "application/json" in ctype:
+            js = resp.json()
+            return js if isinstance(js, dict) else {"result": js}
+        return {"raw": resp.text}
+
+    results: list[dict] = []
+    errors: list[str] = []
+
+    for delay_id in delete_ids:
+        try:
+            envision_delete_delay(token, flight_id, delay_id)
+        except Exception as exc:
+            errors.append(f"delete:{delay_id} -> {exc}")
+
+    # Update existing by PUT (DelayUpdateRequest), create new by POST (DelayCreateRequest).
+    for i, n in enumerate(normalized, start=1):
+        try:
+            if n.get("delayCodeId") is None:
+                raise RuntimeError("delayCodeId is required")
+
+            if n.get("id") is not None and int(n["id"]) in existing_dep_ids:
+                # DelayUpdateRequest schema:
+                # { id, flightId, delayCodeId, delayMinutes, remarks }
+                put_payload = {
+                    "id": int(n["id"]),
+                    "flightId": int(flight_id),
+                    "delayCodeId": int(n["delayCodeId"]),
+                    "delayMinutes": int(n["delayMinutes"]),
+                    "remarks": n.get("remarks", ""),
+                }
+                resp_item = envision_put_delay(token, flight_id, int(n["id"]), put_payload)
+                results.append(resp_item if isinstance(resp_item, dict) else put_payload)
+            else:
+                # DelayCreateRequest schema:
+                # { flightId, isArrival, delayCodeId, delayMinutes, remarks }
+                post_payload = {
+                    "flightId": int(flight_id),
+                    "isArrival": bool(n.get("isArrival", False)),
+                    "delayCodeId": int(n["delayCodeId"]),
+                    "delayMinutes": int(n["delayMinutes"]),
+                    "remarks": n.get("remarks", ""),
+                }
+                resp_item = _try_post(post_payload)
+                results.append(resp_item if isinstance(resp_item, dict) else post_payload)
+        except Exception as exc:
+            errors.append(
+                f"item#{i} ({n.get('delayCode') or n.get('delayCodeId')}, {n.get('delayMinutes')}m): {exc}"
+            )
+
+    if errors:
         logging.error(
-            "envision_put_delays: HTTP %s for %s, Allow=%r, body=%s",
-            resp.status_code, url, allow, body
+            "envision_put_delays failed for flight %s: %s",
+            flight_id,
+            " || ".join(errors),
         )
-        raise
+        raise RuntimeError(
+            "Delay update rejected by Envision after payload retries. "
+            + " || ".join(errors)
+        )
 
-    if not resp.content:
-        return []
-
-    js = resp.json()
-    if not isinstance(js, list):
-        raise RuntimeError(f"Unexpected delay update response for flight {flight_id}: {js!r}")
-    return js
+    refreshed = envision_get_delays(token, flight_id) or []
+    dep_only = [d for d in refreshed if not bool(d.get("isArrival", False))]
+    return dep_only
 
 def apg_upload_manifest_pdf(bearer: str, plan_id: int, pdf_bytes: bytes, filename: str) -> dict:
     """

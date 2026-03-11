@@ -1,5 +1,6 @@
 ﻿from flask import Blueprint, render_template, request, redirect, jsonify, flash, current_app,send_file, abort, url_for, make_response
 from datetime import date, datetime, time, timezone, timedelta
+from flask import session
 from .models import SyncRun, SyncFlightLog, AppConfig
 from . import db
 from .zenith_client import fetch_dcs_for_flight
@@ -21,6 +22,10 @@ from .sync.envision_apg_sync import (
     envision_authenticate,
     envision_get_flights,
     ENVISION_BASE,               # diagnostics
+    ENVISION_ACTIVE_NAME,
+    ENVISION_ACTIVE_HOST,
+    get_envision_environment,
+    set_envision_environment,
     attach_apg_presence_to_rows, # APG plan presence
     apg_login,                   #add
     apg_get_plan_list,           #add
@@ -33,11 +38,34 @@ from .sync.envision_apg_sync import (
 
 # Simple in-memory cache for Envision flights per date window
 _ENVISION_FLIGHT_CACHE: dict[tuple[str, str], dict] = {}
+# Simple in-memory cache for Envision defects by registration id
+_ENVISION_DEFECT_CACHE: dict[int, dict] = {}
+# Simple in-memory cache for Envision scheduled maintenance by registration id
+_ENVISION_MAINT_CACHE: dict[int, dict] = {}
 
 # ✅ use your DCS single-flight call
 from .zenith_client import fetch_dcs_for_flight
 
 ui_bp = Blueprint("ui", __name__)
+
+
+@ui_bp.before_app_request
+def _apply_session_envision_environment():
+    try:
+        chosen = session.get("envision_env")
+        if chosen:
+            set_envision_environment(str(chosen))
+    except Exception:
+        current_app.logger.exception("Failed to apply session Envision environment")
+
+
+def _runtime_envision_base() -> str:
+    env = get_envision_environment()
+    return str(env.get("base") or "").rstrip("/")
+
+@ui_bp.route("/ops/modify-leg")
+def ops_modify_leg():
+    return render_template("flight_details.html")
 
 @ui_bp.route("/")
 @ui_bp.route("/sync/runs")
@@ -149,28 +177,29 @@ def _enrich_rows_with_dcs(rows: list[dict], nz_day: date) -> None:
     max_workers = int(current_app.config.get("DCS_MAX_WORKERS", 8))
     app_obj = current_app._get_current_object()  # capture the real Flask app
 
-    work: list[tuple[int, str, str, str]] = []
+    work: list[tuple[int, str, str, str, str]] = []
     for i, r in enumerate(rows):
         full_no = (r.get("flight_number") or "").strip().replace(" ", "").upper()
         origin  = (r.get("dep") or "").strip().upper()
+        dest    = (r.get("ades") or r.get("dest") or "").strip().upper()
 
         if not full_no or not origin:
-            r.update({"error": "Missing flight/origin", "pax_count": 0, "bags_kg": 0.0, "adt": 0, "chd": 0, "inf": 0})
+            r.update({"error": "Missing flight/origin", "pax_count": 0, "bags_kg": 0.0, "adt": 0, "chd": 0, "inf": 0, "dcs_linked": False})
             continue
 
         desig, number = split_designator_and_number(full_no)
         if not desig or not number:
-            r.update({"error": "Bad flight number format", "pax_count": 0, "bags_kg": 0.0, "adt": 0, "chd": 0, "inf": 0})
+            r.update({"error": "Bad flight number format", "pax_count": 0, "bags_kg": 0.0, "adt": 0, "chd": 0, "inf": 0, "dcs_linked": False})
             continue
 
         r["designator"] = desig
         r["flight_numeric"] = number
-        work.append((i, origin, desig, number))
+        work.append((i, origin, desig, number, dest))
 
     if not work:
         return
 
-    def _fetch_one(idx: int, origin: str, desig: str, number: str):
+    def _fetch_one(idx: int, origin: str, desig: str, number: str, dest: str):
         # Push an app context for this thread
         with app_obj.app_context():
             try:
@@ -181,9 +210,33 @@ def _enrich_rows_with_dcs(rows: list[dict], nz_day: date) -> None:
                     flight_number=number,
                     only_status=True,
                 )
+                flights = (dcs or {}).get("Flights", []) if isinstance(dcs, dict) else (dcs or [])
+                if not flights:
+                    # Fallback: include all statuses if strict DCS-status view is empty.
+                    dcs = fetch_dcs_for_flight(
+                        dep_airport=origin,
+                        flight_date=nz_day,
+                        airline_designator=desig,
+                        flight_number=number,
+                        only_status=False,
+                    )
                 return (idx, dcs, None)
             except Exception as e:
                 return (idx, None, e)
+
+    def _annotate_pax_origin_dest(pax_list: list[dict], origin_code: str, dest_code: str) -> list[dict]:
+        out: list[dict] = []
+        o = (origin_code or "").strip().upper()
+        d = (dest_code or "").strip().upper()
+        for p in pax_list or []:
+            if isinstance(p, dict):
+                px = dict(p)
+                px["__manifest_origin"] = o
+                px["__manifest_dest"] = d
+                out.append(px)
+            else:
+                out.append(p)
+        return out
 
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         futures = [ex.submit(_fetch_one, *args) for args in work]
@@ -202,6 +255,7 @@ def _enrich_rows_with_dcs(rows: list[dict], nz_day: date) -> None:
                     "adt": 0,
                     "chd": 0,
                     "inf": 0,
+                    "dcs_linked": False,
                 })
                 continue
 
@@ -214,10 +268,43 @@ def _enrich_rows_with_dcs(rows: list[dict], nz_day: date) -> None:
                     "adt": 0,
                     "chd": 0,
                     "inf": 0,
+                    "dcs_linked": False,
                 })
                 continue
 
-            pax = flights[0].get("Passengers") or []
+            chosen = None
+            if len(flights) == 1:
+                chosen = flights[0]
+            else:
+                # Prefer exact destination match when multiple legs are returned.
+                dest = (r.get("ades") or r.get("dest") or "").strip().upper()
+                for fl in flights:
+                    fl_dest = str(fl.get("Destination") or fl.get("ArrivalAirport") or "").strip().upper()
+                    if dest and fl_dest and fl_dest == dest:
+                        chosen = fl
+                        break
+                if chosen is None:
+                    chosen = flights[0]
+
+                # Some DCS responses return pax on through-sector records (e.g. PPQ->AKL)
+                # while the intermediate matched sector has an empty passenger list.
+                chosen_pax = (chosen or {}).get("Passengers") or []
+                if not chosen_pax:
+                    richest = max(
+                        flights,
+                        key=lambda fl: len((fl or {}).get("Passengers") or []),
+                        default=chosen,
+                    )
+                    richest_pax = (richest or {}).get("Passengers") or []
+                    if richest_pax:
+                        chosen = richest
+
+            chosen_origin = str((chosen or {}).get("Origin") or r.get("dep") or "").strip().upper()
+            chosen_dest = str((chosen or {}).get("Destination") or r.get("ades") or r.get("dest") or "").strip().upper()
+            pax = _annotate_pax_origin_dest((chosen or {}).get("Passengers") or [], chosen_origin, chosen_dest)
+            r["dcs_linked"] = bool(chosen)
+            r["dcs_origin"] = chosen_origin
+            r["dcs_destination"] = chosen_dest
             counts = _count_pax_types(pax)
             # ✅ keep full DCS passenger list on the row
             r["pax_list"] = pax
@@ -240,6 +327,112 @@ def _enrich_rows_with_dcs(rows: list[dict], nz_day: date) -> None:
 
             r["bags_kg"] = total_bags
             r["error"] = None
+
+def _propagate_through_pax(rows: list[dict]) -> None:
+    """
+    For through-services split into multiple legs under the same flight number/reg,
+    copy pax from the richest leg to connected onward legs that have zero pax.
+    """
+    if not rows:
+        return
+
+    def _key(r: dict) -> tuple[str, str]:
+        return (
+            str(r.get("reg") or "").strip().upper(),
+            str(r.get("flight_number") or "").strip().upper(),
+        )
+
+    def _pax_key(p: dict) -> str:
+        return "|".join(
+            [
+                str(p.get("BookingReferenceID") or "").strip().upper(),
+                str(p.get("GivenName") or "").strip().upper(),
+                str(p.get("Surname") or "").strip().upper(),
+                str(p.get("Seat") or p.get("SeatNumber") or "").strip().upper(),
+            ]
+        )
+
+    def _merge_pax(primary: list[dict], extra: list[dict]) -> list[dict]:
+        out: list[dict] = []
+        seen: set[str] = set()
+        for p in primary or []:
+            k = _pax_key(p)
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append(p)
+        for p in extra or []:
+            k = _pax_key(p)
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append(p)
+        return out
+
+    def _apply_pax(rr: dict, pax_list: list[dict]) -> None:
+        counts = _count_pax_types(pax_list)
+        bag_kg = 0.0
+        for p in pax_list:
+            try:
+                bag_kg += float(p.get("BaggageWeight") or 0)
+            except (TypeError, ValueError):
+                pass
+        rr["pax_list"] = pax_list
+        rr["adt"] = counts["ad"]
+        rr["chd"] = counts["chd"]
+        rr["inf"] = counts["inf"]
+        rr["pax_count"] = counts["total"]
+        rr["bags_kg"] = bag_kg
+        rr["dcs_linked"] = True
+        rr["error"] = None
+
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for r in rows:
+        groups.setdefault(_key(r), []).append(r)
+
+    for _, group in groups.items():
+        group.sort(key=lambda r: r.get("std_nz") or _dt.min.replace(tzinfo=NZ))
+        chain: list[dict] = []
+
+        def _apply_chain(items: list[dict]) -> None:
+            if not items:
+                return
+            richest = max(items, key=lambda rr: int(rr.get("pax_count") or 0))
+            carry = list((richest.get("pax_list") or []))
+            if not carry:
+                return
+
+            for rr in items:
+                current = list((rr.get("pax_list") or []))
+                if not current:
+                    _apply_pax(rr, carry)
+                    continue
+                merged = _merge_pax(current, carry)
+                if len(merged) != len(current):
+                    _apply_pax(rr, merged)
+                carry = merged
+
+        for r in group:
+            if not chain:
+                chain = [r]
+                continue
+            prev = chain[-1]
+            prev_dest = str(prev.get("ades") or prev.get("dest") or "").strip().upper()
+            cur_dep = str(r.get("dep") or "").strip().upper()
+            prev_end = prev.get("sta_nz") or prev.get("std_nz")
+            cur_start = r.get("std_nz")
+            gap_min = None
+            if isinstance(prev_end, datetime) and isinstance(cur_start, datetime):
+                gap_min = (cur_start - prev_end).total_seconds() / 60.0
+
+            connected = bool(prev_dest and cur_dep and prev_dest == cur_dep)
+            close_in_time = (gap_min is None) or (0 <= gap_min <= 360)
+            if connected and close_in_time:
+                chain.append(r)
+            else:
+                _apply_chain(chain)
+                chain = [r]
+        _apply_chain(chain)
 
 @ui_bp.route("/sync/runs/<int:rid>")
 def sync_run_detail(rid):
@@ -467,7 +660,7 @@ def debug_envision_ping():
 
 def _first_page_debug(token: str, start_utc: datetime, end_utc: datetime, limit: int = 5) -> dict:
     import json, requests
-    url = f"{ENVISION_BASE.rstrip('/')}/Flights"
+    url = f"{_runtime_envision_base()}/Flights"
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     params = {"dateFrom": start_utc.isoformat(), "dateTo": end_utc.isoformat(), "offset": 0, "limit": limit}
     out = {"url": url, "params": params, "status": None, "content_type": None, "raw_text": None, "json_preview": None}
@@ -750,6 +943,27 @@ def dcs_from_envision():
     return render_template("dcs_from_envision.html", day=day)
 
 
+@ui_bp.route("/dcs/new-live-gantt")
+def dcs_new_live_gantt():
+    day_str = request.args.get("date")
+    if day_str:
+        try:
+            day = date.fromisoformat(day_str)
+        except ValueError:
+            day = date.today()
+    else:
+        day = date.today()
+    env = get_envision_environment()
+    return render_template(
+        "New_Gantt/live_gantt.html",
+        day=day,
+        envision_env_name=env.get("name"),
+        envision_env_host=env.get("host"),
+        envision_env_key=env.get("key"),
+        envision_test_available=env.get("test_available"),
+    )
+
+
 @ui_bp.get("/api/dcs/gantt_data")
 def api_dcs_gantt_data():
     """
@@ -878,6 +1092,7 @@ def api_dcs_gantt_data():
                 or f.get("flightLineDescription")           # e.g. "MCU (ATR72)"
                 or ""
             ),
+            "registration_id": _extract_registration_id(f),
             "aircraft_type": f.get("aircraftType") or f.get("aircraftTypeId") or "",
             "service_type": f.get("serviceTypeDescription") or "",
             "flight_status": f.get("flightStatusDescription") or f.get("flightStatusId") or "",
@@ -901,6 +1116,9 @@ def api_dcs_gantt_data():
             "error": None,
             "apg_plan_id": "",
             "pax_list": [],
+            "dcs_linked": False,
+            "defect_count": None,
+            "defect_total": None,
 
             # NEW: default delays
             "delays": [],
@@ -910,13 +1128,83 @@ def api_dcs_gantt_data():
 
     rows.sort(key=lambda r: r["std_nz"] or _dt.min.replace(tzinfo=NZ))
 
-    # 4) DCS enrichment
+    # 4) Envision registration defects (open + total) per aircraft
+    reg_ids = sorted({int(r["registration_id"]) for r in rows if r.get("registration_id")})
+    if reg_ids:
+        defect_ttl = int(current_app.config.get("ENVISION_DEFECT_CACHE_TTL", 180))
+        now_ts = _time.time()
+        defect_counts: dict[int, tuple[int, int]] = {}
+        to_fetch: list[int] = []
+
+        for reg_id in reg_ids:
+            cached = _ENVISION_DEFECT_CACHE.get(reg_id)
+            if cached and (now_ts - cached.get("ts", 0) <= defect_ttl):
+                defect_counts[reg_id] = (
+                    int(cached.get("open", 0)),
+                    int(cached.get("total", 0)),
+                )
+            else:
+                to_fetch.append(reg_id)
+
+        if to_fetch:
+            if token is None:
+                try:
+                    auth = envision_authenticate()
+                    token = auth["token"]
+                except Exception as e:
+                    current_app.logger.warning(
+                        "api_dcs_gantt_data: Envision auth failed for defects: %s", e
+                    )
+                    to_fetch = []
+
+            if to_fetch and token:
+                max_workers = int(current_app.config.get("ENVISION_DEFECT_MAX_WORKERS", 6))
+                with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                    future_map = {
+                        ex.submit(_fetch_defect_count_for_registration, token, reg_id): reg_id
+                        for reg_id in to_fetch
+                    }
+                    for fut in as_completed(future_map):
+                        reg_id = future_map[fut]
+                        try:
+                            open_count, total_count = fut.result()
+                        except Exception as e:
+                            current_app.logger.warning(
+                                "api_dcs_gantt_data: defects fetch failed reg_id=%s: %s",
+                                reg_id,
+                                e,
+                            )
+                            open_count, total_count = 0, 0
+                        defect_counts[reg_id] = (open_count, total_count)
+                        old_details = None
+                        if reg_id in _ENVISION_DEFECT_CACHE:
+                            old_details = _ENVISION_DEFECT_CACHE[reg_id].get("details")
+                        _ENVISION_DEFECT_CACHE[reg_id] = {
+                            "ts": _time.time(),
+                            "open": open_count,
+                            "total": total_count,
+                            "details": old_details if isinstance(old_details, list) else None,
+                        }
+
+        for r in rows:
+            reg_id = r.get("registration_id")
+            if not reg_id:
+                continue
+            open_count, total_count = defect_counts.get(int(reg_id), (0, 0))
+            r["defect_count"] = open_count
+            r["defect_total"] = total_count
+
+    # 5) DCS enrichment
     try:
         _enrich_rows_with_dcs(rows, day)
     except Exception as e:
         current_app.logger.warning(f"api_dcs_gantt_data: _enrich_rows_with_dcs failed: {e}")
+    try:
+        _propagate_through_pax(rows)
+    except Exception as e:
+        current_app.logger.warning(f"api_dcs_gantt_data: _propagate_through_pax failed: {e}")
 
-    # 5) APG plan presence
+    # 6) APG plan presence
     try:
         attach_apg_presence_to_rows(
             rows,
@@ -926,7 +1214,7 @@ def api_dcs_gantt_data():
     except Exception as e:
         current_app.logger.warning(f"api_dcs_gantt_data: attach_apg_presence_to_rows failed: {e}")
 
-    # 6) OPTIONAL: attach delays for each Envision flight (expensive)
+    # 7) OPTIONAL: attach delays for each Envision flight (expensive)
     include_delays = request.args.get("include_delays") == "1"
     if include_delays:
         if token is None:
@@ -958,7 +1246,7 @@ def api_dcs_gantt_data():
                 "api_dcs_gantt_data: top-level delay fetch error: %s", e
             )
 
-    # 7) Make it JSON-serialisable (convert datetimes to ISO strings)
+    # 8) Make it JSON-serialisable (convert datetimes to ISO strings)
     def row_to_json(r):
         def dt_or_none(x):
             return x.isoformat() if isinstance(x, datetime) else None
@@ -979,6 +1267,9 @@ def api_dcs_gantt_data():
             "flight_number": r.get("flight_number"),
             "designator": r.get("designator"),
             "apg_plan_id": r.get("apg_plan_id") or "",
+            "registration_id": r.get("registration_id"),
+            "defect_count": r.get("defect_count"),
+            "defect_total": r.get("defect_total"),
             "block_mins": r.get("block_mins") or 0,
             "aircraft_type": r.get("aircraft_type"),
             "flight_status": r.get("flight_status"),
@@ -988,6 +1279,7 @@ def api_dcs_gantt_data():
             "pax_count": r.get("pax_count") or 0,
             "bags_kg": float(r.get("bags_kg") or 0),
             "pax_list": r.get("pax_list") or [],
+            "dcs_linked": bool(r.get("dcs_linked")),
             "envision_flight_id": r.get("envision_flight_id"),
             "delays": r.get("delays") or [],   # <-- NEW: ship delays to JS
         }
@@ -1019,6 +1311,114 @@ def api_envision_flight_delays():
         return jsonify({"ok": False, "error": f"Envision delays failed: {e}"}), 502
 
     return jsonify({"ok": True, "delays": delays})
+
+
+@ui_bp.get("/api/envision/registration_defects")
+def api_envision_registration_defects():
+    """
+    /api/envision/registration_defects?registration_id=123
+    Returns full defects for a registration plus open/total counts.
+    """
+    registration_id = request.args.get("registration_id", type=int)
+    if not registration_id:
+        return jsonify({"ok": False, "error": "Missing registration_id"}), 400
+
+    ttl = int(current_app.config.get("ENVISION_DEFECT_CACHE_TTL", 180))
+    now_ts = _time.time()
+    cached = _ENVISION_DEFECT_CACHE.get(registration_id)
+    if cached and (now_ts - cached.get("ts", 0) <= ttl) and isinstance(cached.get("details"), list):
+        cached_filtered = [d for d in (cached.get("details") or []) if _is_open_or_deferred_defect(d)]
+        return jsonify({
+            "ok": True,
+            "registration_id": registration_id,
+            "open_count": len(cached_filtered),
+            "total_count": len(cached_filtered),
+            "defects": cached_filtered,
+            "cached": True,
+        })
+
+    try:
+        auth = envision_authenticate()
+        token = auth["token"]
+    except Exception as e:
+        current_app.logger.exception("Envision auth failed in api_envision_registration_defects")
+        return jsonify({"ok": False, "error": f"Envision auth failed: {e}"}), 502
+
+    try:
+        defects = _fetch_defects_for_registration(token, int(registration_id))
+    except Exception as e:
+        current_app.logger.exception(
+            "Envision defects fetch failed for registration_id=%s", registration_id
+        )
+        return jsonify({"ok": False, "error": f"Envision defects failed: {e}"}), 502
+
+    filtered = [d for d in defects if _is_open_or_deferred_defect(d)]
+    open_count = len(filtered)
+    total_count = len(filtered)
+    _ENVISION_DEFECT_CACHE[registration_id] = {
+        "ts": _time.time(),
+        "open": open_count,
+        "total": total_count,
+        "details": filtered,
+    }
+
+    return jsonify({
+        "ok": True,
+        "registration_id": registration_id,
+        "open_count": open_count,
+        "total_count": total_count,
+        "defects": filtered,
+        "cached": False,
+    })
+
+
+@ui_bp.get("/api/envision/registration_maintenance")
+def api_envision_registration_maintenance():
+    """
+    /api/envision/registration_maintenance?registration_id=123
+    Returns registration work orders (maintenance) for a registration.
+    """
+    registration_id = request.args.get("registration_id", type=int)
+    if not registration_id:
+        return jsonify({"ok": False, "error": "Missing registration_id"}), 400
+
+    ttl = int(current_app.config.get("ENVISION_MAINT_CACHE_TTL", 300))
+    now_ts = _time.time()
+    cached = _ENVISION_MAINT_CACHE.get(registration_id)
+    if cached and (now_ts - cached.get("ts", 0) <= ttl) and isinstance(cached.get("items"), list):
+        return jsonify({
+            "ok": True,
+            "registration_id": registration_id,
+            "maintenance": cached.get("items") or [],
+            "cached": True,
+        })
+
+    try:
+        auth = envision_authenticate()
+        token = auth["token"]
+    except Exception as e:
+        current_app.logger.exception("Envision auth failed in api_envision_registration_maintenance")
+        return jsonify({"ok": False, "error": f"Envision auth failed: {e}"}), 502
+
+    try:
+        maintenance = _fetch_work_orders_for_registration(token, int(registration_id))
+    except Exception as e:
+        current_app.logger.exception(
+            "Envision work orders fetch failed for registration_id=%s", registration_id
+        )
+        return jsonify({"ok": False, "error": f"Envision work orders failed: {e}"}), 502
+
+    _ENVISION_MAINT_CACHE[registration_id] = {
+        "ts": _time.time(),
+        "items": maintenance,
+    }
+
+    return jsonify({
+        "ok": True,
+        "registration_id": registration_id,
+        "maintenance": maintenance,
+        "cached": False,
+    })
 
 @ui_bp.route("/debug/zenith-config")
 def debug_zenith_config():
@@ -1058,6 +1458,102 @@ def _list_from_envision_payload(payload):
                     if isinstance(vv, list):
                         return vv
     return []
+
+
+def _extract_registration_id(f: dict) -> int | None:
+    """Best-effort extraction of registration id from Envision flight payload."""
+    candidates = (
+        f.get("flightRegistrationId"),
+        f.get("registrationId"),
+        f.get("regId"),
+        f.get("aircraftRegistrationId"),
+    )
+    for value in candidates:
+        if value is None or value == "":
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _count_open_defects(defects: list[dict]) -> int:
+    """
+    Operational defect count:
+    - Prefer unresolved defects where closeDate is empty/null.
+    - Fall back to status text if closeDate is unavailable.
+    """
+    if not defects:
+        return 0
+    open_count = 0
+    for d in defects:
+        close_date = d.get("closeDate")
+        if close_date:
+            continue
+        status = str(d.get("defectStatus") or "").strip().lower()
+        if status in {"closed", "complete", "completed", "cleared", "resolved", "deferred closed"}:
+            continue
+        open_count += 1
+    return open_count
+
+
+def _is_open_or_deferred_defect(defect: dict) -> bool:
+    """True only for unresolved Open/Deferred defects."""
+    status = str(defect.get("defectStatus") or "").strip().lower()
+    if defect.get("closeDate"):
+        return False
+    if any(s in status for s in ("closed", "complete", "completed", "cleared", "resolved")):
+        return False
+    # Explicit Open/Deferred are always allowed.
+    if ("open" in status) or ("defer" in status):
+        return True
+    # Fallback: unresolved defect with unclear status is treated as open.
+    return True
+
+
+def _fetch_defect_count_for_registration(token: str, registration_id: int) -> tuple[int, int]:
+    """
+    Returns (open_defect_count, total_defect_count) for a registration.
+    """
+    defects = _fetch_defects_for_registration(token, registration_id)
+    return _count_open_defects(defects), len(defects)
+
+
+def _fetch_defects_for_registration(token: str, registration_id: int) -> list[dict]:
+    """Return full defect list for one Envision registration id."""
+    url = f"{_runtime_envision_base()}/Registrations/{registration_id}/Defects"
+    headers = {"Authorization": f"Bearer {token}"}
+    resp = requests.get(url, headers=headers, timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+    return data if isinstance(data, list) else []
+
+
+def _fetch_work_orders_for_registration(token: str, registration_id: int) -> list[dict]:
+    """Return work orders list for one Envision registration id."""
+    url = f"{_runtime_envision_base()}/Registrations/{registration_id}/WorkOrders"
+    headers = {"Authorization": f"Bearer {token}"}
+    # Optional status filter can be supplied via ENV var, e.g. "1,2,3"
+    status_ids_raw = str(current_app.config.get("ENVISION_WORK_ORDER_STATUS_IDS") or "").strip()
+    params = None
+    if status_ids_raw:
+        ids = []
+        for x in status_ids_raw.split(","):
+            x = x.strip()
+            if not x:
+                continue
+            try:
+                ids.append(int(x))
+            except ValueError:
+                continue
+        if ids:
+            params = [("workOrderStatusIds", i) for i in ids]
+
+    resp = requests.get(url, headers=headers, params=params, timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+    return data if isinstance(data, list) else []
 
 @ui_bp.get("/api/envision/flight_times")
 def api_envision_flight_times():
@@ -1196,7 +1692,7 @@ def dcs_manifest_preview():
 
 def _envision_first_page_debug(token: str, start_utc: datetime, end_utc: datetime, limit: int = 5) -> dict:
     import json as _json
-    url = f"{ENVISION_BASE.rstrip('/')}/Flights"
+    url = f"{_runtime_envision_base()}/Flights"
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     params = {"dateFrom": start_utc.isoformat(), "dateTo": end_utc.isoformat(), "offset": 0, "limit": limit}
 

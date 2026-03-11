@@ -36,18 +36,22 @@ def create_app():
     app.config.setdefault("DCS_MAX_WORKERS", 12)  # tune as needed, e.g. 4–10
 
     noisy_loggers = [
-    "zenith_client",   # [DCS] POST ... status logs
-    "apscheduler",     # "Scheduler started", "Added job..."
-    "dcs_api_client",  # [DCS] INFO in ...
-    "dcs_sync",        # [DCS] INFO in ...
-
-    #"werkzeug",        # 127.0.0.1 - - GET /... access logs
-    # Add any others you see in the "INFO in X" lines
-    # e.g. "routes" or your APG sync logger name if you have one
+        "zenith_client",   # [DCS] logs
+        "apscheduler",     # scheduler lifecycle logs
+        "dcs_api_client",
+        "dcs_sync",
+        "werkzeug",        # dev server/access logs
+        "urllib3",
+        "requests",
     ]
 
     for name in noisy_loggers:
-        logging.getLogger(name).setLevel(logging.WARNING)
+        lg = logging.getLogger(name)
+        lg.setLevel(logging.CRITICAL)
+        lg.propagate = False
+
+    # Keep app logs quiet by default; pax sync debug uses explicit [PAX_SYNC] prints.
+    app.logger.setLevel(logging.WARNING)
     
     # 0) Load config FIRST so everything else can use it
     from .config import Config  # <-- adjust path if needed
@@ -189,6 +193,20 @@ def create_app():
                 finally:
                     _run_lock.release()
 
+        def _run_passenger_sync_job():
+            with app.app_context():
+                try:
+                    from .routes import run_envision_passenger_sync_once
+                    result = run_envision_passenger_sync_once()
+                    app.logger.info(
+                        "Passenger sync job finished: ok=%s updated=%s failed=%s",
+                        bool(result.get("ok")),
+                        int(result.get("updated") or 0),
+                        int(result.get("failed") or 0),
+                    )
+                except Exception:
+                    logging.exception("Passenger sync scheduled job failed")
+
         def _start_or_reschedule_scheduler():
             # allow disabling during migrations/ops
             if os.environ.get("DISABLE_SCHEDULER") == "1":
@@ -206,6 +224,15 @@ def create_app():
                     _run_sync_job_auto, "interval",
                     seconds=interval, id="sync_auto_job", replace_existing=True
                 )
+                _scheduler.add_job(
+                    _run_passenger_sync_job,
+                    "cron",
+                    hour=12,
+                    minute=0,
+                    timezone="Pacific/Auckland",
+                    id="envision_pax_sync_daily",
+                    replace_existing=True,
+                )
                 if _should_start_scheduler(app):
                     _scheduler.start()
                     app.logger.info(f"Scheduler started (interval={interval}s)")
@@ -219,6 +246,16 @@ def create_app():
                         seconds=interval, id="sync_auto_job", replace_existing=True
                     )
                     app.logger.info(f"Scheduler job added (interval={interval}s)")
+                if _scheduler.get_job("envision_pax_sync_daily") is None:
+                    _scheduler.add_job(
+                        _run_passenger_sync_job,
+                        "cron",
+                        hour=12,
+                        minute=0,
+                        timezone="Pacific/Auckland",
+                        id="envision_pax_sync_daily",
+                        replace_existing=True,
+                    )
 
         _start_or_reschedule_scheduler()
 

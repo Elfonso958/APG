@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+
+{% block head_extra %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/flight_details.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="leg-page">
+  <header class="leg-header card-shell">
+    <div class="leg-header-left">
+      <a class="btn-soft" href="/dcs/from-envision">Back</a>
+      <div>
+        <div class="eyebrow">Airline Operations</div>
+        <h1>Modify Leg</h1>
+      </div>
+    </div>
+    <div class="leg-header-right">
+      <button class="btn-soft" type="button">Close</button>
+    </div>
+  </header>
+
+  <section class="card-shell summary-grid">
+    <label class="field"><span>Registration</span><select><option>ZK-CIY</option><option>ZK-CIZ</option><option>ZK-CIA</option></select></label>
+    <label class="field"><span>Airline</span><input type="text" value="Air Chathams"></label>
+    <label class="field"><span>Flight Number</span><input type="text" value="3C701"></label>
+    <label class="field"><span>Date</span><input type="date" value="2026-03-11"></label>
+    <label class="field"><span>Version</span><input type="text" value="3"></label>
+    <label class="field"><span>Flight Type</span><select><option>Scheduled</option><option>Charter</option><option>Ferry</option></select></label>
+  </section>
+
+  <section class="card-shell">
+    <h2>Scheduled Flight</h2>
+    <div class="grid-8">
+      <label class="field"><span>Date</span><input type="date" value="2026-03-11"></label>
+      <label class="field"><span>Departure</span><input type="text" value="WAG"></label>
+      <label class="field"><span>STD</span><input type="time" value="06:30"></label>
+      <label class="field"><span>GC Distance (km)</span><input type="number" value="317"></label>
+      <label class="field"><span>Arrival</span><input type="text" value="AKL"></label>
+      <label class="field"><span>STA</span><input type="time" value="07:30"></label>
+      <label class="field span-2"><span>Focus Flight Remark</span><input type="text" value="Morning commuter leg"></label>
+      <div class="field action-inline"><span>&nbsp;</span><button class="btn-soft" type="button">View</button></div>
+    </div>
+  </section>
+
+  <section class="card-shell">
+    <h2>Estimated / Operational Times</h2>
+    <div class="grid-10">
+      <label class="field"><span>Date</span><input type="date" value="2026-03-11"></label>
+      <label class="field"><span>ETD</span><input type="time" value="06:45"></label>
+      <label class="field"><span>TA</span><input type="time" value="07:42"></label>
+      <label class="field checkbox-field"><span>TA Confirm</span><input type="checkbox" checked></label>
+      <label class="field"><span>OUT</span><input type="time" value="06:47"></label>
+      <label class="field"><span>OFF</span><input type="time" value="06:54"></label>
+      <label class="field"><span>Enroute</span><input type="text" value="00:38"></label>
+      <label class="field"><span>ON</span><input type="time" value="07:32"></label>
+      <label class="field"><span>IN</span><input type="time" value="07:37"></label>
+      <label class="field"><span>CTOT</span><input type="time" value="06:50"></label>
+    </div>
+  </section>
+
+  <section class="card-shell">
+    <h2>Actuals</h2>
+    <div class="grid-8">
+      <label class="field"><span>Date</span><input type="date" value="2026-03-11"></label>
+      <label class="field"><span>OUT</span><input type="time" value="06:48"></label>
+      <label class="field"><span>OFF</span><input type="time" value="06:56"></label>
+      <label class="field"><span>ON</span><input type="time" value="07:34"></label>
+      <label class="field"><span>IN</span><input type="time" value="07:39"></label>
+      <label class="field"><span>Block Time</span><input type="text" value="00:51"></label>
+      <label class="field"><span>ATC Call Sign</span><input type="text" value="CVA701"></label>
+      <label class="field"><span>DO Time</span><input type="time" value="06:41"></label>
+    </div>
+  </section>
+
+  <section class="card-shell">
+    <h2>Passenger / Load</h2>
+    <div class="grid-6">
+      <label class="field"><span>E.Pax</span><input type="number" value="31"></label>
+      <label class="field"><span>E.Tr.Pax</span><input type="number" value="2"></label>
+      <label class="field"><span>A.Pax</span><input type="number" value="29"></label>
+      <label class="field"><span>A.Tr.Pax</span><input type="number" value="1"></label>
+      <label class="field"><span>Crew</span><input type="number" value="3"></label>
+      <label class="field"><span>Cargo (kg)</span><input type="number" value="148"></label>
+    </div>
+  </section>
+
+  <section class="card-shell">
+    <h2>Remarks</h2>
+    <div class="remarks-grid">
+      <div class="remarks-card">
+        <label class="field"><span>TOCC</span><input type="text" value="Ground handling informed of late stand release."></label>
+        <div class="remarks-actions"><button class="btn-soft" type="button">View</button></div>
+      </div>
+      <div class="remarks-card">
+        <label class="field"><span>GOC</span><input type="text" value="Monitor weather trend for return sector."></label>
+        <div class="remarks-actions"><button class="btn-soft" type="button">View</button></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card-shell">
+    <h2>Dailies and Revisions</h2>
+    <div class="placeholder-row">Reserved for future daily notes and revision tracking.</div>
+  </section>
+
+  <footer class="card-shell action-footer">
+    <div class="action-group">
+      <button class="btn-primary" type="button">Save and Publish</button>
+      <button class="btn-soft" type="button">Previous</button>
+      <button class="btn-soft" type="button">Next</button>
+    </div>
+    <div class="action-group">
+      <button class="btn-soft" type="button">Slot Msg</button>
+      <button class="btn-soft" type="button">PAX</button>
+      <button class="btn-soft" type="button">CTOT</button>
+      <button class="btn-soft" type="button">Act.Time</button>
+      <button class="btn-soft" type="button">Cargo</button>
+    </div>
+    <div class="action-group end">
+      <button class="btn-primary subtle" type="button">OK</button>
+      <button class="btn-soft" type="button">Close</button>
+    </div>
+  </footer>
+
+  <section class="card-shell dev-api-panel">
+    <h2>API Responses (Development)</h2>
+    <div class="api-grid">
+      <article>
+        <h3>GET /api/envision/flight_times?flight_id=74271</h3>
+        <pre>{
+  "ok": true,
+  "flight_id": 74271,
+  "local_hm": {
+    "departureEstimate": "06:45",
+    "departureActual": "06:48",
+    "departureTakeOff": "06:56",
+    "arrivalEstimate": "07:42",
+    "arrivalLanded": "07:34",
+    "arrivalActual": "07:39"
+  }
+}</pre>
+      </article>
+      <article>
+        <h3>POST /api/dcs/save_times</h3>
+        <pre>{
+  "ok": true,
+  "updates": [
+    {
+      "mode": "dep",
+      "ok": true,
+      "response": {
+        "delays_result": [
+          { "id": 9042, "delayCode": "41", "delayMinutes": 15, "remarks": "LH Bleed" },
+          { "id": 9043, "delayCode": "64", "delayMinutes": 15, "remarks": "" }
+        ]
+      }
+    }
+  ]
+}</pre>
+      </article>
+    </div>
+  </section>
+</div>
+{% endblock %}

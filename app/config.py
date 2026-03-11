@@ -5,6 +5,9 @@ class Config:
     SECRET_KEY = os.getenv("SECRET_KEY")
 
     ENVISION_BASE = os.getenv("ENVISION_BASE")
+    ENVISION_TEST = os.getenv("ENVISION_TEST")
+    ENVISION_ENV = os.getenv("ENVISION_ENV")
+    ENVISION_USE_TEST = os.getenv("ENVISION_USE_TEST")
     ENVISION_USER = os.getenv("ENVISION_USER")   # e.g. "OJB"
     ENVISION_PASS = os.getenv("ENVISION_PASS")   # e.g. "********"
 

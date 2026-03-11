@@ -81,6 +81,17 @@ class SyncFlightState(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
+
+class ManifestUploadState(db.Model):
+    __tablename__ = "manifest_upload_state"
+
+    id = db.Column(db.Integer, primary_key=True)
+    apg_plan_id = db.Column(db.Integer, unique=True, index=True, nullable=False)
+    upload_count = db.Column(db.Integer, default=0, nullable=False)
+    last_doc_id = db.Column(db.String(64), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
 # NEW: simple key/value schedule settings (singleton row: id=1)
 class AppConfig(db.Model):
     __tablename__ = "app_config"

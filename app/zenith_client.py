@@ -76,12 +76,13 @@ def fetch_dcs_for_flight(
     airline_designator: str,       # e.g. '3C'
     flight_number: str,            # e.g. '702'
     only_status: bool = True,
+    arr_airport: str | None = None,
 ) -> dict:
     _require_cfg(["PROD_DCS_API_BASE", "DCS_API_FLIGHTS_PATH", "PROD_DCS_API_KEY"])
 
     base = current_app.config["PROD_DCS_API_BASE"].rstrip("/")
     path = current_app.config["DCS_API_FLIGHTS_PATH"]
-    url  = f"{base}{path}"
+    url = f"{base}{path}"
 
     payload = {
         "DepartureAirport": (dep_airport or "").upper(),
@@ -93,22 +94,24 @@ def fetch_dcs_for_flight(
         "OnlyDCSStatus": bool(only_status),
         "ApiKey": current_app.config["PROD_DCS_API_KEY"],
     }
-
+    if arr_airport:
+        payload["ArrivalAirport"] = (arr_airport or "").upper()
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
 
-    # 🔍 Debug logging (mask API key)
-    safe_payload = dict(payload)
-    safe_payload["ApiKey"] = "****"  # don’t log real key
-    current_app.logger.info("[DCS] FullPassengerList POST %s payload=%s", url, safe_payload)
+    if bool(current_app.config.get("LOG_DCS_CALLS", False)):
+        safe_payload = dict(payload)
+        safe_payload["ApiKey"] = "****"
+        current_app.logger.info("[DCS] FullPassengerList POST %s payload=%s", url, safe_payload)
 
     r = requests.post(url, json=payload, headers=headers, timeout=60)
 
     if not r.ok:
-        current_app.logger.error(
-            "[DCS] FullPassengerList error status=%s body=%s",
-            r.status_code,
-            r.text[:2000],
-        )
+        if bool(current_app.config.get("LOG_DCS_CALLS", False)):
+            current_app.logger.error(
+                "[DCS] FullPassengerList error status=%s body=%s",
+                r.status_code,
+                r.text[:2000],
+            )
         r.raise_for_status()
 
     return r.json()
@@ -137,3 +140,4 @@ def _debug_call(
             **({"Origin": dep} if dep else {}),
         },
     }
+

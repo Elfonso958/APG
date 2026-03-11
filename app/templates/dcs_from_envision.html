@@ -505,6 +505,29 @@
      data-env-crew-url="{{ url_for('api.api_envision_flight_crew') }}">
 </div>
 
+<!-- Manifest status mode chooser -->
+<div class="modal fade" id="manifestStatusModal" tabindex="-1" aria-labelledby="manifestStatusModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="manifestStatusModalLabel">Preview Manifest</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        Choose passenger status filter:
+      </div>
+      <div class="modal-footer">
+        <button type="button" id="btn-manifest-all-status" class="btn btn-outline-secondary">
+          Include All Status
+        </button>
+        <button type="button" id="btn-manifest-exclude-booked" class="btn btn-primary">
+          Exclude Booked
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
 {% endblock %}
 
 {% block head_extra %}

@@ -1,11 +1,11 @@
 ﻿import os
-from flask import Blueprint, request, abort, send_file, make_response, current_app, jsonify, Response, render_template
+from flask import Blueprint, request, abort, send_file, make_response, current_app, jsonify, Response, render_template, session
 from datetime import datetime, timezone, timedelta, date
 from . import db
 import requests
 from sqlalchemy import func
 from zoneinfo import ZoneInfo
-from .models import SyncRun, SyncFlightLog, AppConfig
+from .models import SyncRun, SyncFlightLog, SyncFlightState, AppConfig, ManifestUploadState
 from .helpers_manifest import _seat_sort_key, _format_ssrs, _calc_age, _parse_dcs_dob, generate_manifest_pdf_from_html, generate_pdf_modern
 
 from .sync.envision_apg_sync import (
@@ -17,12 +17,35 @@ from .sync.envision_apg_sync import (
     apg_plan_get,
     envision_update_flight_times,
     envision_get_flight_times,
+    envision_get_flights,
     envision_authenticate,
     envision_put_delays,
+    envision_change_registration,
+    envision_cancel_flight,
+    envision_divert_flight,
+    envision_get_delay,
+    envision_put_delay,
+    envision_post_delay,
+    envision_delete_delay,
     apg_upload_manifest_pdf,
     PAX_STD_WEIGHTS_KG,
     fetch_envision_crew_for_apg,
-    envision_get_flight_crew
+    envision_get_flight_crew,
+    envision_get_crew_position_setups,
+    envision_get_crew_position_setup_items,
+    envision_get_line_registrations,
+    envision_get_flight_notes,
+    envision_post_flight_note,
+    envision_put_flight_note,
+    envision_get_flight_types,
+    envision_change_type,
+    envision_get_flight_passengers,
+    envision_put_flight_passengers,
+    is_dcs_passenger_boarded_or_flown,
+    normalise_pax_type,
+    get_envision_environment,
+    set_envision_environment,
+    ENVISION_BASE
 
 )
 import logging
@@ -31,15 +54,22 @@ from .zenith_client import fetch_dcs_for_flight
 
 api_bp = Blueprint("api", __name__)
 
+
+@api_bp.before_app_request
+def _apply_session_envision_environment():
+    try:
+        chosen = session.get("envision_env")
+        if chosen:
+            set_envision_environment(str(chosen))
+    except Exception:
+        current_app.logger.exception("Failed to apply session Envision environment")
+
 # APG (RocketRoute / FlightPlan API)
 APG_BASE = os.getenv("APG_BASE", "https://fly.rocketroute.com/api")
 APG_APP_KEY = os.getenv("APG_APP_KEY", "")             # Provisioned by APG
 APG_API_VERSION = os.getenv("APG_API_VERSION", "1.18") # Must be sent on each call
 APG_EMAIL = os.getenv("APG_EMAIL", "")                 # API user email (from APG)
 APG_PASSWORD = os.getenv("APG_PASSWORD", "")           # API user password (from APG)
-ENVISION_BASE = os.getenv("ENVISION_BASE", "https://<envision-host>/v1")
-ENVISION_USER = os.getenv("ENVISION_USER", "")   # e.g. "OJB"
-ENVISION_PASS = os.getenv("ENVISION_PASS", "")   # e.g. "********"
 NZ_TZ  = ZoneInfo("Pacific/Auckland")
 UTC_TZ = ZoneInfo("UTC")
 
@@ -269,6 +299,343 @@ def api_set_schedule():
 
     return {"ok": True, "auto_enabled": cfg.auto_enabled, "interval_sec": cfg.interval_sec}
 
+
+def _list_from_envision_payload(payload):
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        for k in ("flights", "items", "data"):
+            v = payload.get(k)
+            if isinstance(v, list):
+                return v
+            if isinstance(v, dict):
+                for kk in ("flights", "items"):
+                    vv = v.get(kk)
+                    if isinstance(vv, list):
+                        return vv
+    return []
+
+
+def _parse_envision_dt_utc(value):
+    if not value:
+        return None
+    try:
+        s = str(value).strip()
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _split_flight_designator_and_number(fnum: str) -> tuple[str, str]:
+    txt = str(fnum or "").strip().upper().replace(" ", "")
+    # Supports designators like "3C" (digit+letter), not only letters.
+    m = re.match(r"^(.+?)(\d+)$", txt)
+    if m:
+        return m.group(1), m.group(2)
+    return "", txt
+
+
+def _is_dcs_passenger_flown(p: dict) -> bool:
+    raw = (
+        p.get("DCSStatus")
+        or p.get("DcsStatus")
+        or p.get("Status")
+        or p.get("status")
+        or p.get("IataStatus")
+        or p.get("StatusCode")
+        or ""
+    )
+    s = str(raw).strip().upper()
+    if not s:
+        return False
+    if "FLOWN" in s:
+        return True
+    return s in {"F", "FLW", "FLWN"}
+
+
+def _count_passengers_for_envision(passengers: list[dict], flown_only: bool = False) -> dict:
+    adult = child = infant = male = female = 0
+    for p in passengers if isinstance(passengers, list) else []:
+        if flown_only and not _is_dcs_passenger_flown(p):
+            continue
+        ptype = normalise_pax_type(p.get("PassengerType"))
+        if ptype == "INF":
+            infant += 1
+        elif ptype == "CH":
+            child += 1
+        else:
+            adult += 1
+
+        g = str(p.get("Gender") or "").strip().upper()
+        if g.startswith("M"):
+            male += 1
+        elif g.startswith("F"):
+            female += 1
+
+    total = adult + child + infant
+    return {
+        "total": total,
+        "adult": adult,
+        "male": male,
+        "female": female,
+        "child": child,
+        "infant": infant,
+    }
+
+
+def _build_envision_pax_payload(flight_id: int, expected_counts: dict, actual_counts: dict | None, existing_actuals: dict) -> dict:
+    payload = {
+        "flightId": int(flight_id),
+        "expected": int(expected_counts.get("total", 0)),
+        "adult": int(existing_actuals.get("adult", 0)),
+        "male": int(existing_actuals.get("male", 0)),
+        "female": int(existing_actuals.get("female", 0)),
+        "child": int(existing_actuals.get("child", 0)),
+        "infant": int(existing_actuals.get("infant", 0)),
+        "expectedAdult": int(expected_counts.get("adult", 0)),
+        "expectedMale": int(expected_counts.get("male", 0)),
+        "expectedFemale": int(expected_counts.get("female", 0)),
+        "expectedChild": int(expected_counts.get("child", 0)),
+        "expectedInfant": int(expected_counts.get("infant", 0)),
+    }
+    if actual_counts:
+        payload.update({
+            "adult": int(actual_counts.get("adult", 0)),
+            "male": int(actual_counts.get("male", 0)),
+            "female": int(actual_counts.get("female", 0)),
+            "child": int(actual_counts.get("child", 0)),
+            "infant": int(actual_counts.get("infant", 0)),
+        })
+    return payload
+
+
+def _enable_passenger_sync_log_focus():
+    """
+    Silence noisy non-passenger loggers so debug output is focused on pax sync.
+    """
+    quiet = [
+        "werkzeug",
+        "apscheduler",
+        "zenith_client",
+        "dcs_api_client",
+        "dcs_sync",
+        "urllib3",
+        "requests",
+    ]
+    old_levels = {}
+    for name in quiet:
+        lg = logging.getLogger(name)
+        old_levels[name] = lg.level
+        lg.setLevel(logging.CRITICAL)
+
+    root_logger = logging.getLogger()
+    old_root = root_logger.level
+    root_logger.setLevel(logging.CRITICAL)
+
+    app_logger = current_app.logger
+    old_app = app_logger.level
+    app_logger.setLevel(logging.CRITICAL)
+
+    def _restore():
+        for name, lvl in old_levels.items():
+            logging.getLogger(name).setLevel(lvl)
+        root_logger.setLevel(old_root)
+        app_logger.setLevel(old_app)
+
+    return _restore
+
+
+def _manifest_upload_doc_id(resp: dict | None) -> str | None:
+    if not isinstance(resp, dict):
+        return None
+    data = resp.get("data")
+    if isinstance(data, dict):
+        if data.get("doc_id") not in (None, ""):
+            return str(data.get("doc_id"))
+        docs = data.get("docs")
+        if isinstance(docs, list) and docs:
+            first = docs[0] or {}
+            if isinstance(first, dict) and first.get("doc_id") not in (None, ""):
+                return str(first.get("doc_id"))
+    return None
+
+
+def _peek_manifest_upload_version(plan_id: int) -> int:
+    state = ManifestUploadState.query.filter_by(apg_plan_id=int(plan_id)).first()
+    current = int(state.upload_count or 0) if state else 0
+    return current + 1
+
+
+def _record_manifest_upload_success(plan_id: int, doc_id: str | None = None) -> int:
+    state = ManifestUploadState.query.filter_by(apg_plan_id=int(plan_id)).first()
+    now = datetime.utcnow()
+    if state is None:
+        state = ManifestUploadState(
+            apg_plan_id=int(plan_id),
+            upload_count=1,
+            last_doc_id=doc_id,
+            created_at=now,
+            updated_at=now,
+        )
+        db.session.add(state)
+    else:
+        state.upload_count = int(state.upload_count or 0) + 1
+        state.last_doc_id = doc_id
+        state.updated_at = now
+    db.session.commit()
+    return int(state.upload_count or 0)
+
+
+@api_bp.route("/envision/environment", methods=["GET", "POST"])
+def api_envision_environment():
+    if request.method == "GET":
+        return jsonify({"ok": True, "environment": get_envision_environment()})
+
+    data = request.get_json(silent=True) or {}
+    env_name = str(data.get("environment") or data.get("env") or "").strip().lower()
+    if env_name not in {"base", "live", "prod", "test", "uat", "staging"}:
+        return jsonify({"ok": False, "error": "environment must be 'base' or 'test'"}), 400
+
+    try:
+        effective = "test" if env_name in {"test", "uat", "staging"} else "base"
+        session["envision_env"] = effective
+        env = set_envision_environment(effective)
+        return jsonify({"ok": True, "environment": env})
+    except Exception as exc:
+        current_app.logger.exception("Failed to switch Envision environment")
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+def run_envision_passenger_sync_once() -> dict:
+    """
+    Update Envision flight passenger counts from DCS.
+    - Window: flights departing between now+24h and now+48h.
+    - Update expected counts always.
+    - Update actual counts only if DCS passenger status is flown.
+    """
+    restore_logs = _enable_passenger_sync_log_focus()
+    try:
+        auth = envision_authenticate()
+        token = auth["token"]
+
+        now_utc = datetime.now(timezone.utc)
+        date_from_utc = now_utc + timedelta(hours=24)
+        date_to_utc = now_utc + timedelta(hours=48)
+
+        env_payload = envision_get_flights(token, date_from_utc, date_to_utc)
+        flights = _list_from_envision_payload(env_payload)
+        print(f"[PAX_SYNC] start window={date_from_utc.isoformat()} -> {date_to_utc.isoformat()} envision_flights={len(flights)}")
+
+        updates = []
+        ok_count = 0
+        fail_count = 0
+
+        for f in flights:
+            flight_id = f.get("id")
+            dep = (f.get("departurePlaceDescription") or "").strip().upper()
+            fnum = f.get("flightNumberDescription") or ""
+            if not flight_id or not dep or not fnum:
+                continue
+
+            designator, number = _split_flight_designator_and_number(str(fnum))
+            if not number:
+                continue
+
+            dep_dt_utc = _parse_envision_dt_utc(f.get("departureScheduled") or f.get("departureEstimate"))
+            if not dep_dt_utc:
+                continue
+            # DCS + Envision both operate on UTC timestamps for this sync flow.
+            # Use UTC departure date to avoid day-boundary mismatches.
+            dep_utc_date = dep_dt_utc.date().isoformat()
+
+            try:
+                dcs = fetch_dcs_for_flight(dep, dep_utc_date, designator, number, False)
+                dcs_flights = dcs.get("Flights") if isinstance(dcs, dict) else []
+                pax = (dcs_flights[0].get("Passengers") or []) if dcs_flights else []
+
+                expected_counts = _count_passengers_for_envision(pax, flown_only=False)
+                flown_counts = _count_passengers_for_envision(pax, flown_only=True)
+                has_flown = int(flown_counts.get("total", 0)) > 0
+
+                try:
+                    existing = envision_get_flight_passengers(token, int(flight_id)) or {}
+                except Exception:
+                    existing = {}
+
+                existing_actuals = {
+                    "adult": int(existing.get("adult") or 0),
+                    "male": int(existing.get("male") or 0),
+                    "female": int(existing.get("female") or 0),
+                    "child": int(existing.get("child") or 0),
+                    "infant": int(existing.get("infant") or 0),
+                }
+
+                payload = _build_envision_pax_payload(
+                    int(flight_id),
+                    expected_counts,
+                    flown_counts if has_flown else None,
+                    existing_actuals,
+                )
+                print(
+                    f"[PAX_SYNC] PUT /Flights/{int(flight_id)}/Passengers "
+                    f"flight={str(fnum)} dep={dep} expected={expected_counts} "
+                    f"actual_mode={'flown' if has_flown else 'preserve'} payload={payload}"
+                )
+                put_resp = envision_put_flight_passengers(token, int(flight_id), payload)
+                print(f"[PAX_SYNC] PUT success flightId={int(flight_id)} response={put_resp}")
+                ok_count += 1
+                updates.append({
+                    "ok": True,
+                    "flightId": int(flight_id),
+                    "flightNumber": str(fnum),
+                    "dep": dep,
+                    "expected": expected_counts,
+                    "actualUpdated": has_flown,
+                    "actual": flown_counts if has_flown else existing_actuals,
+                    "response": put_resp,
+                })
+            except Exception as e:
+                fail_count += 1
+                print(f"[PAX_SYNC] flight update failed flightId={flight_id} flight={str(fnum)} dep={dep} error={e}")
+                updates.append({
+                    "ok": False,
+                    "flightId": int(flight_id) if str(flight_id).isdigit() else flight_id,
+                    "flightNumber": str(fnum),
+                    "dep": dep,
+                    "error": str(e),
+                })
+
+        result = {
+            "ok": fail_count == 0,
+            "window": {
+                "fromUtc": date_from_utc.isoformat(),
+                "toUtc": date_to_utc.isoformat(),
+            },
+            "updated": ok_count,
+            "failed": fail_count,
+            "updates": updates,
+        }
+        print(f"[PAX_SYNC] done updated={ok_count} failed={fail_count}")
+        return result
+    finally:
+        restore_logs()
+
+
+@api_bp.post("/envision/passenger_sync/run")
+@api_bp.post("/api/envision/passenger_sync/run")  # legacy path
+def api_envision_passenger_sync_run():
+    try:
+        res = run_envision_passenger_sync_once()
+        return jsonify(res), (200 if res.get("ok") else 207)
+    except Exception as e:
+        current_app.logger.exception("Passenger sync run failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
 @api_bp.post("/dcs/push_to_apg")
 def api_dcs_push_to_apg():
     """
@@ -367,6 +734,7 @@ def api_dcs_push_to_apg():
     manifest_resp = None
     manifest_error = None
     plan_version = None
+    manifest_version = None
 
     if not preview_only:
         # Derive a version from APG response if possible
@@ -395,6 +763,7 @@ def api_dcs_push_to_apg():
                 raw_number=flight_no,
                 reg=reg or "",
                 envision_flight_id=envision_flight_id,
+                pax_override=pax_list,
             )
         except Exception as e:
             current_app.logger.exception(
@@ -423,7 +792,8 @@ def api_dcs_push_to_apg():
             flight_code = f"{designator}{flight_no}".upper()
             route_str   = f"{dep}-{ades or 'UNK'}"
             date_local  = nz_day.isoformat()
-            filename    = f"{flight_code} - {route_str} - {date_local} v{plan_version}.pdf"
+            manifest_version = _peek_manifest_upload_version(int(plan_id))
+            filename    = f"{flight_code} - {route_str} - {date_local} v{manifest_version}.pdf"
 
             try:
                 manifest_resp = apg_upload_manifest_pdf(
@@ -431,6 +801,10 @@ def api_dcs_push_to_apg():
                     plan_id=int(plan_id),
                     pdf_bytes=manifest_pdf,
                     filename=filename,
+                )
+                manifest_version = _record_manifest_upload_success(
+                    int(plan_id),
+                    _manifest_upload_doc_id(manifest_resp),
                 )
             except Exception as e:
                 current_app.logger.exception("APG manifest upload failed")
@@ -458,6 +832,7 @@ def api_dcs_push_to_apg():
         "manifest_uploaded": manifest_uploaded,
         "manifest_doc_id": doc_id,
         "manifest_error": manifest_error,
+        "manifest_version": manifest_version,
         "plan_version": plan_version,
     })
 
@@ -811,6 +1186,222 @@ def api_dcs_save_times():
     }), 200
 
 
+def _preserve_change_type_crew_positions(token: str, flight_id: int, new_type_id: int) -> tuple[list[dict], dict]:
+    """
+    Build crewPositions payload for ChangeType by retaining only crew that matches
+    the crew setup for the target journey/type + current model/reg.
+    """
+    base = envision_get_flight_times(token, flight_id) or {}
+    model_id = int(base.get("flightModelId") or 0)
+    reg_id = int(base.get("flightRegistrationId") or 0)
+
+    setups = envision_get_crew_position_setups(token)
+    items = envision_get_crew_position_setup_items(token)
+    existing_crew = envision_get_flight_crew(token, flight_id)
+
+    matching = [
+        s for s in (setups if isinstance(setups, list) else [])
+        if int(s.get("journeyTypeId") or 0) == int(new_type_id)
+        and int(s.get("modelId") or 0) == model_id
+    ]
+    exact_setup = next((s for s in matching if int(s.get("regId") or 0) == reg_id and reg_id > 0), None)
+    fallback_setup = next((s for s in matching if int(s.get("regId") or 0) == 0), None)
+    chosen_setup = exact_setup or fallback_setup
+
+    def normalize_all_current():
+        out = []
+        for c in existing_crew if isinstance(existing_crew, list) else []:
+            employee_id = c.get("employeeId")
+            crew_position_id = c.get("crewPositionId") or c.get("positionId")
+            if employee_id in (None, "") or crew_position_id in (None, ""):
+                continue
+            try:
+                out.append({
+                    "id": int(c.get("id") or 0),
+                    "employeeId": int(employee_id),
+                    "crewPositionId": int(crew_position_id),
+                })
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    if not chosen_setup:
+        return normalize_all_current(), {
+            "mode": "fallback_all",
+            "modelId": model_id,
+            "regId": reg_id,
+            "newTypeId": int(new_type_id),
+            "setupId": None,
+        }
+
+    setup_id = int(chosen_setup.get("id") or 0)
+    setup_items = [
+        i for i in (items if isinstance(items, list) else [])
+        if int(i.get("crewPositionSetupId") or 0) == setup_id
+    ]
+
+    allowed_counts: dict[int, int] = {}
+    for it in setup_items:
+        try:
+            pos_id = int(it.get("crewPositionId") or 0)
+            cnt = int(it.get("crewCount") or 0)
+        except (TypeError, ValueError):
+            continue
+        if pos_id <= 0 or cnt <= 0:
+            continue
+        allowed_counts[pos_id] = allowed_counts.get(pos_id, 0) + cnt
+
+    used_counts: dict[int, int] = {}
+    kept = []
+    for c in existing_crew if isinstance(existing_crew, list) else []:
+        employee_id = c.get("employeeId")
+        crew_position_id = c.get("crewPositionId") or c.get("positionId")
+        if employee_id in (None, "") or crew_position_id in (None, ""):
+            continue
+        try:
+            pos_id = int(crew_position_id)
+            emp_id = int(employee_id)
+            row_id = int(c.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+
+        max_for_pos = int(allowed_counts.get(pos_id, 0))
+        if max_for_pos <= 0:
+            continue
+        if used_counts.get(pos_id, 0) >= max_for_pos:
+            continue
+        used_counts[pos_id] = used_counts.get(pos_id, 0) + 1
+        kept.append({
+            "id": row_id,
+            "employeeId": emp_id,
+            "crewPositionId": pos_id,
+        })
+
+    return kept, {
+        "mode": "filtered_by_setup",
+        "modelId": model_id,
+        "regId": reg_id,
+        "newTypeId": int(new_type_id),
+        "setupId": setup_id,
+        "allowedCounts": allowed_counts,
+        "keptCount": len(kept),
+        "existingCount": len(existing_crew if isinstance(existing_crew, list) else []),
+    }
+
+
+@api_bp.post("/envision/flight_action")
+def api_envision_flight_action():
+    data = request.get_json(force=True) or {}
+    action = str(data.get("action") or "").strip().lower()
+    payload = data.get("payload") or {}
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "payload must be an object"}), 400
+
+    flight_id_raw = data.get("flight_id") or payload.get("flightId") or payload.get("id")
+    if flight_id_raw in (None, ""):
+        return jsonify({"ok": False, "error": "Missing flight_id"}), 400
+    try:
+        flight_id = int(flight_id_raw)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Invalid flight_id"}), 400
+
+    try:
+        auth = envision_authenticate()
+        token = auth["token"]
+    except Exception as exc:
+        current_app.logger.exception("api_envision_flight_action: Envision auth failed")
+        return jsonify({"ok": False, "error": f"Envision auth failed: {exc}"}), 502
+
+    try:
+        if action == "update_flight":
+            base = envision_get_flight_times(token, flight_id)
+            update_body = {
+                "id": int(base.get("id") or flight_id),
+                "flightStatusId": payload.get("flightStatusId", base.get("flightStatusId") or 0),
+                "departureEstimate": payload.get("departureEstimate", base.get("departureEstimate")),
+                "departureActual": payload.get("departureActual", base.get("departureActual")),
+                "departureTakeOff": payload.get("departureTakeOff", base.get("departureTakeOff")),
+                "arrivalEstimate": payload.get("arrivalEstimate", base.get("arrivalEstimate")),
+                "arrivalLanded": payload.get("arrivalLanded", base.get("arrivalLanded")),
+                "arrivalActual": payload.get("arrivalActual", base.get("arrivalActual")),
+                "plannedFlightTime": payload.get("plannedFlightTime", base.get("plannedFlightTime") or 0),
+                "calculatedTakeOffTime": payload.get("calculatedTakeOffTime", base.get("calculatedTakeOffTime")),
+            }
+            result = envision_update_flight_times(token, flight_id, update_body)
+
+        elif action == "change_registration":
+            body = dict(payload)
+            body["flightId"] = int(body.get("flightId") or flight_id)
+            result = envision_change_registration(token, flight_id, body)
+
+        elif action == "change_type":
+            body = dict(payload)
+            body["flightId"] = int(body.get("flightId") or flight_id)
+            type_id = body.get("typeId") if body.get("typeId") not in (None, "") else body.get("type_id")
+            if type_id in (None, ""):
+                return jsonify({"ok": False, "error": "typeId is required for change_type"}), 400
+            body["typeId"] = int(type_id)
+            crew_positions = body.get("crewPositions")
+            if isinstance(crew_positions, list) and crew_positions:
+                body["crewPositions"] = crew_positions
+            else:
+                kept, crew_diag = _preserve_change_type_crew_positions(token, flight_id, int(type_id))
+                body["crewPositions"] = kept
+            result = envision_change_type(token, flight_id, body)
+            if "crew_diag" in locals():
+                if isinstance(result, dict):
+                    result["crewFilter"] = crew_diag
+
+        elif action == "cancel":
+            body = dict(payload)
+            body["flightId"] = int(body.get("flightId") or flight_id)
+            result = envision_cancel_flight(token, flight_id, body)
+
+        elif action == "divert":
+            body = dict(payload)
+            body["flightId"] = int(body.get("flightId") or flight_id)
+            result = envision_divert_flight(token, flight_id, body)
+
+        elif action == "delay_get":
+            delay_id_raw = data.get("delay_id") or payload.get("id") or payload.get("delayId")
+            if delay_id_raw in (None, ""):
+                return jsonify({"ok": False, "error": "delay_id is required for delay_get"}), 400
+            result = envision_get_delay(token, flight_id, int(delay_id_raw))
+
+        elif action == "delay_put":
+            delay_id_raw = data.get("delay_id") or payload.get("id") or payload.get("delayId")
+            if delay_id_raw in (None, ""):
+                return jsonify({"ok": False, "error": "delay_id is required for delay_put"}), 400
+            body = dict(payload)
+            body["id"] = int(body.get("id") or delay_id_raw)
+            body["flightId"] = int(body.get("flightId") or flight_id)
+            result = envision_put_delay(token, flight_id, int(delay_id_raw), body)
+
+        elif action == "delay_post":
+            delay_id_raw = data.get("delay_id") or payload.get("id") or payload.get("delayId")
+            body = dict(payload)
+            body["flightId"] = int(body.get("flightId") or flight_id)
+            delay_id = int(delay_id_raw) if delay_id_raw not in (None, "") else None
+            result = envision_post_delay(token, flight_id, body, delay_id=delay_id)
+
+        else:
+            return jsonify({"ok": False, "error": f"Unsupported action '{action}'"}), 400
+
+    except requests.HTTPError as http_err:
+        resp = http_err.response
+        body = (resp.text or "")[:2000] if resp is not None else ""
+        return jsonify({
+            "ok": False,
+            "error": f"Envision HTTP {resp.status_code if resp is not None else '?'}",
+            "body": body,
+        }), 502
+    except Exception as exc:
+        current_app.logger.exception("api_envision_flight_action failed action=%s flight_id=%s", action, flight_id)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+    return jsonify({"ok": True, "action": action, "flight_id": flight_id, "result": result}), 200
+
+
 def _combine_date_and_hm(base_iso: str | None, hm: str | None) -> str | None:
     """
     base_iso: scheduled time from Envision, e.g. '2025-11-20T17:45:00.000Z'
@@ -866,6 +1457,9 @@ def api_dcs_manifest_preview():
     except (TypeError, ValueError):
         envision_flight_id = None
 
+    status_mode = (data.get("status_mode") or "exclude_booked").strip().lower()
+    include_all_status = status_mode == "all"
+
     try:
         html, _flight_ctx = _build_manifest_html_and_ctx(
             dep=data.get("dep") or "",
@@ -875,6 +1469,8 @@ def api_dcs_manifest_preview():
             raw_number=data.get("number") or data.get("flight_number") or "",
             reg=data.get("reg") or "",
             envision_flight_id=envision_flight_id,
+            pax_override=data.get("pax_list") or [],
+            include_all_status=include_all_status,
         )
     except Exception as e:
         current_app.logger.exception("Manifest preview failed: %s", e)
@@ -891,6 +1487,8 @@ def _build_manifest_html_and_ctx(
     raw_number: str,
     reg: str,
     envision_flight_id: int | None,
+    pax_override: list[dict] | None = None,
+    include_all_status: bool = False,
 ) -> tuple[str, dict]:
     """
     Core logic to fetch DCS + Envision crew and render manifest.html.
@@ -913,10 +1511,166 @@ def _build_manifest_html_and_ctx(
     if not number:
         raise ValueError("Missing flight number for manifest build")
 
+    def _pick_dcs_flight(rows: list[dict], expect_origin: str, expect_dest: str) -> dict | None:
+        expect_origin = (expect_origin or "").upper()
+        expect_dest = (expect_dest or "").upper()
+        matched = None
+        for row in rows or []:
+            if (row.get("Origin") or "").upper() == expect_origin and (row.get("Destination") or "").upper() == expect_dest:
+                matched = row
+                break
+        if matched is not None:
+            if (matched.get("Passengers") or []):
+                return matched
+            # Through services can place pax on a longer-sector record.
+            richest = max(rows or [], key=lambda r: len((r or {}).get("Passengers") or []), default=matched)
+            if (richest or {}).get("Passengers"):
+                return richest
+            return matched
+        return (rows or [None])[0]
+
+    def _find_previous_manifest_sector() -> tuple[str | None, datetime | None]:
+        full_no = f"{designator}{number}".replace(" ", "").upper()
+        day = None
+        try:
+            day = date.fromisoformat(date_str) if date_str else None
+        except Exception:
+            day = None
+
+        current_row = None
+        if envision_flight_id is not None:
+            current_row = SyncFlightLog.query.filter(
+                SyncFlightLog.envision_flight_id == str(envision_flight_id)
+            ).order_by(SyncFlightLog.eobt.desc()).first()
+
+        base_q = SyncFlightLog.query.filter(
+            SyncFlightLog.flight_no == full_no,
+            SyncFlightLog.ades == dep,
+        )
+        if reg:
+            base_q = base_q.filter(SyncFlightLog.reg == reg)
+        if day is not None:
+            base_q = base_q.filter(func.date(SyncFlightLog.eobt) == day)
+        if current_row is not None and current_row.eobt is not None:
+            base_q = base_q.filter(SyncFlightLog.eobt < current_row.eobt)
+
+        prev_row = base_q.order_by(SyncFlightLog.eobt.desc()).first()
+        if prev_row is None and day is not None:
+            fallback_q = SyncFlightLog.query.filter(
+                SyncFlightLog.flight_no == full_no,
+                SyncFlightLog.ades == dep,
+                func.date(SyncFlightLog.eobt) == day,
+            )
+            prev_row = fallback_q.order_by(SyncFlightLog.eobt.desc()).first()
+
+        if prev_row is None:
+            return None, None
+        return (prev_row.adep or "").upper() or None, prev_row.eobt
+
+    def _candidate_previous_manifest_sectors() -> list[tuple[str, datetime | None]]:
+        full_no = f"{designator}{number}".replace(" ", "").upper()
+        day = None
+        try:
+            day = date.fromisoformat(date_str) if date_str else None
+        except Exception:
+            day = None
+
+        current_row = None
+        if envision_flight_id is not None:
+            current_row = SyncFlightLog.query.filter(
+                SyncFlightLog.envision_flight_id == str(envision_flight_id)
+            ).order_by(SyncFlightLog.eobt.desc()).first()
+
+        q = SyncFlightLog.query.filter(
+            SyncFlightLog.flight_no == full_no,
+            SyncFlightLog.ades == dep,
+        )
+        if reg:
+            q = q.filter(SyncFlightLog.reg == reg)
+        if day is not None:
+            q = q.filter(func.date(SyncFlightLog.eobt) == day)
+        if current_row is not None and current_row.eobt is not None:
+            q = q.filter(SyncFlightLog.eobt < current_row.eobt)
+
+        rows = q.order_by(SyncFlightLog.eobt.desc()).all() or []
+        out: list[tuple[str, datetime | None]] = []
+        seen: set[str] = set()
+        for row in rows:
+            pdep = (row.adep or "").upper().strip()
+            if not pdep or pdep == dep or pdep in seen:
+                continue
+            seen.add(pdep)
+            out.append((pdep, row.eobt))
+        return out
+
+    def _build_manifest_passenger(r: dict, origin_code: str, dest_code: str) -> dict | None:
+        if not include_all_status and not is_dcs_passenger_boarded_or_flown(r):
+            return None
+
+        dob, dob_fmt = _parse_dcs_dob(r.get("DateOfBirth"))
+        age = _calc_age(dob)
+
+        raw_ptype = (r.get("PassengerType") or "").strip().upper()
+        ptype  = normalise_pax_type(raw_ptype)
+        gender = (r.get("Gender") or "").strip().upper()
+        ssrs   = r.get("Ssrs") or []
+
+        has_um_code = any(
+            (s.get("Code") or "").strip().upper().startswith("UM")
+            for s in ssrs
+        )
+        has_um_text = any(
+            "UMNR" in (s.get("FreeText") or "").strip().upper()
+            for s in ssrs
+        )
+        is_um = raw_ptype in {"UM", "UMN", "UMNR"} or ptype == "UMNR" or has_um_code or has_um_text
+        weight_key = "UMNR" if is_um else (ptype or "AD")
+
+        pax_weight_kg = float(
+            PAX_STD_WEIGHTS_KG.get(
+                weight_key,
+                PAX_STD_WEIGHTS_KG.get("AD", 0.0)
+            )
+        )
+
+        bag_weight = float(r.get("BaggageWeight") or 0.0)
+        bag_pcs    = 1 if bag_weight > 0 else 0
+
+        is_infant = ptype == "INF"
+        is_child  = ptype == "CHD" or is_um
+        is_adult  = not (is_infant or is_child)
+
+        return {
+            "seat": r.get("Seat") or "",
+            "name": " ".join(
+                x for x in [
+                    (r.get("NamePrefix") or "").strip(),
+                    (r.get("GivenName") or "").strip(),
+                    (r.get("Surname") or "").strip(),
+                ] if x
+            ),
+            "dob": dob_fmt,
+            "age": age,
+            "pnr": r.get("BookingReferenceID") or "",
+            "ssrs": _format_ssrs(ssrs),
+            "origin": (r.get("__manifest_origin") or origin_code or dep).upper(),
+            "dest": (r.get("__manifest_dest") or dest_code or ades).upper(),
+            "ptype": ptype,
+            "gender": gender,
+            "pax_weight_kg": pax_weight_kg,
+            "bags_pcs": bag_pcs,
+            "bags_kg": bag_weight,
+            "is_adult": is_adult,
+            "is_child": is_child,
+            "is_infant": is_infant,
+            "is_um": is_um,
+        }
+
     # 1) Fetch from DCS – we want full passenger list
     # First try with DCS-only status; if empty, fall back to full list.
     dcs_json = fetch_dcs_for_flight(
         dep_airport=dep,
+        arr_airport=ades,
         flight_date=date_str,
         airline_designator=designator,
         flight_number=number,
@@ -925,11 +1679,12 @@ def _build_manifest_html_and_ctx(
 
     flights = dcs_json.get("Flights") or []
     if flights:
-        dcs_f = flights[0]
+        dcs_f = _pick_dcs_flight(flights, dep, ades)
         if not (dcs_f.get("Passengers") or []):
             # No pax with OnlyDCSStatus=True, retry with full list.
             dcs_json = fetch_dcs_for_flight(
                 dep_airport=dep,
+                arr_airport=ades,
                 flight_date=date_str,
                 airline_designator=designator,
                 flight_number=number,
@@ -958,68 +1713,120 @@ def _build_manifest_html_and_ctx(
             "date": date_str,
             "reg": reg,
         }
-    dcs_f = flights[0]
+    dcs_f = _pick_dcs_flight(flights, dep, ades) or flights[0]
 
-    # 2) Build passenger list (unchanged from your route)
+    # 2) Build passenger list
+    # If the UI already supplied a merged pax list (through-sectors included),
+    # prefer that to keep manifest aligned with the Gantt card totals.
+    raw_passengers = (pax_override or []) if isinstance(pax_override, list) and pax_override else (dcs_f.get("Passengers", []) or [])
     passengers: list[dict] = []
-    for r in dcs_f.get("Passengers", []):
-        dob, dob_fmt = _parse_dcs_dob(r.get("DateOfBirth"))
-        age = _calc_age(dob)
-
-        ptype  = (r.get("PassengerType") or "").strip().upper()
-        gender = (r.get("Gender") or "").strip().upper()
-        ssrs   = r.get("Ssrs") or []
-
-        has_um_code = any(
-            (s.get("Code") or "").strip().upper().startswith("UM")
-            for s in ssrs
+    filtered_out_booked = 0
+    seen_manifest_keys: set[str] = set()
+    for r in raw_passengers:
+        manifest_pax = _build_manifest_passenger(
+            r,
+            dep,
+            ades,
         )
-        has_um_text = any(
-            "UMNR" in (s.get("FreeText") or "").strip().upper()
-            for s in ssrs
-        )
-        is_um = ptype in {"UM", "UMN", "UMNR"} or has_um_code or has_um_text
+        if manifest_pax is None:
+            filtered_out_booked += 1
+            continue
+        pax_key = f"{manifest_pax['pnr']}|{manifest_pax['seat']}|{manifest_pax['name']}".upper()
+        seen_manifest_keys.add(pax_key)
+        passengers.append(manifest_pax)
 
-        pax_weight_kg = float(
-            PAX_STD_WEIGHTS_KG.get(
-                ptype,
-                PAX_STD_WEIGHTS_KG.get("AD", 0.0)
-            )
-        )
+    if not (isinstance(pax_override, list) and pax_override):
+        prev_dep, prev_eobt = _find_previous_manifest_sector()
+        prev_candidates = _candidate_previous_manifest_sectors()
+        if prev_dep and prev_dep != dep and not any(p == prev_dep for p, _ in prev_candidates):
+            prev_candidates.insert(0, (prev_dep, prev_eobt))
 
-        bag_weight = float(r.get("BaggageWeight") or 0.0)
-        bag_pcs    = 1 if bag_weight > 0 else 0
+        for cand_dep, cand_eobt in prev_candidates:
+            if not cand_dep or cand_dep == dep:
+                continue
+            try:
+                upstream_json = fetch_dcs_for_flight(
+                    dep_airport=cand_dep,
+                    arr_airport=ades,
+                    flight_date=date_str,
+                    airline_designator=designator,
+                    flight_number=number,
+                    only_status=True,
+                )
+                upstream_flights = upstream_json.get("Flights") or []
+                upstream_f = _pick_dcs_flight(upstream_flights, cand_dep, ades)
+                if upstream_f and not (upstream_f.get("Passengers") or []):
+                    upstream_json = fetch_dcs_for_flight(
+                        dep_airport=cand_dep,
+                        arr_airport=ades,
+                        flight_date=date_str,
+                        airline_designator=designator,
+                        flight_number=number,
+                        only_status=False,
+                    )
+                    upstream_flights = upstream_json.get("Flights") or []
+                    upstream_f = _pick_dcs_flight(upstream_flights, cand_dep, ades)
 
-        is_infant = ptype in {"INF", "INFANT", "IN"}
-        is_child  = ptype in {"CHD", "CHILD", "C", "CNN"}
-        is_adult  = not (is_infant or is_child)
+                upstream_added = 0
+                for r in (upstream_f or {}).get("Passengers", []) or []:
+                    manifest_pax = _build_manifest_passenger(
+                        r,
+                        upstream_f.get("Origin") or cand_dep,
+                        upstream_f.get("Destination") or ades,
+                    )
+                    if manifest_pax is None:
+                        continue
+                    pax_key = f"{manifest_pax['pnr']}|{manifest_pax['seat']}|{manifest_pax['name']}".upper()
+                    if pax_key in seen_manifest_keys:
+                        continue
+                    seen_manifest_keys.add(pax_key)
+                    passengers.append(manifest_pax)
+                    upstream_added += 1
 
-        passengers.append({
-            "seat": r.get("Seat") or "",
-            "name": " ".join(
-                x for x in [
-                    (r.get("NamePrefix") or "").strip(),
-                    (r.get("GivenName") or "").strip(),
-                    (r.get("Surname") or "").strip(),
-                ] if x
-            ),
-            "dob": dob_fmt,
-            "age": age,
-            "pnr": r.get("BookingReferenceID") or "",
-            "ssrs": _format_ssrs(ssrs),
-
-            "ptype": ptype,
-            "gender": gender,
-            "pax_weight_kg": pax_weight_kg,
-            "bags_pcs": bag_pcs,
-            "bags_kg": bag_weight,
-            "is_adult": is_adult,
-            "is_child": is_child,
-            "is_infant": is_infant,
-            "is_um": is_um,
-        })
+                current_app.logger.info(
+                    "Manifest through-pax merge: flight=%s%s date=%s current=%s-%s upstream=%s-%s prior_eobt=%s added=%s",
+                    designator,
+                    number,
+                    date_str,
+                    dep,
+                    ades,
+                    cand_dep,
+                    ades,
+                    cand_eobt,
+                    upstream_added,
+                )
+            except Exception:
+                current_app.logger.exception(
+                    "Manifest through-pax merge failed for %s%s %s %s-%s via previous dep %s",
+                    designator,
+                    number,
+                    date_str,
+                    dep,
+                    ades,
+                    cand_dep,
+                )
 
     passengers.sort(key=lambda p: _seat_sort_key(p["seat"]))
+    status_counts: dict[str, int] = {}
+    for rp in raw_passengers:
+        sval = str(
+            rp.get("Status")
+            or rp.get("DCSStatus")
+            or rp.get("DcsStatus")
+            or ""
+        ).strip() or "<blank>"
+        status_counts[sval] = status_counts.get(sval, 0) + 1
+    if not include_all_status:
+        current_app.logger.info(
+            "Manifest preview status filter: mode=exclude_booked raw=%s kept=%s filtered=%s statuses=%s flight=%s%s date=%s",
+            len(raw_passengers),
+            len(passengers),
+            filtered_out_booked,
+            status_counts,
+            designator,
+            number,
+            date_str,
+        )
 
     # 3) Flight metadata for header
     flight_date_raw = dcs_f.get("FlightDate")
@@ -1115,6 +1922,109 @@ def api_envision_flight_crew_raw():
         return jsonify(ok=False, error=str(e)), 500
 
 
+@api_bp.get("/envision/line_registrations")
+@api_bp.get("/api/envision/line_registrations")  # legacy path
+def api_envision_line_registrations():
+    """
+    Proxy Envision GET /v1/Lines/Registrations for frontend dropdowns.
+    """
+    try:
+        auth = envision_authenticate()
+        token = auth["token"]
+        items = envision_get_line_registrations(token)
+        return jsonify(ok=True, items=items)
+    except Exception as e:
+        current_app.logger.exception("line_registrations failed")
+        return jsonify(ok=False, error=str(e)), 502
+
+
+@api_bp.get("/envision/flight_notes")
+@api_bp.get("/api/envision/flight_notes")  # legacy path
+def api_envision_flight_notes():
+    flight_id = request.args.get("flight_id", type=int)
+    if not flight_id:
+        return jsonify(ok=False, error="Missing flight_id"), 400
+    crew_view = str(request.args.get("crew_view") or "").strip().lower() in {"1", "true", "yes", "on"}
+    try:
+        auth = envision_authenticate()
+        token = auth["token"]
+        notes = envision_get_flight_notes(token, flight_id, crew_view=crew_view)
+        return jsonify(ok=True, notes=notes)
+    except Exception as e:
+        current_app.logger.exception("flight_notes failed")
+        return jsonify(ok=False, error=str(e)), 502
+
+
+@api_bp.post("/envision/flight_notes_upsert")
+@api_bp.post("/api/envision/flight_notes_upsert")  # legacy path
+def api_envision_flight_notes_upsert():
+    data = request.get_json(force=True) or {}
+    flight_id = data.get("flight_id")
+    note_id = data.get("note_id")
+    note_type_id = data.get("note_type_id")
+    text = data.get("text")
+    is_important = bool(data.get("is_important", False))
+
+    if not flight_id:
+        return jsonify(ok=False, error="Missing flight_id"), 400
+    try:
+        flight_id = int(flight_id)
+    except Exception:
+        return jsonify(ok=False, error="Invalid flight_id"), 400
+
+    text = (str(text or "")).strip()
+    if text == "":
+        return jsonify(ok=False, error="text is required"), 400
+
+    try:
+        auth = envision_authenticate()
+        token = auth["token"]
+        if note_id not in (None, ""):
+            note_id = int(note_id)
+            if note_type_id in (None, ""):
+                notes = envision_get_flight_notes(token, flight_id, crew_view=False)
+                found = next((n for n in notes if int(n.get("id") or 0) == note_id), None)
+                note_type_id = int(found.get("noteTypeId")) if found and found.get("noteTypeId") is not None else int(os.getenv("ENVISION_DEFAULT_NOTE_TYPE_ID", "1"))
+            payload = {
+                "id": note_id,
+                "flightId": flight_id,
+                "noteTypeId": int(note_type_id),
+                "text": text,
+                "isImportant": is_important,
+            }
+            result = envision_put_flight_note(token, flight_id, note_id, payload)
+            return jsonify(ok=True, mode="put", note=result, sent=payload)
+        else:
+            note_type_id = int(note_type_id) if note_type_id not in (None, "") else int(os.getenv("ENVISION_DEFAULT_NOTE_TYPE_ID", "1"))
+            payload = {
+                "flightId": flight_id,
+                "noteTypeId": note_type_id,
+                "text": text,
+                "isImportant": is_important,
+            }
+            result = envision_post_flight_note(token, flight_id, payload)
+            return jsonify(ok=True, mode="post", note=result, sent=payload)
+    except Exception as e:
+        current_app.logger.exception("flight_notes_upsert failed")
+        return jsonify(ok=False, error=str(e)), 502
+
+
+@api_bp.get("/envision/flight_types")
+@api_bp.get("/api/envision/flight_types")  # legacy path
+def api_envision_flight_types():
+    """
+    Proxy Envision GET /v1/Flights/Types.
+    """
+    try:
+        auth = envision_authenticate()
+        token = auth["token"]
+        items = envision_get_flight_types(token)
+        return jsonify(ok=True, items=items)
+    except Exception as e:
+        current_app.logger.exception("flight_types failed")
+        return jsonify(ok=False, error=str(e)), 502
+
+
 @api_bp.get("/envision/flight_raw")
 @api_bp.get("/api/envision/flight_raw")  # legacy path
 def api_envision_flight_raw():
@@ -1154,7 +2064,7 @@ def api_envision_flights_raw():
         token = auth["token"]
         headers = {"Authorization": f"Bearer {token}"}
         params = {"dateFrom": date_from, "dateTo": date_to}
-        url = f"{ENVISION_BASE}/Flights"
+        url = f"{get_envision_environment().get('base', ENVISION_BASE)}/Flights"
         r = requests.get(url, headers=headers, params=params, timeout=60)
         r.raise_for_status()
         raw = r.json()

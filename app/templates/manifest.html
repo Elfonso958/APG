@@ -211,21 +211,54 @@
         text-align: right;
       }
 
+      .totals-table td.totals-label {
+        text-align: left;
+        font-weight: 500;
+        color: #374151;
+      }
+
+      .totals-table td.totals-value {
+        font-weight: 600;
+      }
+
       .totals-row-strong td {
         font-weight: 600;
         background: #f9fafb;
       }
 
+      .totals-section-title {
+        display: block;
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        color: #6b7280;
+        margin-bottom: 1px;
+      }
+
+      .totals-section-value {
+        display: block;
+        font-size: 12px;
+        font-weight: 700;
+        color: #111827;
+      }
+
       .totals-footer {
-        margin-top: 6px;
+        margin-top: 8px;
         font-size: 10px;
         font-weight: 600;
         border-top: 1px solid #e5e7eb;
-        padding-top: 4px;
+        padding-top: 6px;
       }
 
       .totals-footer span {
-        margin-right: 18px;
+        display: inline-block;
+        min-width: 82px;
+        margin-right: 10px;
+        padding: 4px 6px;
+        border: 1px solid #d1d5db;
+        background: #f9fafb;
+        text-align: center;
       }
 
       .footer-meta {
@@ -447,33 +480,34 @@
       <table class="totals-table">
         <tbody>
           <tr>
-            <th>FINAL DESTINATION</th>
-            <th>JUMP SEATS</th>
-            <th>PASSENGERS</th>
+            <th colspan="2">Load Summary</th>
           </tr>
           <tr>
-            <td>{{ flight.ades }}</td>
-            <td class="numeric">{{ ns.jump_seats }}</td>
-            <td class="numeric">{{ ns.total }}</td>
+            <td class="totals-label">Final destination</td>
+            <td class="numeric totals-value">{{ flight.ades }}</td>
           </tr>
-
-          <tr class="totals-row-strong">
-            <td>Total Passenger</td>
-            <td class="numeric">{{ ns.total }}</td>
-            <td class="numeric">{{ "%.0f"|format(ns.pax_weight_kg) }} kg</td>
-          </tr>
-
           <tr>
-            <td>Total Bags</td>
-           <!--  <td class="numeric">{{ ns.bag_pcs }}</td>-->
-             <td></td>
-            <td class="numeric">{{ "%.2f"|format(ns.bag_weight_kg) }} kg</td>
+            <td class="totals-label">Passenger count</td>
+            <td class="numeric totals-value">{{ ns.total }}</td>
           </tr>
-
+          <tr>
+            <td class="totals-label">Jump seats</td>
+            <td class="numeric totals-value">{{ ns.jump_seats }}</td>
+          </tr>
+          <tr>
+            <td class="totals-label">Passenger weight</td>
+            <td class="numeric totals-value">{{ "%.0f"|format(ns.pax_weight_kg) }} kg</td>
+          </tr>
+          <tr>
+            <td class="totals-label">Baggage weight</td>
+            <td class="numeric totals-value">{{ "%.2f"|format(ns.bag_weight_kg) }} kg</td>
+          </tr>
           <tr class="totals-row-strong">
-            <td>Pax + Baggage</td>
-            <td></td>
-            <td class="numeric">{{ "%.2f"|format(total_weight_kg) }} kg</td>
+            <td class="totals-label">
+              <span class="totals-section-title">Total carried weight</span>
+              <span class="totals-section-value">Pax + baggage</span>
+            </td>
+            <td class="numeric totals-value">{{ "%.2f"|format(total_weight_kg) }} kg</td>
           </tr>
         </tbody>
       </table>
@@ -481,38 +515,37 @@
       <table class="totals-table">
         <tbody>
           <tr>
-            <th>BREAKDOWN</th>
-            <th class="text-right">COUNT</th>
+            <th colspan="2">Passenger Breakdown</th>
           </tr>
           <tr>
-            <td>Adults</td>
-            <td class="numeric">{{ ns.adults }}</td>
+            <td class="totals-label">Adults</td>
+            <td class="numeric totals-value">{{ ns.adults }}</td>
           </tr>
           <tr>
-            <td>Children</td>
-            <td class="numeric">{{ ns.children }}</td>
+            <td class="totals-label">Children</td>
+            <td class="numeric totals-value">{{ ns.children }}</td>
           </tr>
           <tr>
-            <td>Infants</td>
-            <td class="numeric">{{ ns.infants }}</td>
+            <td class="totals-label">Infants</td>
+            <td class="numeric totals-value">{{ ns.infants }}</td>
           </tr>
           <tr class="totals-row-strong">
-            <td>Total Passengers</td>
-            <td class="numeric">{{ ns.total }}</td>
+            <td class="totals-label">Total passengers</td>
+            <td class="numeric totals-value">{{ ns.total }}</td>
           </tr>
           <tr>
-            <td>Total Crew</td>
-            <td class="numeric {% if crew_count == 0 %}crew-total-warn{% endif %}">{{ crew_count }}</td>
+            <td class="totals-label">Operating crew</td>
+            <td class="numeric totals-value {% if crew_count == 0 %}crew-total-warn{% endif %}">{{ crew_count }}</td>
           </tr>
         </tbody>
       </table>
     </div>
 
     <div class="totals-footer">
-      <span>MALE {{ ns.male }}</span>
-      <span>FEMALE {{ ns.female }}</span>
-      <span>CHILD {{ ns.children }}</span>
-      <span>INFANT {{ ns.infants }}</span>
+      <span>Male: {{ ns.male }}</span>
+      <span>Female: {{ ns.female }}</span>
+      <span>Children: {{ ns.children }}</span>
+      <span>Infants: {{ ns.infants }}</span>
     </div>
 
     <div class="footer-meta">

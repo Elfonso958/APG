@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Live Gantt</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='New_Gantt/live_gantt.css') }}">
+</head>
+<body data-theme="light">
+  <div id="new-gantt-app"
+       data-api-url="{{ url_for('ui.api_dcs_gantt_data') }}"
+       data-apg-push-url="{{ url_for('api.api_dcs_push_to_apg') }}"
+       data-apg-reset-url="{{ url_for('api.api_apg_reset_passengers') }}"
+       data-manifest-preview-url="{{ url_for('api.api_dcs_manifest_preview') }}"
+       data-envision-action-url="{{ url_for('api.api_envision_flight_action') }}"
+       data-envision-crew-url="{{ url_for('api.api_envision_flight_crew') }}"
+       data-envision-line-registrations-url="{{ url_for('api.api_envision_line_registrations') }}"
+       data-envision-flight-types-url="{{ url_for('api.api_envision_flight_types') }}"
+       data-envision-flight-notes-url="{{ url_for('api.api_envision_flight_notes') }}"
+       data-envision-flight-notes-upsert-url="{{ url_for('api.api_envision_flight_notes_upsert') }}"
+       data-envision-environment-url="{{ url_for('api.api_envision_environment') }}"
+       data-envision-flight-raw-url="{{ url_for('api.api_envision_flight_raw') }}"
+       data-envision-times-url="{{ url_for('ui.api_envision_flight_times') }}"
+       data-envision-reg-defects-url="{{ url_for('ui.api_envision_registration_defects') }}"
+       data-envision-reg-maintenance-url="{{ url_for('ui.api_envision_registration_maintenance') }}"
+       data-envision-pax-sync-url="{{ url_for('api.api_envision_passenger_sync_run') }}"
+       data-save-times-url="{{ url_for('api.api_dcs_save_times') }}"
+       data-envision-env-key="{{ envision_env_key or 'base' }}"
+       data-envision-test-available="{{ '1' if envision_test_available else '0' }}"
+       data-day="{{ day.isoformat() }}">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-kicker">Operations</div>
+        <h1>Live Gantt</h1>
+        <div id="envisionEnvPill" class="envision-env-pill envision-env-{{ (envision_env_key or 'base')|lower }}">
+          Envision: {{ envision_env_name or "PROD" }}{% if envision_env_host %} - {{ envision_env_host }}{% endif %}
+        </div>
+      </div>
+      <div class="controls">
+        <label class="ctrl">
+          <span>Date</span>
+          <input id="dayInput" type="date" value="{{ day.isoformat() }}">
+        </label>
+        <label class="ctrl">
+          <span>Time Zone</span>
+          <select id="tzSelect">
+            <option value="Pacific/Auckland" selected>NZ Local</option>
+            <option value="UTC">UTC</option>
+            <option value="__browser__">Browser Local</option>
+          </select>
+        </label>
+        <button id="refreshBtn" class="btn btn-primary" type="button">Refresh</button>
+        <button id="syncPaxBtn" class="btn btn-ghost" type="button">Sync Pax (Test)</button>
+        <button id="zoomOutBtn" class="btn btn-ghost" type="button">-</button>
+        <button id="zoomInBtn" class="btn btn-ghost" type="button">+</button>
+        <label class="switch">
+          <input id="autoRefresh" type="checkbox" checked>
+          <span>Auto 60s</span>
+        </label>
+        <label class="switch">
+          <input id="crosshairToggle" type="checkbox">
+          <span>Crosshairs</span>
+        </label>
+        <label class="switch">
+          <input id="maintenanceToggle" type="checkbox">
+          <span>Maintenance</span>
+        </label>
+        <button id="themeBtn" class="btn btn-ghost" type="button">Dark Mode</button>
+      </div>
+    </header>
+
+    <section class="stats" id="statsRow">
+      <article class="stat"><div class="label">Flights</div><div class="value" id="statFlights">0</div></article>
+      <article class="stat"><div class="label">Passengers</div><div class="value" id="statPax">0</div></article>
+      <article class="stat"><div class="label">No APG</div><div class="value" id="statNoApg">0</div></article>
+      <article class="stat"><div class="label">Baggage Kg</div><div class="value" id="statBags">0</div></article>
+    </section>
+    <div id="loadMessage" class="load-message" hidden></div>
+
+    <main class="layout">
+      <section class="board" aria-label="Flight Gantt">
+        <div id="boardSpinner" class="board-spinner" hidden>
+          <div class="board-spinner-wheel" aria-hidden="true"></div>
+        </div>
+        <div id="liveNowBar" class="live-now-bar" hidden></div>
+        <div id="liveNowLabel" class="live-now-label" hidden></div>
+        <div id="crosshairV" class="crosshair crosshair-v" hidden></div>
+        <div id="crosshairH" class="crosshair crosshair-h" hidden></div>
+        <div class="axis" id="axis"></div>
+        <div class="rows" id="rows"></div>
+      </section>
+
+      <aside class="detail" id="detailCard" aria-live="polite">
+        <h2>Flight Detail</h2>
+        <div class="muted">Select a bar on the timeline.</div>
+        <div class="detail-actions">
+          <button id="btnPaxList" class="btn btn-ghost" type="button">Passenger List</button>
+          <button id="btnPreviewManifest" class="btn btn-ghost" type="button">Preview Manifest</button>
+          <button id="btnResetApg" class="btn btn-ghost" type="button">Reset APG Pax</button>
+          <button id="btnSeatmap" class="btn btn-ghost" type="button">Seatmap</button>
+          <button id="btnMovementMsg" class="btn btn-ghost" type="button">Movement Message</button>
+          <button id="btnSubmitApg" class="btn btn-primary" type="button">Submit to APG</button>
+        </div>
+        <div id="detailList"></div>
+      </aside>
+    </main>
+  </div>
+
+  <dialog id="seatmapDialog" class="seatmap-dialog">
+    <form method="dialog" class="seatmap-shell">
+      <header>
+        <h3 id="seatmapTitle">Seatmap</h3>
+        <button class="btn btn-ghost" value="cancel">Close</button>
+      </header>
+      <div class="seatmap-layout-shell">
+        <div id="seatmapGrid" class="seatmap-grid"></div>
+        <aside class="seatmap-side">
+          <div id="seatmapInfo" class="seatmap-info">Select a seat to view passenger details.</div>
+        </aside>
+      </div>
+      <div class="seatmap-footer-key">
+        <span class="legend-item"><span class="seat seat-adult"></span>Adult</span>
+        <span class="legend-item"><span class="seat seat-child"></span>Child</span>
+        <span class="legend-item"><span class="seat seat-child seat-umnr"></span>UMNR</span>
+        <span class="legend-item"><span class="seat seat-infant"></span>Infant in Lap</span>
+        <span class="legend-item"><span class="seat-icon seat-icon-special">!</span>Special SSR</span>
+        <span class="legend-item"><span class="seat-icon seat-icon-info">ℹ</span>CKIN Info</span>
+        <span class="legend-item"><span class="seat-icon seat-icon-weapon">🔫</span>Weapon SSR</span>
+        <span class="legend-item"><span class="seat-icon seat-icon-wheelchair">♿</span>Wheelchair SSR</span>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="paxDialog" class="pax-dialog">
+    <form method="dialog" class="pax-shell">
+      <header>
+        <h3 id="paxTitle">Passenger List</h3>
+        <button class="btn btn-ghost" value="cancel">Close</button>
+      </header>
+      <div class="pax-table-wrap">
+        <table class="pax-table">
+          <thead>
+            <tr>
+              <th>Seat</th>
+              <th>Name</th>
+              <th>Route</th>
+              <th>Type</th>
+              <th>Status</th>
+              <th>Bag Kg</th>
+              <th>PNR</th>
+              <th>SSR</th>
+            </tr>
+          </thead>
+          <tbody id="paxTbody"></tbody>
+        </table>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="apgStatusDialog" class="status-dialog">
+    <form method="dialog" class="status-shell">
+      <header>
+        <h3 id="apgStatusTitle">APG Submission</h3>
+        <button class="btn btn-ghost" value="cancel">Close</button>
+      </header>
+      <div id="apgStatusBody" class="status-body"></div>
+      <div class="status-actions">
+        <button class="btn btn-primary" value="default">OK</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="envPickerDialog" class="status-dialog">
+    <form method="dialog" class="status-shell">
+      <header>
+        <h3>Choose Environment</h3>
+      </header>
+      <div class="status-body">
+        <div>Select which Envision environment to use for this session.</div>
+      </div>
+      <div class="env-picker-actions">
+        <button id="envBaseBtn" class="btn btn-primary" value="base" type="button">Live (BASE)</button>
+        <button id="envTestBtn" class="btn btn-ghost" value="test" type="button" {% if not envision_test_available %}disabled{% endif %}>Test</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="flightEditDialog" class="flight-edit-dialog">
+    <form method="dialog" class="flight-edit-shell">
+      <header>
+        <h3 id="flightEditTitle">Envision Flight Update</h3>
+        <button class="btn btn-ghost" value="cancel">Close</button>
+      </header>
+      <div class="flight-edit-grid">
+        <label class="ctrl">
+          <span>Action</span>
+          <select id="flightEditAction">
+            <option value="update_flight">Update Flight (PUT /Flights/{id})</option>
+            <option value="change_registration">Change Registration (POST /ChangeRegistration)</option>
+            <option value="cancel">Cancel Flight (POST /Cancel)</option>
+            <option value="divert">Divert Flight (POST /Divert)</option>
+            <option value="delay_get">Get Delay (GET /Delays/{delayId})</option>
+            <option value="delay_put">Update Delay (PUT /Delays/{delayId})</option>
+            <option value="delay_post">Create Delay (POST /Delays/{delayId})</option>
+          </select>
+        </label>
+        <label class="ctrl">
+          <span>Delay ID (for delay actions)</span>
+          <input id="flightEditDelayId" type="number" min="0" step="1" placeholder="e.g. 1">
+        </label>
+      </div>
+
+      <section class="action-section" data-action="update_flight">
+        <div class="flight-edit-grid">
+          <label class="ctrl"><span>Flight Status ID</span><input id="feFlightStatusId" type="number" min="0" step="1"></label>
+          <label class="ctrl"><span>Planned Flight Time</span><input id="fePlannedFlightTime" type="number" min="0" step="1"></label>
+          <label class="ctrl"><span>Departure Estimate</span><input id="feDepartureEstimate" type="datetime-local"></label>
+          <label class="ctrl"><span>Departure Actual</span><input id="feDepartureActual" type="datetime-local"></label>
+          <label class="ctrl"><span>Departure Take Off</span><input id="feDepartureTakeOff" type="datetime-local"></label>
+          <label class="ctrl"><span>Arrival Estimate</span><input id="feArrivalEstimate" type="datetime-local"></label>
+          <label class="ctrl"><span>Arrival Landed</span><input id="feArrivalLanded" type="datetime-local"></label>
+          <label class="ctrl"><span>Arrival Actual</span><input id="feArrivalActual" type="datetime-local"></label>
+          <label class="ctrl"><span>Calculated Take Off Time</span><input id="feCalculatedTakeOffTime" type="datetime-local"></label>
+        </div>
+      </section>
+
+      <section class="action-section" data-action="change_registration">
+        <div class="flight-edit-grid">
+          <label class="ctrl"><span>Ignore Validations</span><input id="feRegIgnoreValidations" type="checkbox" checked></label>
+          <label class="ctrl"><span>Line ID</span><input id="feRegLineId" type="number" min="0" step="1"></label>
+        </div>
+        <label class="ctrl">
+          <span>Crew Positions JSON</span>
+          <textarea id="feRegCrewPositions" class="flight-edit-payload" spellcheck="false"></textarea>
+        </label>
+      </section>
+
+      <section class="action-section" data-action="cancel">
+        <div class="flight-edit-grid">
+          <label class="ctrl"><span>Cancelled Line ID</span><input id="feCancelLineId" type="number" min="0" step="1"></label>
+          <label class="ctrl"><span>Cancel Code ID</span><input id="feCancelCodeId" type="number" min="0" step="1"></label>
+          <label class="ctrl flight-edit-span-2"><span>Remarks</span><input id="feCancelRemarks" type="text"></label>
+        </div>
+      </section>
+
+      <section class="action-section" data-action="divert">
+        <div class="flight-edit-grid">
+          <label class="ctrl"><span>Diverted Place ID</span><input id="feDivertPlaceId" type="number" min="0" step="1"></label>
+          <label class="ctrl"><span>Arrival Estimate</span><input id="feDivertArrivalEstimate" type="datetime-local"></label>
+          <label class="ctrl flight-edit-span-2"><span>Remarks</span><input id="feDivertRemarks" type="text"></label>
+        </div>
+      </section>
+
+      <section class="action-section" data-action="delay_put delay_post">
+        <div class="flight-edit-grid">
+          <label class="ctrl"><span>Delay Record ID</span><input id="feDelayRecordId" type="number" min="0" step="1"></label>
+          <label class="ctrl"><span>Is Arrival</span><input id="feDelayIsArrival" type="checkbox"></label>
+          <label class="ctrl"><span>Delay Code ID</span><input id="feDelayCodeId" type="number" min="0" step="1"></label>
+          <label class="ctrl"><span>Delay Code</span><input id="feDelayCode" type="text"></label>
+          <label class="ctrl"><span>Delay Code Description</span><input id="feDelayCodeDescription" type="text"></label>
+          <label class="ctrl"><span>Delay Minutes</span><input id="feDelayMinutes" type="number" min="0" step="1"></label>
+          <label class="ctrl flight-edit-span-2"><span>Remarks</span><input id="feDelayRemarks" type="text"></label>
+        </div>
+      </section>
+
+      <section class="action-section" data-action="delay_get">
+        <div class="muted">Enter Delay ID, then click OK to fetch delay details.</div>
+      </section>
+
+      <div class="flight-edit-actions">
+        <button id="flightEditSubmit" class="btn btn-primary" type="button">OK</button>
+      </div>
+      <pre id="flightEditResult" class="flight-edit-result"></pre>
+    </form>
+  </dialog>
+
+  <dialog id="movementDialog" class="flight-edit-dialog">
+    <form method="dialog" class="flight-edit-shell">
+      <header>
+        <h3 id="movementTitle">Movement Message</h3>
+        <button class="btn btn-ghost" value="cancel">Close</button>
+      </header>
+      <div class="movement-mode">
+        <button id="mvModeDep" class="btn btn-ghost" type="button">Departure Times</button>
+        <button id="mvModeArr" class="btn btn-ghost" type="button">Arrival Times</button>
+      </div>
+      <div class="flight-edit-grid">
+        <label class="ctrl"><span>ETD</span><input id="mvEtd" type="time"></label>
+        <label class="ctrl"><span>ETA</span><input id="mvEta" type="time"></label>
+        <label class="ctrl"><span>Dep Date</span><input id="mvDepDate" type="date"></label>
+        <label class="ctrl"><span>Arr Date</span><input id="mvArrDate" type="date"></label>
+        <label class="ctrl"><span>Off Blocks</span><input id="mvOffblocks" type="time"></label>
+        <label class="ctrl"><span>Landing</span><input id="mvLanding" type="time"></label>
+        <label class="ctrl"><span>Airborne</span><input id="mvAirborne" type="time"></label>
+        <label class="ctrl"><span>On Chocks</span><input id="mvOnchocks" type="time"></label>
+      </div>
+      <section id="mvDelaySection" class="mv-delay-section">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <strong>Delay Codes</strong>
+          <button id="mvAddDelay" type="button" class="btn btn-ghost">Add code</button>
+        </div>
+        <div class="mv-delay-table-wrap">
+          <table class="pax-table">
+            <thead>
+              <tr>
+                <th>Code</th>
+                <th>Minutes</th>
+                <th>Description</th>
+                <th>Remark</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="mvDelayRows"></tbody>
+          </table>
+        </div>
+        <div class="small">
+          Required delay: <span id="mvDelayRequired">0</span> min<br>
+          Allocated: <span id="mvDelayAllocated">0</span> min<br>
+          Remaining: <span id="mvDelayRemaining">0</span> min
+        </div>
+      </section>
+      <div class="flight-edit-actions">
+        <button id="movementSubmit" class="btn btn-primary" type="button">OK</button>
+      </div>
+      <pre id="movementResult" class="flight-edit-result"></pre>
+    </form>
+  </dialog>
+
+  <dialog id="defectsDialog" class="pax-dialog">
+    <form method="dialog" class="pax-shell">
+      <header>
+        <h3 id="defectsTitle">Aircraft Defects</h3>
+        <button class="btn btn-ghost" value="cancel">Close</button>
+      </header>
+      <div id="defectsSummary" class="card-sub"></div>
+      <div class="pax-table-wrap">
+        <table class="pax-table">
+          <thead>
+            <tr>
+              <th>Item</th>
+              <th>Status</th>
+              <th>Defect</th>
+              <th>Open</th>
+              <th>Close</th>
+              <th>MEL</th>
+            </tr>
+          </thead>
+          <tbody id="defectsTbody"></tbody>
+        </table>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="modifyLegDialog" class="modify-leg-dialog">
+    <form method="dialog" class="modify-leg-shell">
+      <header>
+        <h3 id="modifyLegTitle">Modify Leg</h3>
+        <button class="btn btn-ghost" value="cancel">Close</button>
+      </header>
+      <div class="modify-leg-body">
+        <section class="modify-card modify-grid-5">
+          <label class="ctrl"><span>Registration</span><select id="mlReg"><option value="">Loading...</option></select></label>
+          <label class="ctrl"><span>Airline</span><input id="mlAirline" type="text" value="Air Chathams" readonly></label>
+          <label class="ctrl"><span>Flight Number</span><input id="mlFlightNo" type="text" readonly></label>
+          <label class="ctrl"><span>Date</span><input id="mlDate" type="date" readonly></label>
+          <label class="ctrl"><span>Flight Type</span><select id="mlFlightType"><option value="">Loading...</option></select></label>
+        </section>
+
+        <section class="modify-card">
+          <h4>Scheduled Flight</h4>
+          <div class="modify-grid-5">
+            <label class="ctrl"><span>Date</span><input id="mlSchedDate" type="date"></label>
+            <label class="ctrl"><span>Departure</span><input id="mlDep" type="text"></label>
+            <label class="ctrl"><span>STD</span><input id="mlStd" type="time"></label>
+            <label class="ctrl"><span>Arrival</span><input id="mlArr" type="text"></label>
+            <label class="ctrl"><span>STA</span><input id="mlSta" type="time"></label>
+          </div>
+        </section>
+
+        <section class="modify-card">
+          <h4>Estimated / Operational Times</h4>
+          <div class="modify-grid-7">
+            <label class="ctrl"><span>Date</span><input id="mlOpDate" type="date"></label>
+            <label class="ctrl"><span>OUT</span><input id="mlOut" type="time"></label>
+            <label class="ctrl"><span>OFF</span><input id="mlOff" type="time"></label>
+            <label class="ctrl"><span>Enroute</span><input id="mlEnroute" type="text"></label>
+            <label class="ctrl"><span>ON</span><input id="mlOn" type="time"></label>
+            <label class="ctrl"><span>IN</span><input id="mlIn" type="time"></label>
+            <label class="ctrl"><span>CTOT</span><input id="mlCtot" type="time"></label>
+          </div>
+        </section>
+
+        <section class="modify-card">
+          <h4>Actuals</h4>
+          <div class="modify-grid-6">
+            <label class="ctrl"><span>Date</span><input id="mlActDate" type="date"></label>
+            <label class="ctrl"><span>OUT</span><input id="mlActOut" type="time"></label>
+            <label class="ctrl"><span>OFF</span><input id="mlActOff" type="time"></label>
+            <label class="ctrl"><span>ON</span><input id="mlActOn" type="time"></label>
+            <label class="ctrl"><span>IN</span><input id="mlActIn" type="time"></label>
+            <label class="ctrl"><span>Block Time</span><input id="mlBlock" type="text"></label>
+          </div>
+        </section>
+
+        <section class="modify-card">
+          <h4>Passenger / Load</h4>
+          <div class="modify-grid-6">
+            <label class="ctrl"><span>E.Pax</span><input id="mlEpax" type="number" value="0"></label>
+            <label class="ctrl"><span>E.Tr.Pax</span><input id="mlEtpax" type="number" value="0"></label>
+            <label class="ctrl"><span>A.Pax</span><input id="mlApax" type="number" value="0"></label>
+            <label class="ctrl"><span>A.Tr.Pax</span><input id="mlAtpax" type="number" value="0"></label>
+            <label class="ctrl"><span>Crew</span><input id="mlCrew" type="number" value="3"></label>
+            <label class="ctrl"><span>Cargo</span><input id="mlCargo" type="number" value="0"></label>
+          </div>
+        </section>
+
+        <section class="modify-card">
+          <h4>Remarks</h4>
+          <div class="modify-remarks-grid single">
+            <label class="ctrl"><input id="mlRemark" type="text" placeholder="Remark"></label>
+          </div>
+        </section>
+
+        <section class="modify-card">
+          <h4>Dailies and Revisions</h4>
+          <div class="modify-placeholder">Reserved for future content.</div>
+        </section>
+
+        <section class="modify-card">
+          <h4>API Responses (Development)</h4>
+          <pre id="mlApiResponses" class="flight-edit-result">{}</pre>
+        </section>
+
+        <section class="modify-card modify-actions">
+          <button id="mlPrev" class="btn btn-ghost" type="button">Previous</button>
+          <button id="mlNext" class="btn btn-ghost" type="button">Next</button>
+          <button class="btn btn-ghost" type="button">Cargo</button>
+          <button id="mlOk" class="btn btn-primary" type="button">OK</button>
+          <button class="btn btn-ghost" value="cancel">Close</button>
+        </section>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="{{ url_for('static', filename='New_Gantt/live_gantt.js') }}"></script>
+</body>
+</html>

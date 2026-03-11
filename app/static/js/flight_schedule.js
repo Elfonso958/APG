@@ -230,12 +230,29 @@ function hasUmnrSSR(ssrs) {
 }
 
 
+  const NZ_TIMEZONE = "Pacific/Auckland";
+  const NZ_YMD_FORMATTER = new Intl.DateTimeFormat("en-CA", {
+    timeZone: NZ_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+
   function formatDateYMD(d) {
     if (!d) return "";
-    const yyyy = d.getFullYear();
-    const mm   = String(d.getMonth() + 1).padStart(2, "0");
-    const dd   = String(d.getDate()).padStart(2, "0");
-    return `${yyyy}-${mm}-${dd}`;
+    if (typeof d === "string") {
+      // Preserve already-normalized YYYY-MM-DD values.
+      if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
+      d = new Date(d);
+    }
+    if (!(d instanceof Date) || isNaN(d.getTime())) return "";
+    // Always return NZ-local calendar date, independent of browser timezone.
+    const parts = NZ_YMD_FORMATTER.formatToParts(d);
+    const year = parts.find(p => p.type === "year")?.value;
+    const month = parts.find(p => p.type === "month")?.value;
+    const day = parts.find(p => p.type === "day")?.value;
+    if (!year || !month || !day) return "";
+    return `${year}-${month}-${day}`;
   }
 
   function fmtTime(d) {
@@ -1541,7 +1558,10 @@ if (resetBtn) {
     const t = (f.aircraftType || "").toUpperCase();
     const r = (f.reg || "").toUpperCase();
 
-    if (t.includes("ATR") || r.includes("MCU")) return "ATR72";
+    // ATR72 detection:
+    // - explicit aircraft type text, OR
+    // - known ATR registrations (ZK-MC*)
+    if (t.includes("ATR") || r.startsWith("ZK-MC")) return "ATR72";
 
     const isSaab =
       t.includes("SAAB") ||
@@ -2480,11 +2500,12 @@ function refreshGantt({ manual = false } = {}) {
 }
 
 // Make this a global so you can call it from buttons
-window.previewManifestForRow = async function (f) {
+window.previewManifestForRow = async function (f, options = {}) {
   if (!f) {
     alert("No flight selected for manifest preview.");
     return;
   }
+  const statusMode = options.statusMode || "exclude_booked";
 
   // ----- Designator -----
   let designator = (f.designator || "").toUpperCase();
@@ -2550,6 +2571,7 @@ window.previewManifestForRow = async function (f) {
     number: number,                           // numeric part
     reg: (f.reg || "").toUpperCase(),
     envision_flight_id: envisionFlightId,     // may be null in some views
+    status_mode: statusMode,
   };
 
   console.log("➡️ Sending payload to API:", payload);
@@ -2588,6 +2610,13 @@ window.previewManifestForRow = async function (f) {
 
 // ---------- Manifest preview button (uses currentFlight/paxList) ----------
 const previewBtn = document.getElementById("btn-preview-manifest");
+const manifestStatusModalEl = document.getElementById("manifestStatusModal");
+const manifestStatusModal =
+  (manifestStatusModalEl && window.bootstrap && window.bootstrap.Modal)
+    ? new bootstrap.Modal(manifestStatusModalEl)
+    : null;
+const manifestAllStatusBtn = document.getElementById("btn-manifest-all-status");
+const manifestExcludeBookedBtn = document.getElementById("btn-manifest-exclude-booked");
 if (previewBtn) {
   previewBtn.addEventListener("click", function () {
     if (!currentFlight) {
@@ -2595,8 +2624,28 @@ if (previewBtn) {
       return;
     }
 
-    // 🔹 Don’t rebuild a thin object – just pass the real flight
-    window.previewManifestForRow(currentFlight);
+    if (manifestStatusModal) {
+      manifestStatusModal.show();
+      return;
+    }
+
+    window.previewManifestForRow(currentFlight, { statusMode: "exclude_booked" });
+  });
+}
+
+if (manifestAllStatusBtn) {
+  manifestAllStatusBtn.addEventListener("click", function () {
+    if (!currentFlight) return;
+    if (manifestStatusModal) manifestStatusModal.hide();
+    window.previewManifestForRow(currentFlight, { statusMode: "all" });
+  });
+}
+
+if (manifestExcludeBookedBtn) {
+  manifestExcludeBookedBtn.addEventListener("click", function () {
+    if (!currentFlight) return;
+    if (manifestStatusModal) manifestStatusModal.hide();
+    window.previewManifestForRow(currentFlight, { statusMode: "exclude_booked" });
   });
 }
 
