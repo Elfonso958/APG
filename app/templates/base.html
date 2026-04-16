@@ -18,15 +18,15 @@
   <nav>
     <div class="nav-inner">
       <div class="nav-left">
-        <a href="/" class="nav-brand">APG Importer</a>
+        <a href="{{ url_for('ui.home') }}" class="nav-brand">APG Importer</a>
         <!-- optional env pill -->
         <span class="nav-env">Prod</span>
       </div>
 
       <div class="nav-right">
-        <a href="/" class="{{ 'nav-active' if request.path in ['/', '/sync/runs', '/sync/runs/'] else '' }}">Sync runs</a>
-        <a href="/settings" class="{{ 'nav-active' if request.path.startswith('/settings') else '' }}">Schedule</a>
-        <a href="/dcs/from-envision" class="{{ 'nav-active' if request.path.startswith('/dcs/from-envision') else '' }}">DCS &rarr; Schedule</a>
+        <a href="{{ url_for('ui.home') }}" class="{{ 'nav-active' if request.path in ['/', '/sync/runs', '/sync/runs/'] else '' }}">Sync runs</a>
+        <a href="{{ url_for('ui.settings_page') }}" class="{{ 'nav-active' if request.path.startswith('/settings') else '' }}">Schedule</a>
+        <a href="{{ url_for('ui.dcs_from_envision') }}" class="{{ 'nav-active' if request.path.startswith('/dcs/from-envision') else '' }}">DCS &rarr; Schedule</a>
         <button id="run-once-btn" type="button" class="btn btn-sm">
           Run Sync (once)
         </button>
@@ -101,7 +101,7 @@
           payload.date_to_utc = new Date(toVal).toISOString();
         }
 
-        const res = await fetch("/api/sync/run", {
+        const res = await fetch("{{ url_for('api.api_sync_run_once') }}", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
           body: JSON.stringify(payload),

@@ -3,6 +3,8 @@ class Config:
     SQLALCHEMY_DATABASE_URI = os.getenv("SQLALCHEMY_DATABASE_URI")
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SECRET_KEY = os.getenv("SECRET_KEY")
+    APPLICATION_ROOT = os.getenv("APPLICATION_ROOT", "").rstrip("/")
+    PREFERRED_URL_SCHEME = os.getenv("PREFERRED_URL_SCHEME", "https")
 
     ENVISION_BASE = os.getenv("ENVISION_BASE")
     ENVISION_TEST = os.getenv("ENVISION_TEST")

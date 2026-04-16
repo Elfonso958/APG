@@ -1,5 +1,6 @@
 ﻿# app/__init__.py
 from dotenv import load_dotenv
+from werkzeug.middleware.proxy_fix import ProxyFix
 import os
 
 # Resolve "<project_root>/.env" no matter where we run from
@@ -14,6 +15,7 @@ from flask_migrate import Migrate
 from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime
 from sqlalchemy import inspect
+from werkzeug.middleware.proxy_fix import ProxyFix
 import threading
 import logging
 import os
@@ -25,6 +27,33 @@ migrate = Migrate()
 _run_lock = threading.Lock()
 _scheduler: BackgroundScheduler | None = None
 
+
+class PrefixHeaderMiddleware:
+    """
+    Normalise proxy prefix headers before ProxyFix applies them to the WSGI environ.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    def __call__(self, environ, start_response):
+        forwarded_prefix = environ.get("HTTP_X_FORWARDED_PREFIX", "").strip()
+        script_name = environ.get("HTTP_X_SCRIPT_NAME", "").strip()
+        prefix = forwarded_prefix or script_name
+
+        if prefix:
+            environ["HTTP_X_FORWARDED_PREFIX"] = "/" + prefix.strip("/")
+
+        return self.app(environ, start_response)
+
+
+def _normalise_application_root(value: str | None) -> str:
+    if not value:
+        return ""
+
+    cleaned = "/" + str(value).strip().strip("/")
+    return "" if cleaned == "/" else cleaned
+
 def _should_start_scheduler(app: Flask) -> bool:
     """Avoid starting the scheduler twice under the debug reloader."""
     if not app.debug:
@@ -33,6 +62,7 @@ def _should_start_scheduler(app: Flask) -> bool:
 
 def create_app():
     app = Flask(__name__, static_folder="static", template_folder="templates")
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1, x_prefix=1)
     app.config.setdefault("DCS_MAX_WORKERS", 12)  # tune as needed, e.g. 4–10
 
     noisy_loggers = [
@@ -59,6 +89,19 @@ def create_app():
     # Optional: allow an extra config file path via env var
     if os.environ.get("APP_SETTINGS"):
         app.config.from_envvar("APP_SETTINGS", silent=True)
+
+    app.config["APPLICATION_ROOT"] = _normalise_application_root(
+        app.config.get("APPLICATION_ROOT")
+    )
+    app.wsgi_app = PrefixHeaderMiddleware(app.wsgi_app)
+    app.wsgi_app = ProxyFix(
+        app.wsgi_app,
+        x_for=1,
+        x_proto=1,
+        x_host=1,
+        x_port=1,
+        x_prefix=1,
+    )
 
     # ---- DB config (keep if you still want to override)
     app.config.setdefault("SQLALCHEMY_DATABASE_URI", "sqlite:///apg_importer.db")

@@ -1603,6 +1603,46 @@ def _build_manifest_html_and_ctx(
             out.append((pdep, row.eobt))
         return out
 
+    def _manifest_pax_key(p: dict) -> str:
+        return f"{p.get('pnr') or ''}|{p.get('seat') or ''}|{p.get('name') or ''}".upper()
+
+    def _raw_pax_identity_keys(r: dict) -> list[str]:
+        given = (r.get("GivenName") or "").strip().upper()
+        surname = (r.get("Surname") or "").strip().upper()
+        name_prefix = (r.get("NamePrefix") or "").strip().upper()
+        name = " ".join(x for x in [name_prefix, given, surname] if x).strip()
+        pnr = (r.get("BookingReferenceID") or "").strip().upper()
+        seat = (r.get("Seat") or r.get("SeatNumber") or "").strip().upper()
+        dob = (r.get("DateOfBirth") or "").strip().upper()
+
+        keys: list[str] = []
+        if pnr or name:
+            keys.append(f"{pnr}|{seat}|{name}")
+            keys.append(f"{pnr}|{name}")
+        if name:
+            keys.append(f"{seat}|{name}")
+        if dob and name:
+            keys.append(f"{name}|{dob}")
+            keys.append(f"{seat}|{name}|{dob}")
+        return [k for k in keys if k.strip("|")]
+
+    def _manifest_identity_keys(p: dict) -> list[str]:
+        name = (p.get("name") or "").strip().upper()
+        pnr = (p.get("pnr") or "").strip().upper()
+        seat = (p.get("seat") or "").strip().upper()
+        dob = (p.get("dob") or "").strip().upper()
+
+        keys: list[str] = []
+        if pnr or name:
+            keys.append(f"{pnr}|{seat}|{name}")
+            keys.append(f"{pnr}|{name}")
+        if name:
+            keys.append(f"{seat}|{name}")
+        if dob and name:
+            keys.append(f"{name}|{dob}")
+            keys.append(f"{seat}|{name}|{dob}")
+        return [k for k in keys if k.strip("|")]
+
     def _build_manifest_passenger(r: dict, origin_code: str, dest_code: str) -> dict | None:
         if not include_all_status and not is_dcs_passenger_boarded_or_flown(r):
             return None
@@ -1722,6 +1762,7 @@ def _build_manifest_html_and_ctx(
     passengers: list[dict] = []
     filtered_out_booked = 0
     seen_manifest_keys: set[str] = set()
+    manifest_identity_index: dict[str, int] = {}
     for r in raw_passengers:
         manifest_pax = _build_manifest_passenger(
             r,
@@ -1731,8 +1772,11 @@ def _build_manifest_html_and_ctx(
         if manifest_pax is None:
             filtered_out_booked += 1
             continue
-        pax_key = f"{manifest_pax['pnr']}|{manifest_pax['seat']}|{manifest_pax['name']}".upper()
+        pax_key = _manifest_pax_key(manifest_pax)
         seen_manifest_keys.add(pax_key)
+        manifest_identity_index.update({
+            ident: len(passengers) for ident in _manifest_identity_keys(manifest_pax)
+        })
         passengers.append(manifest_pax)
 
     if not (isinstance(pax_override, list) and pax_override):
@@ -1745,6 +1789,8 @@ def _build_manifest_html_and_ctx(
             if not cand_dep or cand_dep == dep:
                 continue
             try:
+                upstream_added = 0
+                upstream_promoted = 0
                 upstream_json = fetch_dcs_for_flight(
                     dep_airport=cand_dep,
                     arr_airport=ades,
@@ -1767,7 +1813,6 @@ def _build_manifest_html_and_ctx(
                     upstream_flights = upstream_json.get("Flights") or []
                     upstream_f = _pick_dcs_flight(upstream_flights, cand_dep, ades)
 
-                upstream_added = 0
                 for r in (upstream_f or {}).get("Passengers", []) or []:
                     manifest_pax = _build_manifest_passenger(
                         r,
@@ -1776,15 +1821,70 @@ def _build_manifest_html_and_ctx(
                     )
                     if manifest_pax is None:
                         continue
-                    pax_key = f"{manifest_pax['pnr']}|{manifest_pax['seat']}|{manifest_pax['name']}".upper()
+                    pax_key = _manifest_pax_key(manifest_pax)
+                    matched_idx = next(
+                        (manifest_identity_index.get(ident) for ident in _raw_pax_identity_keys(r) if ident in manifest_identity_index),
+                        None,
+                    )
+                    if matched_idx is not None:
+                        existing = passengers[matched_idx]
+                        existing["origin"] = manifest_pax["origin"] or existing.get("origin") or dep
+                        existing["dest"] = manifest_pax["dest"] or existing.get("dest") or ades
+                        upstream_promoted += 1
+                        continue
                     if pax_key in seen_manifest_keys:
                         continue
                     seen_manifest_keys.add(pax_key)
+                    manifest_identity_index.update({
+                        ident: len(passengers) for ident in _manifest_identity_keys(manifest_pax)
+                    })
                     passengers.append(manifest_pax)
                     upstream_added += 1
 
+                prior_leg_promoted = 0
+                prior_leg_json = fetch_dcs_for_flight(
+                    dep_airport=cand_dep,
+                    arr_airport=dep,
+                    flight_date=date_str,
+                    airline_designator=designator,
+                    flight_number=number,
+                    only_status=True,
+                )
+                prior_leg_flights = prior_leg_json.get("Flights") or []
+                prior_leg_f = _pick_dcs_flight(prior_leg_flights, cand_dep, dep)
+                if prior_leg_f and not (prior_leg_f.get("Passengers") or []):
+                    prior_leg_json = fetch_dcs_for_flight(
+                        dep_airport=cand_dep,
+                        arr_airport=dep,
+                        flight_date=date_str,
+                        airline_designator=designator,
+                        flight_number=number,
+                        only_status=False,
+                    )
+                    prior_leg_flights = prior_leg_json.get("Flights") or []
+                    prior_leg_f = _pick_dcs_flight(prior_leg_flights, cand_dep, dep)
+
+                for r in (prior_leg_f or {}).get("Passengers", []) or []:
+                    manifest_pax = _build_manifest_passenger(
+                        r,
+                        cand_dep,
+                        dep,
+                    )
+                    if manifest_pax is None:
+                        continue
+                    matched_idx = next(
+                        (manifest_identity_index.get(ident) for ident in _raw_pax_identity_keys(r) if ident in manifest_identity_index),
+                        None,
+                    )
+                    if matched_idx is None:
+                        continue
+                    existing = passengers[matched_idx]
+                    if (existing.get("origin") or "").upper() != cand_dep.upper():
+                        existing["origin"] = cand_dep
+                        prior_leg_promoted += 1
+
                 current_app.logger.info(
-                    "Manifest through-pax merge: flight=%s%s date=%s current=%s-%s upstream=%s-%s prior_eobt=%s added=%s",
+                    "Manifest through-pax merge: flight=%s%s date=%s current=%s-%s upstream=%s-%s prior_eobt=%s added=%s promoted=%s prior_leg_promoted=%s",
                     designator,
                     number,
                     date_str,
@@ -1794,6 +1894,8 @@ def _build_manifest_html_and_ctx(
                     ades,
                     cand_eobt,
                     upstream_added,
+                    upstream_promoted,
+                    prior_leg_promoted,
                 )
             except Exception:
                 current_app.logger.exception(

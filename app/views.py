@@ -67,7 +67,7 @@ def _runtime_envision_base() -> str:
 def ops_modify_leg():
     return render_template("flight_details.html")
 
-@ui_bp.route("/")
+@ui_bp.route("/", endpoint="home")
 @ui_bp.route("/sync/runs")
 @ui_bp.route("/sync/runs/")
 def sync_runs_page():
@@ -238,6 +238,28 @@ def _enrich_rows_with_dcs(rows: list[dict], nz_day: date) -> None:
                 out.append(p)
         return out
 
+    def _pax_key(p: dict) -> str:
+        return "|".join(
+            [
+                str(p.get("BookingReferenceID") or "").strip().upper(),
+                str(p.get("GivenName") or "").strip().upper(),
+                str(p.get("Surname") or "").strip().upper(),
+                str(p.get("Seat") or p.get("SeatNumber") or "").strip().upper(),
+            ]
+        )
+
+    def _merge_annotated_pax(*pax_groups: list[dict]) -> list[dict]:
+        out: list[dict] = []
+        seen: set[str] = set()
+        for group in pax_groups:
+            for p in group or []:
+                key = _pax_key(p) if isinstance(p, dict) else str(p)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(p)
+        return out
+
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         futures = [ex.submit(_fetch_one, *args) for args in work]
         for fut in as_completed(futures):
@@ -302,6 +324,26 @@ def _enrich_rows_with_dcs(rows: list[dict], nz_day: date) -> None:
             chosen_origin = str((chosen or {}).get("Origin") or r.get("dep") or "").strip().upper()
             chosen_dest = str((chosen or {}).get("Destination") or r.get("ades") or r.get("dest") or "").strip().upper()
             pax = _annotate_pax_origin_dest((chosen or {}).get("Passengers") or [], chosen_origin, chosen_dest)
+
+            # DCS can return multiple records for the same departure under one flight number,
+            # e.g. AKL->WAG plus AKL->PPQ for a through service. Keep both on the first leg.
+            if len(flights) > 1 and chosen_origin:
+                same_origin_through = []
+                for fl in flights:
+                    fl_origin = str(fl.get("Origin") or "").strip().upper()
+                    fl_dest = str(fl.get("Destination") or "").strip().upper()
+                    if fl is chosen or fl_origin != chosen_origin or not fl_dest or fl_dest == chosen_dest:
+                        continue
+                    fl_pax = _annotate_pax_origin_dest(
+                        (fl.get("Passengers") or []),
+                        fl_origin,
+                        fl_dest,
+                    )
+                    if fl_pax:
+                        same_origin_through.append(fl_pax)
+                if same_origin_through:
+                    pax = _merge_annotated_pax(pax, *same_origin_through)
+
             r["dcs_linked"] = bool(chosen)
             r["dcs_origin"] = chosen_origin
             r["dcs_destination"] = chosen_dest
@@ -454,7 +496,7 @@ def settings_page():
         cfg.interval_sec = interval_sec
         db.session.add(cfg); db.session.commit()
         # API also reschedules; but you can reschedule here if desired.
-        return redirect("/settings")
+        return redirect(url_for("ui.settings_page"))
     return render_template("settings.html", cfg=cfg)
 
 def _infer_designator(fnum: str) -> str | None:
