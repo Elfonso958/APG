@@ -13,6 +13,8 @@
   <div id="new-gantt-app"
        data-api-url="{{ url_for('ui.api_dcs_gantt_data') }}"
        data-apg-push-url="{{ url_for('api.api_dcs_push_to_apg') }}"
+       data-apg-plan-url-template="{{ url_for('api.api_apg_plan_get', plan_id=0) }}"
+       data-apg-cargo-summary-url-template="{{ url_for('api.api_apg_plan_cargo_summary', plan_id=0) }}"
        data-apg-reset-url="{{ url_for('api.api_apg_reset_passengers') }}"
        data-manifest-preview-url="{{ url_for('api.api_dcs_manifest_preview') }}"
        data-envision-action-url="{{ url_for('api.api_envision_flight_action') }}"
@@ -98,6 +100,7 @@
         <div class="muted">Select a bar on the timeline.</div>
         <div class="detail-actions">
           <button id="btnPaxList" class="btn btn-ghost" type="button">Passenger List</button>
+          <button id="btnCargo" class="btn btn-ghost" type="button">Cargo</button>
           <button id="btnPreviewManifest" class="btn btn-ghost" type="button">Preview Manifest</button>
           <button id="btnResetApg" class="btn btn-ghost" type="button">Reset APG Pax</button>
           <button id="btnSeatmap" class="btn btn-ghost" type="button">Seatmap</button>
@@ -170,6 +173,17 @@
       <div class="status-actions">
         <button class="btn btn-primary" value="default">OK</button>
       </div>
+    </form>
+  </dialog>
+
+  <dialog id="cargoDialog" class="flight-edit-dialog">
+    <form method="dialog" class="flight-edit-shell">
+      <header>
+        <h3 id="cargoTitle">Cargo</h3>
+        <button class="btn btn-ghost" value="cancel">Close</button>
+      </header>
+      <div id="cargoWeightsSummary" class="status-body"></div>
+      <div id="cargoEditor" class="status-body"></div>
     </form>
   </dialog>
 

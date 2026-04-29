@@ -2355,6 +2355,47 @@ def apg_plan_get(bearer: str, plan_id: int) -> dict:
         raise RuntimeError(f"APG plan/get error: {status.get('message', 'unknown')}")
     return data.get("data") or {}
 
+def apg_plan_ofp(bearer: str, plan_id: int) -> dict:
+    """
+    Fetch APG OFP / fuel summary data for a single plan.
+    Used to derive TOW / LDW style figures for the cargo modal.
+    """
+    url = f"{APG_BASE.rstrip('/')}/plan/ofp"
+    headers = {
+        "Authorization": bearer,
+        "X-API-Version": APG_API_VERSION,
+        "Content-Type": "application/json",
+        "User-Agent": "AirChathams-Bridge/1.0",
+    }
+    payload = {"id": int(plan_id)}
+    r = requests.post(url, headers=headers, json=payload, timeout=60)
+    r.raise_for_status()
+    data = r.json() or {}
+    status = data.get("status", {})
+    if not status.get("success", False):
+        raise RuntimeError(f"APG plan/ofp error: {status.get('message', 'unknown')}")
+    return data.get("data") or {}
+
+def apg_aircraft_get(bearer: str, aircraft_id: int) -> dict:
+    """
+    Fetch APG aircraft details, including massAndBalance limits, for a customer aircraft.
+    """
+    url = f"{APG_BASE.rstrip('/')}/aircraft/get"
+    headers = {
+        "Authorization": bearer,
+        "X-API-Version": APG_API_VERSION,
+        "Content-Type": "application/json",
+        "User-Agent": "AirChathams-Bridge/1.0",
+    }
+    payload = {"aircraft_id": int(aircraft_id)}
+    r = requests.post(url, headers=headers, json=payload, timeout=60)
+    r.raise_for_status()
+    data = r.json() or {}
+    status = data.get("status", {})
+    if not status.get("success", False):
+        raise RuntimeError(f"APG aircraft/get error: {status.get('message', 'unknown')}")
+    return data.get("data") or {}
+
 def build_pax_payload_for_plan(
     plan: dict,
     pax_ad: int,
@@ -2417,6 +2458,9 @@ def update_apg_plan_from_dcs_row(
     bearer: str,
     plan_id: int,
     dcs_flight: dict,
+    cargo_loads: list[dict] | None = None,
+    cargo_station_label: str | None = None,
+    cargo_mass_kg: float | None = None,
     preview_only: bool = False,
 ) -> dict:
     """
@@ -2425,6 +2469,7 @@ def update_apg_plan_from_dcs_row(
     - Pull the current plan via apg_plan_get()
     - Apply DCS passengers -> 'Passenger {Seat}' rows (mass + pob_count)
     - Optionally update 'Baggage' station mass from Passenger.BaggageWeight
+    - Optionally update cargo/hold stations from manually allocated baggage+freight
     - Log a detailed DEBUG block BEFORE calling plan/edit so we can see exactly
       what is being sent into APG.
 
@@ -2460,7 +2505,9 @@ def update_apg_plan_from_dcs_row(
         except (TypeError, ValueError):
             pass
 
-    if total_bags_kg:
+    manual_cargo_loads = cargo_loads or []
+
+    if total_bags_kg and not manual_cargo_loads:
         for st in loading:
             label = (st.get("label") or "").strip().lower()
             if label == "baggage":
@@ -2469,6 +2516,77 @@ def update_apg_plan_from_dcs_row(
                 cl.setdefault("volume", 0)
                 cl.setdefault("pob_count", 0)
                 break
+
+    # --- 3b) Optional cargo station updates from manual allocations ---
+    if not manual_cargo_loads and cargo_station_label:
+        # Backward-compatible path for the temporary single-station UI.
+        manual_cargo_loads = [
+            {
+                "label": cargo_station_label,
+                "baggage_kg": float(cargo_mass_kg if cargo_mass_kg is not None else total_bags_kg or 0.0),
+                "freight_kg": 0.0,
+            }
+        ]
+
+    def _is_cargo_station_label(label: str) -> bool:
+        txt = (label or "").strip().lower()
+        if not txt:
+            return False
+        return any(key in txt for key in ("cargo", "hold", "baggage"))
+
+    cargo_load_map: dict[str, dict[str, float | str]] = {}
+    for entry in manual_cargo_loads:
+        if not isinstance(entry, dict):
+            continue
+        label_raw = str(entry.get("label") or "").strip()
+        if not label_raw:
+            continue
+        try:
+            baggage_kg = float(entry.get("baggage_kg") or 0.0)
+        except (TypeError, ValueError):
+            baggage_kg = 0.0
+        try:
+            freight_kg = float(entry.get("freight_kg") or 0.0)
+        except (TypeError, ValueError):
+            freight_kg = 0.0
+
+        cargo_load_map[label_raw.lower()] = {
+            "label": label_raw,
+            "baggage_kg": baggage_kg,
+            "freight_kg": freight_kg,
+            "total_kg": baggage_kg + freight_kg,
+        }
+
+    if cargo_load_map:
+        cargo_labels_seen: list[str] = []
+        applied_cargo_labels: set[str] = set()
+
+        for st in loading:
+            label_raw = (st.get("label") or "").strip()
+            if not _is_cargo_station_label(label_raw):
+                continue
+
+            cargo_labels_seen.append(label_raw)
+            cl = st.setdefault("customLoad", {})
+            cl.setdefault("volume", 0)
+            cl.setdefault("pob_count", 0)
+
+            mapped = cargo_load_map.get(label_raw.lower())
+            if mapped:
+                cl["mass"] = float(mapped["total_kg"])
+                applied_cargo_labels.add(label_raw.lower())
+            else:
+                # Clear omitted cargo stations so APG reflects the current manual split.
+                cl["mass"] = 0.0
+
+        missing = sorted(set(cargo_load_map.keys()) - applied_cargo_labels)
+        if missing:
+            logger.warning(
+                "[APG] Some requested cargo stations were not found on plan %s. Missing=%s Available=%s",
+                plan_id,
+                missing,
+                cargo_labels_seen,
+            )
 
     # --- 4) Build the minimal plan/edit payload ---
     edit_payload: Dict[str, Any] = {
@@ -2557,6 +2675,8 @@ def update_apg_plan_from_dcs_row(
     debug_summary = {
         "plan_id": int(plan_id),
         "fuelMass": mb.get("fuelMass"),
+        "cargo_loads": list(cargo_load_map.values()) if cargo_load_map else [],
+        "dcs_baggage_total_kg": total_bags_kg,
         "apg_pax_rows": apg_pax_rows,
         "dcs_pax": dcs_pax_summary,
     }

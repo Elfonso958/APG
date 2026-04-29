@@ -15,6 +15,8 @@ from .sync.envision_apg_sync import (
     APG_PASSWORD,
     update_apg_plan_from_dcs_row,
     apg_plan_get,
+    apg_plan_ofp,
+    apg_aircraft_get,
     envision_update_flight_times,
     envision_get_flight_times,
     envision_get_flights,
@@ -667,6 +669,15 @@ def api_dcs_push_to_apg():
     flight_no    = (data.get("flight_number") or "").strip()
     preview_only = bool(data.get("preview_only"))
     pax_list     = data.get("pax_list") or []
+    cargo_loads  = data.get("cargo_loads") or []
+    cargo_station_label = (data.get("cargo_station_label") or "").strip()
+    cargo_mass_kg_raw = data.get("cargo_mass_kg")
+    try:
+        cargo_mass_kg = float(cargo_mass_kg_raw) if cargo_mass_kg_raw not in (None, "") else None
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Bad cargo_mass_kg value"}), 400
+    if not isinstance(cargo_loads, list):
+        return jsonify({"ok": False, "error": "Bad cargo_loads value"}), 400
 
     raw_crew     = data.get("crew") or [] 
 
@@ -701,8 +712,9 @@ def api_dcs_push_to_apg():
 
     logger.info(
         "APG push: plan_id=%s dep=%s date=%s designator=%s flight_no=%s "
-        "pax_count=%d preview_only=%s",
-        plan_id, dep, flight_date, designator, flight_no, len(pax_list), preview_only
+        "pax_count=%d cargo_loads=%d cargo_station=%s cargo_mass_kg=%s preview_only=%s",
+        plan_id, dep, flight_date, designator, flight_no, len(pax_list),
+        len(cargo_loads), cargo_station_label or None, cargo_mass_kg, preview_only
     )
 
     # 1) APG auth (unchanged pattern)
@@ -722,6 +734,9 @@ def api_dcs_push_to_apg():
             bearer=bearer,
             plan_id=int(plan_id),
             dcs_flight=dcs_flight,
+            cargo_loads=cargo_loads,
+            cargo_station_label=cargo_station_label or None,
+            cargo_mass_kg=cargo_mass_kg,
             preview_only=preview_only,
         )
     except Exception as e:
@@ -857,6 +872,187 @@ def api_apg_plan_get(plan_id: int):
         return jsonify({"ok": False, "error": f"APG plan/get failed: {e}"}), 502
 
     return jsonify({"ok": True, "plan_id": plan_id, "plan": plan})
+
+@api_bp.get("/apg/plan/<int:plan_id>/cargo_summary")
+def api_apg_plan_cargo_summary(plan_id: int):
+    def to_float(value, default=0.0):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    try:
+        auth = apg_login(APG_EMAIL, APG_PASSWORD)
+        bearer = auth["authorization"]
+    except Exception as e:
+        current_app.logger.exception("APG login failed in api_apg_plan_cargo_summary")
+        return jsonify({"ok": False, "error": f"APG login failed: {e}"}), 502
+
+    try:
+        plan = apg_plan_get(bearer, plan_id)
+    except Exception as e:
+        current_app.logger.exception("APG plan/get failed in cargo summary")
+        return jsonify({"ok": False, "error": f"APG plan/get failed: {e}"}), 502
+
+    ofp = {}
+    ofp_error = None
+    try:
+        ofp = apg_plan_ofp(bearer, plan_id)
+    except Exception as e:
+        current_app.logger.warning("APG plan/ofp failed for cargo summary: %s", e)
+        ofp_error = str(e)
+
+    mb = plan.get("massAndBalance") or {}
+    loading = mb.get("loading") or []
+    units = mb.get("units") or {}
+    limits = mb.get("limits") or {}
+    bem = mb.get("bem") or {}
+    aircraft_id = (
+        plan.get("aircraft_id")
+        or plan.get("aircraftId")
+        or (plan.get("aircraft") or {}).get("id")
+        or (plan.get("route") or {}).get("aircraft_id")
+        or (plan.get("route") or {}).get("aircraftId")
+    )
+    aircraft_data = {}
+    aircraft_error = None
+    need_aircraft_fallback = (
+        not to_float(limits.get("mzfm"))
+        or not to_float(limits.get("mtom"))
+        or not to_float(limits.get("mldgm"))
+        or not to_float(bem.get("mass"))
+    )
+    if need_aircraft_fallback and aircraft_id not in (None, ""):
+        try:
+            aircraft_data = apg_aircraft_get(bearer, int(aircraft_id))
+        except Exception as e:
+            current_app.logger.warning("APG aircraft/get failed for cargo summary: %s", e)
+            aircraft_error = str(e)
+
+    aircraft_mb = (
+        aircraft_data.get("massAndBalance")
+        or aircraft_data.get("mb")
+        or {}
+    )
+    if not limits:
+        limits = aircraft_mb.get("limits") or {}
+    else:
+        merged_limits = dict(aircraft_mb.get("limits") or {})
+        merged_limits.update({k: v for k, v in limits.items() if v not in (None, "", 0, "0")})
+        limits = merged_limits
+    if not bem:
+        bem = aircraft_mb.get("bem") or {}
+    if not units:
+        units = aircraft_mb.get("units") or {}
+    reserve = plan.get("reserveFuel") or {}
+    fuel_summary = (ofp.get("fuelSummary") or {})
+    fuel_totals = fuel_summary.get("totals") or {}
+    fuel_legal = fuel_summary.get("legal") or {}
+    route_main = ((ofp.get("routes") or {}).get("main") or {})
+    route_waypoints = route_main.get("waypoints") or []
+
+    current_zfw = 0.0
+    dow_mass = 0.0
+    fixed_operational_mass = 0.0
+    cargo_stations = []
+    for st in loading:
+        label = str(st.get("label") or "").strip()
+        cl = st.get("customLoad") or {}
+        mass = to_float(cl.get("mass"))
+        current_zfw += mass
+        low = label.lower()
+        if low == "dow":
+            dow_mass = mass
+        if label and not low.startswith("passenger ") and ("cargo" in low or "hold" in low or "baggage" in low):
+            cargo_stations.append({
+                "label": label,
+                "mass": mass,
+                "pob_count": to_float(cl.get("pob_count")),
+                "volume": to_float(cl.get("volume")),
+            })
+            continue
+        if low in {"bem", "bew", "basic empty", "basic empty weight", "empty aircraft"}:
+            continue
+        if low.startswith("passenger "):
+            continue
+        fixed_operational_mass += mass
+
+    bow = to_float(bem.get("mass"))
+    bow_label = str(bem.get("label") or "BEW")
+    fuel_mass = to_float(mb.get("fuelMass"))
+    taxi_fuel = to_float(fuel_legal.get("taxi"), to_float(reserve.get("taxiFuel")))
+    landing_fuel = to_float(fuel_totals.get("landing"))
+    current_tow = current_zfw + max(0.0, fuel_mass - taxi_fuel)
+    current_ldw = current_zfw + max(0.0, landing_fuel)
+
+    route_masses = []
+    for wp in route_waypoints:
+        m = to_float((wp or {}).get("mass"), default=None)
+        if m is not None and m > 0:
+            route_masses.append(m)
+
+    if route_masses:
+        # APG OFP route masses are the best source for operational TOW/LDW.
+        current_tow = route_masses[0]
+        current_ldw = route_masses[-1]
+        takeoff_fuel_mass = max(0.0, fuel_mass - taxi_fuel)
+        if takeoff_fuel_mass > 0:
+            current_zfw = current_tow - takeoff_fuel_mass
+    mzfw = to_float(limits.get("mzfm"))
+    mtom = to_float(limits.get("mtom"))
+    mldgm = to_float(limits.get("mldgm"))
+
+    def build_metric(current, limit, code, label):
+        remaining = limit - current if limit > 0 else None
+        percent = ((current / limit) * 100.0) if limit > 0 else None
+        return {
+            "code": code,
+            "label": label,
+            "current": current,
+            "limit": limit if limit > 0 else None,
+            "remaining": remaining,
+            "percent_of_limit": percent,
+        }
+
+    return jsonify({
+        "ok": True,
+        "plan_id": plan_id,
+        "units": {
+            "mass": units.get("mass") or "kg",
+            "length": units.get("length") or "",
+        },
+        "cargo_stations": cargo_stations,
+        "weights": {
+            "dow": {
+                "code": "DOW",
+                "label": "Dry Operating Weight",
+                "current": dow_mass if dow_mass > 0 else (bow + fixed_operational_mass),
+                "limit": None,
+                "remaining": None,
+                "percent_of_limit": None,
+            },
+            "bow": {
+                "code": "BOW",
+                "label": f"{bow_label} basis",
+                "current": bow,
+                "limit": None,
+                "remaining": None,
+                "percent_of_limit": None,
+            },
+            "zfw": build_metric(current_zfw, mzfw, "ZFW", "Zero Fuel Weight"),
+            "tow": build_metric(current_tow, mtom, "TOW", "Takeoff Weight"),
+            "ldw": build_metric(current_ldw, mldgm, "LDW", "Landing Weight"),
+        },
+        "fuel": {
+            "block": fuel_mass,
+            "taxi": taxi_fuel,
+            "landing": landing_fuel,
+        },
+        "fixed_operational_mass": fixed_operational_mass,
+        "ofp_error": ofp_error,
+        "aircraft_error": aircraft_error,
+        "aircraft_id": aircraft_id,
+    })
 
 @api_bp.post("/dcs/passenger_list")
 def api_dcs_passenger_list():

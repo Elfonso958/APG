@@ -4,6 +4,8 @@
 
   const apiUrl = app.dataset.apiUrl;
   const apgPushUrl = app.dataset.apgPushUrl;
+  const apgPlanUrlTemplate = app.dataset.apgPlanUrlTemplate;
+  const apgCargoSummaryUrlTemplate = app.dataset.apgCargoSummaryUrlTemplate;
   const apgResetUrl = app.dataset.apgResetUrl;
   const manifestPreviewUrl = app.dataset.manifestPreviewUrl;
   const envisionActionUrl = app.dataset.envisionActionUrl;
@@ -47,6 +49,7 @@
 
   const btnPreviewManifest = document.getElementById("btnPreviewManifest");
   const btnPaxList = document.getElementById("btnPaxList");
+  const btnCargo = document.getElementById("btnCargo");
   const btnSubmitApg = document.getElementById("btnSubmitApg");
   const btnResetApg = document.getElementById("btnResetApg");
   const btnSeatmap = document.getElementById("btnSeatmap");
@@ -59,6 +62,10 @@
   const paxDialog = document.getElementById("paxDialog");
   const paxTitle = document.getElementById("paxTitle");
   const paxTbody = document.getElementById("paxTbody");
+  const cargoDialog = document.getElementById("cargoDialog");
+  const cargoTitle = document.getElementById("cargoTitle");
+  const cargoWeightsSummary = document.getElementById("cargoWeightsSummary");
+  const cargoEditor = document.getElementById("cargoEditor");
   const envPickerDialog = document.getElementById("envPickerDialog");
   const envBaseBtn = document.getElementById("envBaseBtn");
   const envTestBtn = document.getElementById("envTestBtn");
@@ -191,6 +198,9 @@
   let editInitialByAction = {};
   const regDefectsCache = new Map();
   const regMaintenanceCache = new Map();
+  const apgCargoStationsCache = new Map();
+  const apgCargoAllocationsCache = new Map();
+  const apgCargoWeightSummaryCache = new Map();
   let showMaintenance = true;
   let liveNowTimer = null;
   let movementFlight = null;
@@ -296,7 +306,7 @@
   }
 
   function setActionsEnabled(enabled) {
-    [btnPaxList, btnPreviewManifest, btnSubmitApg, btnResetApg, btnSeatmap, btnMovementMsg].forEach((b) => {
+    [btnPaxList, btnCargo, btnPreviewManifest, btnSubmitApg, btnResetApg, btnSeatmap, btnMovementMsg].forEach((b) => {
       if (b) b.disabled = !enabled;
     });
   }
@@ -1662,6 +1672,462 @@
     apgStatusDialog.showModal();
   }
 
+  function isApgCargoStationLabel(label) {
+    const txt = String(label || "").trim().toLowerCase();
+    if (!txt) return false;
+    if (txt.startsWith("passenger ")) return false;
+    return txt.includes("cargo") || txt.includes("hold") || txt.includes("baggage");
+  }
+
+  function getApgPlanId(value) {
+    const id = Number(value || 0);
+    return Number.isFinite(id) && id > 0 ? id : 0;
+  }
+
+  function buildApgPlanUrl(template, planId) {
+    const resolvedPlanId = getApgPlanId(planId);
+    if (!template || !resolvedPlanId) return "";
+    return String(template).replace(/\/0(\/|$)/, `/${encodeURIComponent(String(resolvedPlanId))}$1`);
+  }
+
+  async function fetchApgCargoStations(planId) {
+    const resolvedPlanId = getApgPlanId(planId);
+    if (!resolvedPlanId || !apgPlanUrlTemplate) return [];
+    const url = buildApgPlanUrl(apgPlanUrlTemplate, resolvedPlanId);
+    const resp = await fetch(url, { headers: { Accept: "application/json" } });
+    const js = await resp.json();
+    if (!resp.ok || !js.ok) throw new Error(js.error || `APG plan request failed (${resp.status})`);
+    const loading = Array.isArray(js.plan?.massAndBalance?.loading) ? js.plan.massAndBalance.loading : [];
+    const stations = loading
+      .map((st) => {
+        const label = String(st?.label || "").trim();
+        const currentMass = Number(st?.customLoad?.mass || 0);
+        return { label, current_mass: Number.isFinite(currentMass) ? currentMass : 0 };
+      })
+      .filter((st) => isApgCargoStationLabel(st.label));
+    const specificStations = stations.filter((st) => {
+      const txt = st.label.toLowerCase();
+      return txt.includes("hold") || txt.includes("cargo");
+    });
+    if (specificStations.length) return specificStations;
+    return stations;
+  }
+
+  function cacheCargoAllocationsForFlight(f) {
+    const planId = getApgPlanId(f?.apg_plan_id);
+    const planKey = String(planId);
+    if (!planId) return;
+    if (Array.isArray(f.apgCargoStations) && f.apgCargoStations.length) {
+      apgCargoStationsCache.set(planKey, f.apgCargoStations.map((row) => ({
+        label: String(row.label || ""),
+        current_mass: Number(row.current_mass || 0),
+      })));
+    }
+    if (Array.isArray(f.apgCargoAllocations) && f.apgCargoAllocations.length) {
+      apgCargoAllocationsCache.set(planKey, f.apgCargoAllocations.map((row) => ({
+        label: String(row.label || ""),
+        baggage_kg: Number(row.baggage_kg || 0),
+        freight_kg: Number(row.freight_kg || 0),
+        current_mass: Number(row.current_mass || 0),
+      })));
+    }
+    if (f.apgCargoWeightSummary) {
+      apgCargoWeightSummaryCache.set(planKey, JSON.parse(JSON.stringify(f.apgCargoWeightSummary)));
+    }
+  }
+
+  function hydrateCargoCacheForFlight(f) {
+    const planId = getApgPlanId(f?.apg_plan_id);
+    const planKey = String(planId);
+    if (!planId) return;
+    const cachedStations = apgCargoStationsCache.get(planKey);
+    if (Array.isArray(cachedStations) && cachedStations.length) {
+      f.apgCargoStations = cachedStations.map((row) => ({
+        label: String(row.label || ""),
+        current_mass: Number(row.current_mass || 0),
+      }));
+      f.apgCargoStationsLoaded = true;
+    }
+    const cachedAllocations = apgCargoAllocationsCache.get(planKey);
+    if (Array.isArray(cachedAllocations) && cachedAllocations.length) {
+      f.apgCargoAllocations = cachedAllocations.map((row) => ({
+        label: String(row.label || ""),
+        baggage_kg: Number(row.baggage_kg || 0),
+        freight_kg: Number(row.freight_kg || 0),
+        current_mass: Number(row.current_mass || 0),
+      }));
+    }
+    const cachedSummary = apgCargoWeightSummaryCache.get(planKey);
+    if (cachedSummary) {
+      f.apgCargoWeightSummary = JSON.parse(JSON.stringify(cachedSummary));
+    }
+  }
+
+  async function fetchApgCargoSummary(planId) {
+    const resolvedPlanId = getApgPlanId(planId);
+    if (!resolvedPlanId || !apgCargoSummaryUrlTemplate) return null;
+    const url = buildApgPlanUrl(apgCargoSummaryUrlTemplate, resolvedPlanId);
+    const resp = await fetch(url, { headers: { Accept: "application/json" } });
+    const js = await resp.json();
+    if (!resp.ok || !js.ok) throw new Error(js.error || `APG cargo summary failed (${resp.status})`);
+    return js;
+  }
+
+  function ensureCargoAllocations(f, stations) {
+    const prev = new Map(
+      (
+        Array.isArray(f.apgCargoAllocations) && f.apgCargoAllocations.length
+          ? f.apgCargoAllocations
+          : (apgCargoAllocationsCache.get(String(getApgPlanId(f?.apg_plan_id))) || [])
+      ).map((row) => [String(row.label || ""), row])
+    );
+    f.apgCargoAllocations = stations.map((st) => {
+      const existing = prev.get(st.label) || {};
+      return {
+        label: st.label,
+        baggage_kg: Number(existing.baggage_kg || 0),
+        freight_kg: Number(existing.freight_kg || 0),
+        current_mass: Number.isFinite(Number(st.current_mass)) ? Number(st.current_mass) : 0,
+      };
+    });
+    cacheCargoAllocationsForFlight(f);
+  }
+
+  function cargoTotalsForFlight(f) {
+    const rows = Array.isArray(f?.apgCargoAllocations) ? f.apgCargoAllocations : [];
+    const baggageTotal = rows.reduce((sum, row) => sum + (Number(row.baggage_kg) || 0), 0);
+    const freightTotal = rows.reduce((sum, row) => sum + (Number(row.freight_kg) || 0), 0);
+    const plannedCargoTotal = rows.reduce((sum, row) => sum + (Number(row.baggage_kg) || 0) + (Number(row.freight_kg) || 0), 0);
+    const currentCargoTotal = rows.reduce((sum, row) => sum + (Number(row.current_mass) || 0), 0);
+    const dcsBaggage = Number(f?.bags_kg || 0);
+    const remaining = dcsBaggage - baggageTotal;
+    return { baggageTotal, freightTotal, plannedCargoTotal, currentCargoTotal, dcsBaggage, remaining };
+  }
+
+  function estimateDcsPassengerMass(f) {
+    const pax = Array.isArray(f?.pax_list) ? f.pax_list : [];
+    let total = 0;
+    for (const p of pax) {
+      const status = classifyPaxStatus(p);
+      if (!["CHECKED", "BOARDED", "FLOWN"].includes(status)) continue;
+      const t = String(p.PassengerType || p.passengerType || "").toUpperCase();
+      if (t === "INF" || t === "IN" || t === "INFANT") total += 15;
+      else if (t === "CHD" || t === "CH" || t === "C" || t === "CNN" || t === "CHILD") total += 46;
+      else total += 86;
+    }
+    return total;
+  }
+
+  function estimateOperationalWeights(f, summary) {
+    const cargoTotals = cargoTotalsForFlight(f);
+    const dow = Number(summary?.weights?.dow?.current || 0);
+    const bow = Number(summary?.weights?.bow?.current || 0);
+    const fixedOperationalMass = Number(summary?.fixed_operational_mass || 0);
+    const dcsPaxMass = estimateDcsPassengerMass(f);
+    const allocatedBaggage = cargoTotals.baggageTotal;
+    const freight = cargoTotals.freightTotal;
+    const apgZfw = Number(summary?.weights?.zfw?.current || 0);
+    const apgTow = Number(summary?.weights?.tow?.current || 0);
+    const apgLdw = Number(summary?.weights?.ldw?.current || 0);
+    const taxiFuel = Number(summary?.fuel?.taxi || 0);
+    const landingFuel = Number(summary?.fuel?.landing || 0);
+    const operatingBase = dow > 0 ? dow : (bow + fixedOperationalMass);
+    const zfw = operatingBase + dcsPaxMass + allocatedBaggage + freight;
+    const takeoffFuelAllowance = apgTow > 0 && apgZfw > 0
+      ? Math.max(0, apgTow - apgZfw)
+      : Math.max(0, Number(summary?.fuel?.block || 0) - taxiFuel);
+    const landingFuelAllowance = apgLdw > 0 && apgZfw > 0
+      ? Math.max(0, apgLdw - apgZfw)
+      : landingFuel;
+    const tow = zfw + takeoffFuelAllowance;
+    const ldw = zfw + landingFuelAllowance;
+    return {
+      dcsPaxMass,
+      operatingBase,
+      fixedOperationalMass,
+      allocatedBaggage,
+      freight,
+      takeoffFuelAllowance,
+      landingFuelAllowance,
+      zfw,
+      tow,
+      ldw,
+    };
+  }
+
+  function updateCargoEditorSummary(f) {
+    const host = cargoEditor;
+    if (!host) return;
+    const totals = cargoTotalsForFlight(f);
+    host.querySelectorAll("[data-cargo-total]").forEach((node) => {
+      const label = node.getAttribute("data-cargo-total") || "";
+      const row = (f.apgCargoAllocations || []).find((item) => item.label === label);
+      const total = (Number(row?.baggage_kg) || 0) + (Number(row?.freight_kg) || 0);
+      node.textContent = `${total.toFixed(1)} kg`;
+    });
+    const allocatedEl = host.querySelector("#cargoAllocatedKg");
+    const freightEl = host.querySelector("#cargoFreightKg");
+    const remainingEl = host.querySelector("#cargoRemainingKg");
+    const statusEl = host.querySelector("#cargoRemainingStatus");
+    if (allocatedEl) allocatedEl.textContent = `${totals.baggageTotal.toFixed(1)} kg`;
+    if (freightEl) freightEl.textContent = `${totals.freightTotal.toFixed(1)} kg`;
+    if (remainingEl) remainingEl.textContent = `${Math.abs(totals.remaining).toFixed(1)} kg`;
+    if (statusEl) {
+      if (Math.abs(totals.remaining) < 0.05) {
+        statusEl.textContent = "All DCS baggage allocated";
+        statusEl.style.color = "";
+      } else if (totals.remaining > 0) {
+        statusEl.textContent = "Baggage remaining";
+        statusEl.style.color = "#b45309";
+      } else {
+        statusEl.textContent = "Over allocated";
+        statusEl.style.color = "#b91c1c";
+      }
+    }
+  }
+
+  function renderCargoEditor(f) {
+    const host = cargoEditor;
+    if (!host) return;
+    if (!getApgPlanId(f.apg_plan_id)) {
+      host.innerHTML = '<div class="muted">No APG plan linked, so cargo holds cannot be loaded.</div>';
+      return;
+    }
+    if (f.apgCargoLoading) {
+      host.innerHTML = '<div class="muted">Loading APG cargo stations...</div>';
+      return;
+    }
+    const rows = Array.isArray(f.apgCargoAllocations) ? f.apgCargoAllocations : [];
+    if (!rows.length) {
+      host.innerHTML = '<div class="muted">No APG cargo/hold stations found on this plan.</div>';
+      return;
+    }
+    const totals = cargoTotalsForFlight(f);
+    host.innerHTML = `
+      <div class="card-sub" style="margin-top:10px;">Cargo Allocation</div>
+      <div class="kv"><span>DCS baggage total</span><strong>${totals.dcsBaggage.toFixed(1)} kg</strong></div>
+      <div class="kv"><span>Allocated baggage</span><strong id="cargoAllocatedKg">${totals.baggageTotal.toFixed(1)} kg</strong></div>
+      <div class="kv"><span>Freight added</span><strong id="cargoFreightKg">${totals.freightTotal.toFixed(1)} kg</strong></div>
+      <div class="kv"><span id="cargoRemainingStatus">Baggage remaining</span><strong id="cargoRemainingKg">${Math.abs(totals.remaining).toFixed(1)} kg</strong></div>
+      <div style="overflow:auto; margin-top:8px;">
+        <table class="pax-table">
+          <thead>
+            <tr>
+              <th>Station</th>
+              <th>Baggage Kg</th>
+              <th>Freight Kg</th>
+              <th>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((row) => `
+              <tr data-cargo-row="${escapeHtml(row.label)}">
+                <td>${escapeHtml(row.label)}</td>
+                <td><input type="number" min="0" step="0.1" class="form-control cargo-baggage-input" data-label="${escapeHtml(row.label)}" value="${Number(row.baggage_kg || 0).toFixed(1)}"></td>
+                <td><input type="number" min="0" step="0.1" class="form-control cargo-freight-input" data-label="${escapeHtml(row.label)}" value="${Number(row.freight_kg || 0).toFixed(1)}"></td>
+                <td><strong data-cargo-total="${escapeHtml(row.label)}">${(Number(row.baggage_kg || 0) + Number(row.freight_kg || 0)).toFixed(1)} kg</strong></td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    `;
+    host.querySelectorAll(".cargo-baggage-input, .cargo-freight-input").forEach((input) => {
+      input.addEventListener("input", () => {
+        const label = input.getAttribute("data-label") || "";
+        const row = (f.apgCargoAllocations || []).find((item) => item.label === label);
+        if (!row) return;
+        const baggageInput = host.querySelector(`.cargo-baggage-input[data-label="${CSS.escape(label)}"]`);
+        const freightInput = host.querySelector(`.cargo-freight-input[data-label="${CSS.escape(label)}"]`);
+        row.baggage_kg = Math.max(0, Number(baggageInput?.value || 0));
+        row.freight_kg = Math.max(0, Number(freightInput?.value || 0));
+        cacheCargoAllocationsForFlight(f);
+        updateCargoEditorSummary(f);
+        renderCargoWeightsSummary(f);
+      });
+    });
+    updateCargoEditorSummary(f);
+  }
+
+  async function populateCargoEditor(f) {
+    const host = cargoEditor;
+    if (!host || !f) return;
+    if (!getApgPlanId(f.apg_plan_id)) {
+      renderCargoEditor(f);
+      return;
+    }
+    if (f.apgCargoStationsLoaded) {
+      ensureCargoAllocations(f, f.apgCargoStations);
+      renderCargoEditor(f);
+      return;
+    }
+    f.apgCargoLoading = true;
+    renderCargoEditor(f);
+    try {
+      const stations = await fetchApgCargoStations(getApgPlanId(f.apg_plan_id));
+      if (selectedFlight !== f) return;
+      f.apgCargoStations = stations;
+      f.apgCargoStationsLoaded = true;
+      ensureCargoAllocations(f, stations);
+    } catch (err) {
+      if (selectedFlight !== f) return;
+      host.innerHTML = `<div class="muted">Failed to load APG cargo stations: ${escapeHtml(err.message || String(err))}</div>`;
+      return;
+    } finally {
+      f.apgCargoLoading = false;
+    }
+    if (selectedFlight === f) renderCargoEditor(f);
+  }
+
+  function renderCargoWeightsSummary(f) {
+    if (!cargoWeightsSummary) return;
+    if (!getApgPlanId(f?.apg_plan_id)) {
+      cargoWeightsSummary.innerHTML = '<div class="muted">No APG plan linked, so weight summary is unavailable.</div>';
+      return;
+    }
+    const summary = f.apgCargoWeightSummary;
+    if (f.apgCargoSummaryLoading) {
+      cargoWeightsSummary.innerHTML = '<div class="muted">Loading APG weight summary...</div>';
+      return;
+    }
+    if (!summary) {
+      cargoWeightsSummary.innerHTML = '<div class="muted">APG weight summary not loaded yet.</div>';
+      return;
+    }
+    const massUnit = summary.units?.mass || "kg";
+    const cargoTotals = cargoTotalsForFlight(f);
+    const estimates = estimateOperationalWeights(f, summary);
+    const dow = summary.weights?.dow || null;
+    const metricMeta = {
+      zfw: {
+        title: "Loaded Weight",
+        help: "People, bags and freight before fuel",
+      },
+      tow: {
+        title: "Takeoff Weight",
+        help: "Weight at departure",
+      },
+      ldw: {
+        title: "Landing Weight",
+        help: "Expected weight on arrival",
+      },
+    };
+    const metrics = ["zfw", "tow", "ldw"]
+      .map((key) => summary.weights?.[key] ? { ...summary.weights[key], _key: key } : null)
+      .filter(Boolean);
+    const computed = metrics.map((m) => {
+      const code = m._key;
+      const meta = metricMeta[code];
+      const current = code === "zfw"
+        ? estimates.zfw
+        : code === "tow"
+          ? estimates.tow
+          : estimates.ldw;
+      const limit = Number(m.limit || 0);
+      const remaining = limit > 0 ? (limit - current) : null;
+      const pct = limit > 0 ? ((current / limit) * 100.0) : null;
+      let statusClass = "is-ok";
+      let statusText = "Safe";
+      if (remaining != null) {
+        if (remaining < 0) {
+          statusClass = "is-over";
+          statusText = "Over max";
+        } else if (remaining < limit * 0.1) {
+          statusClass = "is-near";
+          statusText = "Close to max";
+        }
+      }
+      return {
+        code,
+        title: meta.title,
+        help: meta.help,
+        current,
+        limit,
+        remaining,
+        pct,
+        statusClass,
+        statusText,
+      };
+    });
+    const overallState = computed.some((m) => m.statusClass === "is-over")
+      ? { cls: "is-over", title: "Stop: aircraft would be overweight", text: "Reduce baggage or freight before sending to APG." }
+      : computed.some((m) => m.statusClass === "is-near")
+        ? { cls: "is-near", title: "Warning: close to aircraft maximum", text: "Double-check any extra bags or freight before sending." }
+        : { cls: "is-ok", title: "Safe to load", text: "All checked weights are within the APG maximums." };
+    cargoWeightsSummary.innerHTML = `
+      <div class="cargo-safety-banner ${overallState.cls}">
+        <div class="cargo-safety-title">${overallState.title}</div>
+        <div class="cargo-safety-text">${overallState.text}</div>
+      </div>
+      <div class="cargo-weight-grid">
+        ${computed.map((m) => `
+          <div class="cargo-weight-card ${m.statusClass}">
+            <div class="cargo-weight-card-top">
+              <div>
+                <div class="cargo-weight-title">${escapeHtml(m.title)}</div>
+                <div class="cargo-weight-help">${escapeHtml(m.help)}</div>
+              </div>
+              <div class="weight-status-pill ${m.statusClass}">${m.statusText}</div>
+            </div>
+            <div class="cargo-weight-main">${m.current.toFixed(0)} <span>${massUnit}</span></div>
+            <div class="cargo-weight-bar">
+              <div class="cargo-weight-bar-fill ${m.statusClass}" style="width:${Math.max(0, Math.min(100, m.pct || 0)).toFixed(1)}%"></div>
+            </div>
+            <div class="cargo-weight-meta">
+              <div><span>Max</span><strong>${m.limit.toFixed(0)} ${massUnit}</strong></div>
+              <div><span>Remaining</span><strong>${m.remaining.toFixed(0)} ${massUnit}</strong></div>
+              <div><span>Used</span><strong>${m.pct.toFixed(0)}%</strong></div>
+            </div>
+          </div>
+        `).join("")}
+      </div>
+      ${dow ? `<div class="cargo-reference-line">Operational empty weight (DOW): ${Number(dow.current || 0).toFixed(0)} ${massUnit}</div>` : ""}
+      <div class="cargo-reference-line">Passenger estimate from manifest: ${estimates.dcsPaxMass.toFixed(0)} ${massUnit}</div>
+      <div class="cargo-reference-line">Manual baggage entered: ${estimates.allocatedBaggage.toFixed(0)} ${massUnit} | Manual freight entered: ${estimates.freight.toFixed(0)} ${massUnit}</div>
+      <div class="cargo-reference-line">Fuel reference: Block ${Number(summary.fuel?.block || 0).toFixed(0)} / Taxi ${Number(summary.fuel?.taxi || 0).toFixed(0)} / Landing ${Number(summary.fuel?.landing || 0).toFixed(0)} ${massUnit}</div>
+      ${summary.aircraft_error ? `<div class="muted">Aircraft limits fallback warning: ${escapeHtml(summary.aircraft_error)}</div>` : ""}
+      ${summary.ofp_error ? `<div class="muted">OFP warning: ${escapeHtml(summary.ofp_error)}</div>` : ""}
+    `;
+  }
+
+  async function populateCargoWeightsSummary(f) {
+    if (!cargoWeightsSummary || !f) return;
+    if (!getApgPlanId(f.apg_plan_id)) {
+      renderCargoWeightsSummary(f);
+      return;
+    }
+    if (f.apgCargoWeightSummary) {
+      renderCargoWeightsSummary(f);
+      return;
+    }
+    f.apgCargoSummaryLoading = true;
+    renderCargoWeightsSummary(f);
+    try {
+      const summary = await fetchApgCargoSummary(getApgPlanId(f.apg_plan_id));
+      if (selectedFlight !== f) return;
+      f.apgCargoWeightSummary = summary;
+      apgCargoWeightSummaryCache.set(String(getApgPlanId(f.apg_plan_id)), JSON.parse(JSON.stringify(summary)));
+    } catch (err) {
+      if (selectedFlight !== f) return;
+      cargoWeightsSummary.innerHTML = `<div class="muted">Failed to load APG weight summary: ${escapeHtml(err.message || String(err))}</div>`;
+      return;
+    } finally {
+      f.apgCargoSummaryLoading = false;
+    }
+    if (selectedFlight === f) renderCargoWeightsSummary(f);
+  }
+
+  async function openCargoDialog() {
+    const f = selectedFlight;
+    if (!f || !cargoDialog) return;
+    const planId = getApgPlanId(f.apg_plan_id);
+    cargoTitle.textContent = `Cargo - ${flightCode(f)} ${f.dep || ""}-${f.ades || ""}${planId ? ` - APG ${planId}` : ""}`;
+    renderCargoWeightsSummary(f);
+    renderCargoEditor(f);
+    cargoDialog.showModal();
+    await Promise.allSettled([populateCargoWeightsSummary(f), populateCargoEditor(f)]);
+  }
+
   function updateEnvisionEnvPill(env) {
     if (!envisionEnvPill || !env) return;
     const key = String(env.key || "base").toLowerCase();
@@ -2008,11 +2474,10 @@
           </div>
         `).join("")
       : '<div class="muted">No delay remarks available.</div>';
-    const bagKg = Number(f.bags_kg || 0).toFixed(1);
     const defectCount = Number.isFinite(Number(f.defect_count)) ? Number(f.defect_count) : 0;
     const defectTotal = Number.isFinite(Number(f.defect_total)) ? Number(f.defect_total) : defectCount;
 
-    const apgLinkedHtml = f.apg_plan_id
+    const apgLinkedHtml = getApgPlanId(f.apg_plan_id)
       ? `<a class="apg-route-link" href="https://fly.rocketroute.com/route/${f.apg_plan_id}" target="_blank" rel="noopener noreferrer" title="Open APG route ${f.apg_plan_id}">APG Linked</a>`
       : `<span title="No APG plan">No APG</span>`;
     const dcsLinked = Boolean(f.dcs_linked);
@@ -2051,7 +2516,6 @@
           <div class="kv"><span>Flown</span><strong>${flown}</strong></div>
           <div class="kv"><span>Total</span><strong>${total}</strong></div>
           <div class="card-sub">AD ${pt.ad} / CHD ${pt.chd} / INF ${pt.inf}</div>
-          <div class="kv"><span>Baggage</span><strong>${bagKg} kg</strong></div>
         </div>
 
         <div class="detail-card">
@@ -2111,7 +2575,7 @@
 
     const bar = document.createElement("div");
     bar.className = "bar flight-main-bar";
-    if (!f.apg_plan_id && !isCancelled) bar.classList.add("apg-missing");
+    if (!getApgPlanId(f.apg_plan_id) && !isCancelled) bar.classList.add("apg-missing");
     if (isSelected) bar.classList.add("selected");
     bar.style.left = `${barLeft - groupLeft}px`;
     bar.style.width = `${barWidth}px`;
@@ -2408,7 +2872,7 @@
   function updateStats() {
     statFlights.textContent = String(flights.length);
     statPax.textContent = String(flights.reduce((n, f) => n + Number(f.pax_count || 0), 0));
-    statNoApg.textContent = String(flights.reduce((n, f) => n + (f.apg_plan_id ? 0 : 1), 0));
+    statNoApg.textContent = String(flights.reduce((n, f) => n + (getApgPlanId(f.apg_plan_id) ? 0 : 1), 0));
     statBags.textContent = String(Math.round(flights.reduce((n, f) => n + Number(f.bags_kg || 0), 0)));
   }
 
@@ -2424,6 +2888,7 @@
       const data = await resp.json();
       const maybeRows = data.results || data.rows || data.data || [];
       flights = Array.isArray(maybeRows) ? maybeRows : [];
+      flights.forEach((f) => hydrateCargoCacheForFlight(f));
       updateTimeWindowFromFlights();
       if (!hasUserZoom) fitPxPerMinuteToViewport();
       applyTimelineScale();
@@ -2490,14 +2955,22 @@
   async function submitToApg() {
     const f = selectedFlight;
     if (!f) return;
-    if (!f.apg_plan_id) {
+    if (!getApgPlanId(f.apg_plan_id)) {
       alert("No APG plan linked for this flight.");
       return;
+    }
+    if (f.apgCargoLoading) {
+      throw new Error("APG cargo stations are still loading. Please wait a moment and try again.");
+    }
+    const cargoRows = Array.isArray(f.apgCargoAllocations) ? f.apgCargoAllocations : [];
+    const { dcsBaggage, remaining } = cargoTotalsForFlight(f);
+    if (cargoRows.length && Math.abs(remaining) >= 0.05) {
+      throw new Error(`Baggage allocation must match DCS total. Remaining difference: ${remaining.toFixed(1)} kg.`);
     }
     const rawNo = String(f.flight_number || "").toUpperCase().replace(/\s+/g, "");
     const numberOnly = (rawNo.match(/(\d+)$/) || [null, rawNo])[1] || rawNo;
     const payload = {
-      apg_plan_id: Number(f.apg_plan_id),
+      apg_plan_id: getApgPlanId(f.apg_plan_id),
       dep: (f.dep || "").toUpperCase(),
       ades: (f.ades || "").toUpperCase(),
       reg: (f.reg || "").toUpperCase(),
@@ -2507,6 +2980,11 @@
       envision_flight_id: f.envision_flight_id || null,
       preview_only: false,
       pax_list: f.pax_list || [],
+      cargo_loads: cargoRows.map((row) => ({
+        label: row.label,
+        baggage_kg: Math.max(0, Number(row.baggage_kg || 0)),
+        freight_kg: Math.max(0, Number(row.freight_kg || 0)),
+      })),
     };
     const resp = await fetch(apgPushUrl, {
       method: "POST",
@@ -2515,9 +2993,13 @@
     });
     const data = await resp.json();
     if (!resp.ok || !data.ok) throw new Error(data.error || `Submit failed (${resp.status})`);
+    cacheCargoAllocationsForFlight(f);
     const modalLines = [
       `Flight ${payload.designator}${payload.flight_number} submitted to APG route ${payload.apg_plan_id}.`,
     ];
+    const totals = cargoTotalsForFlight(f);
+    modalLines.push(`Baggage allocated: ${totals.baggageTotal.toFixed(1)} kg of ${dcsBaggage.toFixed(1)} kg.`);
+    modalLines.push(`Freight added: ${totals.freightTotal.toFixed(1)} kg.`);
     if (data.plan_version !== undefined && data.plan_version !== null) {
       modalLines.push(`APG plan version: ${data.plan_version}`);
     }
@@ -2533,14 +3015,14 @@
   async function resetApgPassengers() {
     const f = selectedFlight;
     if (!f) return;
-    if (!f.apg_plan_id) {
+    if (!getApgPlanId(f.apg_plan_id)) {
       alert("No APG plan linked for this flight.");
       return;
     }
     const resp = await fetch(apgResetUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ apg_plan_id: Number(f.apg_plan_id), preview_only: false }),
+      body: JSON.stringify({ apg_plan_id: getApgPlanId(f.apg_plan_id), preview_only: false }),
     });
     const data = await resp.json();
     if (!resp.ok || !data.ok) throw new Error(data.error || `Reset failed (${resp.status})`);
@@ -2891,6 +3373,7 @@
   });
 
   if (btnPreviewManifest) btnPreviewManifest.addEventListener("click", withBusy(btnPreviewManifest, "Loading...", previewManifest));
+  if (btnCargo) btnCargo.addEventListener("click", withBusy(btnCargo, "Loading...", openCargoDialog));
   if (btnPaxList) btnPaxList.addEventListener("click", openPassengerList);
   if (syncPaxBtn) syncPaxBtn.addEventListener("click", withBusy(syncPaxBtn, "Syncing...", runPassengerSyncTest));
   if (btnSubmitApg) btnSubmitApg.addEventListener("click", withBusy(btnSubmitApg, "Submitting...", submitToApg));
