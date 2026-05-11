@@ -401,12 +401,6 @@ def _friendly_kmh_create_error(exc: Exception) -> str:
         return message
     for item in messages:
         text = str(item or "").strip()
-        if text.startswith("Place mismatch with previous flight"):
-            return (
-                f"{text}. Envision requires the next flight with the same number to depart from "
-                f"the place where the previous same-number flight ended. Use the next 3C number, "
-                f"or make the departure match the previous arrival."
-            )
         if "Flights overlaps with existing flights" in text:
             return (
                 "This flight overlaps an existing Envision flight for ZK-KMH. "
@@ -436,6 +430,16 @@ def _assign_kmh_pilot_to_existing_or_new_slot(token: str, flight_id: int, pilot_
     captain_position_id = _resolve_captain_position_id(token)
     pic_pos_ids, pilot_pos_ids = build_pic_pilot_position_sets(token)
     crew_rows = envision_get_flight_crew(token, flight_id) or []
+    flight_times = envision_get_flight_times(token, flight_id) or {}
+    try:
+        _, setup_ctx = _resolve_kmh_crew_setup_context(
+            token,
+            int(flight_times.get("flightTypeId") or flight_times.get("journeyTypeId") or 0),
+            int(flight_times.get("flightModelId") or 0),
+            int(flight_times.get("flightRegistrationId") or 0),
+        )
+    except Exception:
+        setup_ctx = None
 
     preferred_open_row = None
     fallback_open_row = None
@@ -459,7 +463,7 @@ def _assign_kmh_pilot_to_existing_or_new_slot(token: str, flight_id: int, pilot_
     if target_row:
         crew_id = int(target_row.get("id") or 0)
         pos_id = int(target_row.get("crewPositionId") or target_row.get("positionId") or captain_position_id)
-        envision_update_flight_crew(token, flight_id, crew_id, {
+        payload = {
             "id": crew_id,
             "flightId": flight_id,
             "positionId": pos_id,
@@ -467,9 +471,17 @@ def _assign_kmh_pilot_to_existing_or_new_slot(token: str, flight_id: int, pilot_
             "employeeId": pilot_employee_id,
             "displayOrder": int(target_row.get("displayOrder") or 0),
             "isComplete": bool(target_row.get("isComplete", False)),
-        })
+        }
+        setup_item = _find_kmh_setup_item_for_position(setup_ctx, pos_id)
+        setup_id = int((setup_ctx or {}).get("setupId") or 0)
+        if setup_id > 0:
+            payload["crewPositionSetupId"] = setup_id
+        if setup_item and int(setup_item.get("id") or 0) > 0:
+            payload["crewPositionSetupItemId"] = int(setup_item.get("id") or 0)
+        envision_update_flight_crew(token, flight_id, crew_id, payload)
     else:
-        crew_row = envision_create_flight_crew(token, flight_id, {
+        setup_item = _find_kmh_setup_item_for_position(setup_ctx, captain_position_id)
+        payload = {
             "flightId": flight_id,
             "positionId": captain_position_id,
             "crewPositionId": captain_position_id,
@@ -477,7 +489,13 @@ def _assign_kmh_pilot_to_existing_or_new_slot(token: str, flight_id: int, pilot_
             "displayOrder": 0,
             "isComplete": False,
             "isPilotFlying": True,
-        })
+        }
+        setup_id = int((setup_ctx or {}).get("setupId") or 0)
+        if setup_id > 0:
+            payload["crewPositionSetupId"] = setup_id
+        if setup_item and int(setup_item.get("id") or 0) > 0:
+            payload["crewPositionSetupItemId"] = int(setup_item.get("id") or 0)
+        crew_row = envision_create_flight_crew(token, flight_id, payload)
         if crew_row.get("id") not in (None, ""):
             crew_id = int(crew_row["id"])
 
@@ -499,6 +517,16 @@ def _change_kmh_pilot_for_existing_flight(token: str, flight_id: int, pilot_empl
     captain_position_id = _resolve_captain_position_id(token)
     pic_pos_ids, pilot_pos_ids = build_pic_pilot_position_sets(token)
     crew_rows = envision_get_flight_crew(token, flight_id) or []
+    flight_times = envision_get_flight_times(token, flight_id) or {}
+    try:
+        _, setup_ctx = _resolve_kmh_crew_setup_context(
+            token,
+            int(flight_times.get("flightTypeId") or flight_times.get("journeyTypeId") or 0),
+            int(flight_times.get("flightModelId") or 0),
+            int(flight_times.get("flightRegistrationId") or 0),
+        )
+    except Exception:
+        setup_ctx = None
 
     target_row = None
     for row in crew_rows:
@@ -523,7 +551,8 @@ def _change_kmh_pilot_for_existing_flight(token: str, flight_id: int, pilot_empl
     if target_row:
         crew_id = int(target_row.get("id") or 0)
         pos_id = int(target_row.get("crewPositionId") or target_row.get("positionId") or captain_position_id)
-        envision_update_flight_crew(token, flight_id, crew_id, {
+        setup_item = _find_kmh_setup_item_for_position(setup_ctx, pos_id)
+        payload = {
             "id": crew_id,
             "flightId": flight_id,
             "positionId": pos_id,
@@ -531,7 +560,13 @@ def _change_kmh_pilot_for_existing_flight(token: str, flight_id: int, pilot_empl
             "employeeId": pilot_employee_id,
             "displayOrder": int(target_row.get("displayOrder") or 0),
             "isComplete": bool(target_row.get("isComplete", False)),
-        })
+        }
+        setup_id = int((setup_ctx or {}).get("setupId") or 0)
+        if setup_id > 0:
+            payload["crewPositionSetupId"] = setup_id
+        if setup_item and int(setup_item.get("id") or 0) > 0:
+            payload["crewPositionSetupItemId"] = int(setup_item.get("id") or 0)
+        envision_update_flight_crew(token, flight_id, crew_id, payload)
         for row in crew_rows:
             try:
                 row_id = int(row.get("id") or 0)
@@ -2319,6 +2354,56 @@ def _preserve_change_type_crew_positions(token: str, flight_id: int, new_type_id
         "keptCount": len(kept),
         "existingCount": len(existing_crew if isinstance(existing_crew, list) else []),
     }
+
+
+def _resolve_kmh_crew_setup_context(
+    token: str,
+    flight_type_id: int,
+    model_id: int,
+    reg_id: int,
+) -> tuple[dict | None, dict | None]:
+    """
+    Return the best matching crew setup and its item list for the supplied flight context.
+    KMH crew creation needs the same setup shape Envision uses for change-type flows.
+    """
+    setups = envision_get_crew_position_setups(token)
+    items = envision_get_crew_position_setup_items(token)
+
+    matching = [
+        s for s in (setups if isinstance(setups, list) else [])
+        if int(s.get("journeyTypeId") or 0) == int(flight_type_id)
+        and int(s.get("modelId") or 0) == int(model_id)
+    ]
+    exact_setup = next((s for s in matching if int(s.get("regId") or 0) == reg_id and reg_id > 0), None)
+    fallback_setup = next((s for s in matching if int(s.get("regId") or 0) == 0), None)
+    chosen_setup = exact_setup or fallback_setup
+    if not chosen_setup:
+        return None, None
+
+    setup_id = int(chosen_setup.get("id") or 0)
+    if setup_id <= 0:
+        return None, None
+
+    setup_items = [
+        i for i in (items if isinstance(items, list) else [])
+        if int(i.get("crewPositionSetupId") or 0) == setup_id
+    ]
+    return chosen_setup, {
+        "setupId": setup_id,
+        "items": setup_items,
+    }
+
+
+def _find_kmh_setup_item_for_position(setup_context: dict | None, position_id: int) -> dict | None:
+    if not setup_context:
+        return None
+    for item in setup_context.get("items") or []:
+        try:
+            if int(item.get("crewPositionId") or 0) == int(position_id):
+                return item
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 @api_bp.post("/envision/flight_action")
