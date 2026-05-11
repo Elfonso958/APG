@@ -123,7 +123,12 @@ def _parse_local_datetime(day_str: str, time_str: str) -> datetime:
 
 
 def _kmh_session_token() -> str | None:
-    session_id = str(request.headers.get("X-KMH-Session-Id") or session.get(KMH_SESSION_ID_KEY) or "").strip()
+    session_id = str(
+        request.headers.get("X-KMH-Session-Id")
+        or request.cookies.get(KMH_SESSION_ID_KEY)
+        or session.get(KMH_SESSION_ID_KEY)
+        or ""
+    ).strip()
     record = get_kmh_session(session_id)
     if not record:
         return None

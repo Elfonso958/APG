@@ -72,7 +72,8 @@ def ops_modify_leg():
 
 @ui_bp.route("/ops/kmh-login", methods=["GET", "POST"])
 def ops_kmh_login():
-    if get_kmh_session(session.get("kmh_session_id")):
+    existing_session_id = request.cookies.get("kmh_session_id") or session.get("kmh_session_id")
+    if get_kmh_session(existing_session_id):
         return redirect(url_for("ui.ops_kmh_calendar"))
 
     next_url = request.values.get("next") or url_for("ui.ops_kmh_calendar")
@@ -97,7 +98,16 @@ def ops_kmh_login():
             session["kmh_envision_username"] = username
             session["envision_env"] = "base"
             set_envision_environment("base")
-            return redirect(next_url)
+            response = make_response(redirect(next_url))
+            response.set_cookie(
+                "kmh_session_id",
+                session_id,
+                max_age=8 * 60 * 60,
+                path="/APG",
+                httponly=True,
+                samesite="Lax",
+            )
+            return response
         except Exception as exc:
             error = str(exc)
 
@@ -119,12 +129,15 @@ def ops_kmh_logout():
         if key == "kmh_session_id":
             clear_kmh_session(session.get(key))
         session.pop(key, None)
-    return redirect(url_for("ui.ops_kmh_login"))
+    response = make_response(redirect(url_for("ui.ops_kmh_login")))
+    response.delete_cookie("kmh_session_id", path="/APG")
+    return response
 
 
 @ui_bp.route("/ops/kmh-calendar")
 def ops_kmh_calendar():
-    kmh_session = get_kmh_session(session.get("kmh_session_id"))
+    session_id = request.cookies.get("kmh_session_id") or session.get("kmh_session_id")
+    kmh_session = get_kmh_session(session_id)
     if not kmh_session:
         session.pop("kmh_session_id", None)
         session.pop("kmh_envision_username", None)
@@ -136,7 +149,7 @@ def ops_kmh_calendar():
         "kmh_calendar.html",
         today=date.today(),
         kmh_user=str(kmh_session.get("username") or session.get("kmh_envision_username") or ""),
-        kmh_session_id=session.get("kmh_session_id") or "",
+        kmh_session_id=session_id or "",
     )
 
 @ui_bp.route("/", endpoint="home")
