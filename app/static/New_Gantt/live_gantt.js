@@ -10,13 +10,13 @@
   const manifestPreviewUrl = app.dataset.manifestPreviewUrl;
   const envisionActionUrl = app.dataset.envisionActionUrl;
   const envisionCrewUrl = app.dataset.envisionCrewUrl;
+  const envisionCrewPfUrl = app.dataset.envisionCrewPfUrl;
   const envisionLineRegistrationsUrl = app.dataset.envisionLineRegistrationsUrl;
   const envisionFlightTypesUrl = app.dataset.envisionFlightTypesUrl;
   const envisionFlightNotesUrl = app.dataset.envisionFlightNotesUrl;
   const envisionFlightNotesUpsertUrl = app.dataset.envisionFlightNotesUpsertUrl;
   const envisionEnvironmentUrl = app.dataset.envisionEnvironmentUrl;
-  const envisionFlightRawUrl = app.dataset.envisionFlightRawUrl;
-  const envisionTimesUrl = app.dataset.envisionTimesUrl;
+  const envisionFlightDetailUrl = app.dataset.envisionFlightDetailUrl;
   const envisionRegDefectsUrl = app.dataset.envisionRegDefectsUrl;
   const envisionRegMaintenanceUrl = app.dataset.envisionRegMaintenanceUrl;
   const envisionPaxSyncUrl = app.dataset.envisionPaxSyncUrl;
@@ -26,6 +26,7 @@
 
   const dayInput = document.getElementById("dayInput");
   const tzSelect = document.getElementById("tzSelect");
+  const locationFilter = document.getElementById("locationFilter");
   const refreshBtn = document.getElementById("refreshBtn");
   const syncPaxBtn = document.getElementById("syncPaxBtn");
   const zoomInBtn = document.getElementById("zoomInBtn");
@@ -66,12 +67,20 @@
   const cargoTitle = document.getElementById("cargoTitle");
   const cargoWeightsSummary = document.getElementById("cargoWeightsSummary");
   const cargoEditor = document.getElementById("cargoEditor");
+  const btnCargoRefresh = document.getElementById("btnCargoRefresh");
   const envPickerDialog = document.getElementById("envPickerDialog");
   const envBaseBtn = document.getElementById("envBaseBtn");
   const envTestBtn = document.getElementById("envTestBtn");
   const apgStatusDialog = document.getElementById("apgStatusDialog");
   const apgStatusTitle = document.getElementById("apgStatusTitle");
   const apgStatusBody = document.getElementById("apgStatusBody");
+  const apgConfirmDialog = document.getElementById("apgConfirmDialog");
+  const apgConfirmTitle = document.getElementById("apgConfirmTitle");
+  const apgConfirmBody = document.getElementById("apgConfirmBody");
+  const apgSubmitDialog = document.getElementById("apgSubmitDialog");
+  const apgSubmitTitle = document.getElementById("apgSubmitTitle");
+  const apgSubmitBody = document.getElementById("apgSubmitBody");
+  const apgSubmitClose = document.getElementById("apgSubmitClose");
   const flightEditDialog = document.getElementById("flightEditDialog");
   const flightEditTitle = document.getElementById("flightEditTitle");
   const flightEditAction = document.getElementById("flightEditAction");
@@ -141,10 +150,12 @@
   let registrationCatalogCache = null;
   let activeEnvisionEnv = initialEnvisionEnvKey;
   const ENV_STORAGE_KEY = "new_gantt_envision_env";
-  const envisionLocalHmCache = new Map();
+  const LOCATION_FILTER_STORAGE_KEY = "new_gantt_location_filter";
+  const envisionFlightDetailCache = new Map();
   let modifyLegFlight = null;
   let modifyLegNote = null;
   let modifyLegFlightTypeOriginalId = null;
+  let modifyLegRawFlight = null;
 
   const feFlightStatusId = document.getElementById("feFlightStatusId");
   const fePlannedFlightTime = document.getElementById("fePlannedFlightTime");
@@ -207,6 +218,7 @@
   let movementInitial = null;
   let movementMode = "dep";
   let currentTimeZone = "Pacific/Auckland";
+  let selectedLocationFilter = "";
   const DELAY_CODE_META = {
     "01": { id: 94, description: "Planned schedule deviation for regular flights" },
     "02": { id: 95, description: "Planned schedule deviation for charter flights" },
@@ -290,6 +302,34 @@
   function setBoardLoading(isLoading) {
     if (!boardSpinner) return;
     boardSpinner.hidden = !isLoading;
+  }
+
+  function normalizeStationCode(value) {
+    return String(value || "").trim().toUpperCase();
+  }
+
+  function getVisibleFlights() {
+    const code = normalizeStationCode(selectedLocationFilter);
+    if (!code) return flights;
+    return flights.filter((f) => normalizeStationCode(f.dep) === code || normalizeStationCode(f.ades) === code);
+  }
+
+  function populateLocationFilterOptions() {
+    if (!locationFilter) return;
+    const stations = Array.from(new Set(
+      flights.flatMap((f) => [normalizeStationCode(f.dep), normalizeStationCode(f.ades)]).filter(Boolean)
+    )).sort((a, b) => a.localeCompare(b));
+    const current = normalizeStationCode(selectedLocationFilter);
+    locationFilter.innerHTML = ['<option value="">All Stations</option>']
+      .concat(stations.map((code) => `<option value="${escapeHtml(code)}">${escapeHtml(code)}</option>`))
+      .join("");
+    if (current && stations.includes(current)) {
+      locationFilter.value = current;
+    } else {
+      selectedLocationFilter = "";
+      locationFilter.value = "";
+      localStorage.removeItem(LOCATION_FILTER_STORAGE_KEY);
+    }
   }
 
   function showMessage(text, isError) {
@@ -607,7 +647,8 @@
     if (mvDelayRows) mvDelayRows.innerHTML = "";
 
     if (movementFlight.envision_flight_id) {
-      const hm = await fetchEnvisionLocalHm(movementFlight.envision_flight_id);
+      const detail = await fetchEnvisionFlightDetail(movementFlight.envision_flight_id);
+      const hm = detail?.local_hm || null;
       if (hm) {
         if (mvOffblocks && hm.departureActual) mvOffblocks.value = hm.departureActual;
         if (mvAirborne && hm.departureTakeOff) mvAirborne.value = hm.departureTakeOff;
@@ -737,32 +778,18 @@
     return JSON.stringify(normalizeForCompare(a)) === JSON.stringify(normalizeForCompare(b));
   }
 
-  async function fetchEnvisionLocalHm(flightId, { force = false } = {}) {
+  async function fetchEnvisionFlightDetail(flightId, { force = false } = {}) {
     const key = String(flightId || "");
-    if (!key || !envisionTimesUrl) return null;
-    if (!force && envisionLocalHmCache.has(key)) return envisionLocalHmCache.get(key);
+    if (!key || !envisionFlightDetailUrl) return null;
+    if (!force && envisionFlightDetailCache.has(key)) return envisionFlightDetailCache.get(key);
     try {
-      const u = `${envisionTimesUrl}?flight_id=${encodeURIComponent(key)}`;
+      const u = `${envisionFlightDetailUrl}?flight_id=${encodeURIComponent(key)}`;
       const resp = await fetch(u, { headers: { Accept: "application/json" } });
       const js = await resp.json();
       if (!resp.ok || !js.ok) return null;
-      const hm = js.local_hm || null;
-      envisionLocalHmCache.set(key, hm);
-      return hm;
+      envisionFlightDetailCache.set(key, js);
+      return js;
     } catch (_err) {
-      return null;
-    }
-  }
-
-  async function fetchEnvisionFlightRaw(flightId) {
-    if (!envisionFlightRawUrl) return null;
-    try {
-      const u = `${envisionFlightRawUrl}?flight_id=${encodeURIComponent(flightId)}`;
-      const resp = await fetch(u, { headers: { Accept: "application/json" } });
-      const js = await resp.json();
-      if (!resp.ok || !js.ok) return null;
-      return js.raw || null;
-    } catch (_e) {
       return null;
     }
   }
@@ -978,7 +1005,8 @@
       flightEditTitle.textContent = `Envision Flight Update - ${flightCode(editingFlight)} (${editingFlight.envision_flight_id})`;
     }
     if (flightEditResult) flightEditResult.textContent = "Loading existing Envision data...";
-    const raw = await fetchEnvisionFlightRaw(editingFlight.envision_flight_id);
+    const detail = await fetchEnvisionFlightDetail(editingFlight.envision_flight_id);
+    const raw = detail?.raw || null;
     editInitialByAction = defaultEditState(editingFlight, raw);
     flightEditAction.value = "update_flight";
     refreshEditFormFromAction();
@@ -996,20 +1024,26 @@
     const toYmd = (iso) => ymdFromIso(iso) || day;
     const startIso = f.dep_actual_nz || f.std_nz || f.std_sched_nz || null;
     const endIso = f.arr_actual_nz || f.sta_nz || f.sta_sched_nz || null;
-    let blockText = "";
+    const formatMinutesAsBlock = (mins) => {
+      if (!Number.isFinite(mins) || mins <= 0) return "";
+      return `${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(Math.round(mins % 60)).padStart(2, "0")}`;
+    };
+    let actualBlockText = "";
     if (startIso && endIso) {
       const ms = (new Date(endIso)).getTime() - (new Date(startIso)).getTime();
       if (Number.isFinite(ms) && ms > 0) {
-        const mins = Math.round(ms / 60000);
-        blockText = `${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`;
+        actualBlockText = formatMinutesAsBlock(Math.round(ms / 60000));
       }
     }
     if (modifyLegTitle) {
       modifyLegTitle.textContent = `Modify Leg - ${code} (${f.envision_flight_id || "-"})`;
     }
     updateModifyLegNavButtons();
-    const hm = await fetchEnvisionLocalHm(f.envision_flight_id);
-    const rawFlight = await fetchEnvisionFlightRaw(f.envision_flight_id);
+    const detail = await fetchEnvisionFlightDetail(f.envision_flight_id);
+    const hm = detail?.local_hm || null;
+    const rawFlight = detail?.raw || null;
+    modifyLegRawFlight = rawFlight || null;
+    const plannedBlockText = formatMinutesAsBlock(Number(rawFlight?.plannedFlightTime || f.planned_block || 0));
 
     if (mlReg) {
       populateLineRegistrations(f.reg || "");
@@ -1029,11 +1063,11 @@
     if (mlSta) mlSta.value = toHm(f.sta_sched_nz);
 
     if (mlOpDate) mlOpDate.value = toYmd(f.std_nz || f.std_sched_nz);
-    if (mlOut) mlOut.value = (hm && hm.departureActual) || toHm(f.dep_actual_nz);
-    if (mlOff) mlOff.value = (hm && hm.departureTakeOff) || toHm(f.dep_actual_nz);
-    if (mlEnroute) mlEnroute.value = blockText;
-    if (mlOn) mlOn.value = (hm && hm.arrivalLanded) || toHm(f.arr_actual_nz);
-    if (mlIn) mlIn.value = (hm && hm.arrivalActual) || toHm(f.arr_actual_nz);
+    if (mlOut) mlOut.value = toHm(f.std_nz);
+    if (mlOff) mlOff.value = toHm(rawFlight?.calculatedTakeOffTime);
+    if (mlEnroute) mlEnroute.value = plannedBlockText;
+    if (mlOn) mlOn.value = toHm(f.sta_nz);
+    if (mlIn) mlIn.value = `${toHm(f.dep_actual_nz) || "-"} / ${toHm(f.arr_actual_nz) || "-"}`;
     if (mlCtot) mlCtot.value = "";
 
     if (mlActDate) mlActDate.value = toYmd(f.dep_actual_nz || f.std_nz || f.std_sched_nz);
@@ -1041,7 +1075,7 @@
     if (mlActOff) mlActOff.value = (hm && hm.departureTakeOff) || toHm(f.dep_actual_nz);
     if (mlActOn) mlActOn.value = (hm && hm.arrivalLanded) || toHm(f.arr_actual_nz);
     if (mlActIn) mlActIn.value = (hm && hm.arrivalActual) || toHm(f.arr_actual_nz);
-    if (mlBlock) mlBlock.value = blockText;
+    if (mlBlock) mlBlock.value = actualBlockText || plannedBlockText;
 
     if (mlEpax) mlEpax.value = String(f.pax_count || 0);
     if (mlApax) mlApax.value = String(f.pax_count || 0);
@@ -1328,14 +1362,36 @@
     if (!modifyLegFlight) return;
     const text = String(mlRemark.value || "").trim();
     const selectedFlightTypeId = Number(mlFlightType?.value || 0) || null;
+    const depDate = String(mlActDate?.value || mlOpDate?.value || ymdFromIso(modifyLegFlight.std_nz || modifyLegFlight.std_sched_nz) || "");
+    const arrDate = String(mlActDate?.value || mlOpDate?.value || ymdFromIso(modifyLegFlight.sta_nz || modifyLegFlight.sta_sched_nz) || "");
+    const etd = String(mlOut?.value || "").trim();
+    const eta = String(mlOn?.value || "").trim();
+    const atd = String(mlActOut?.value || "").trim();
+    const off = String(mlActOff?.value || "").trim();
+    const on = String(mlActOn?.value || "").trim();
+    const ata = String(mlActIn?.value || "").trim();
+    const originalEtd = hmFromIso(modifyLegFlight.std_nz) || "";
+    const originalEta = hmFromIso(modifyLegFlight.sta_nz) || "";
+    const originalAtd = hmFromIso(modifyLegFlight.dep_actual_nz) || "";
+    const originalOff = hmFromIso(modifyLegRawFlight?.departureTakeOff || modifyLegFlight.dep_actual_nz) || "";
+    const originalOn = hmFromIso(modifyLegRawFlight?.arrivalLanded || modifyLegFlight.arr_actual_nz) || "";
+    const originalAta = hmFromIso(modifyLegFlight.arr_actual_nz) || "";
+    const shouldSaveTimes = (
+      etd !== originalEtd
+      || eta !== originalEta
+      || atd !== originalAtd
+      || off !== originalOff
+      || on !== originalOn
+      || ata !== originalAta
+    );
     const shouldChangeType = !!(
       selectedFlightTypeId
       && (modifyLegFlightTypeOriginalId === null || Number(modifyLegFlightTypeOriginalId) !== Number(selectedFlightTypeId))
     );
 
     const output = { ok: true, updates: {} };
-    if (!text && !shouldChangeType) {
-      output.updates = { message: "No remark or flight type change detected. Nothing saved." };
+    if (!text && !shouldChangeType && !shouldSaveTimes) {
+      output.updates = { message: "No remark, flight type or time change detected. Nothing saved." };
       if (mlApiResponses) mlApiResponses.textContent = JSON.stringify(output, null, 2);
       if (closeOnDone && modifyLegDialog?.open) modifyLegDialog.close();
       return;
@@ -1344,6 +1400,42 @@
     const btns = [mlOk].filter(Boolean);
     btns.forEach((b) => { b.disabled = true; });
     try {
+      if (shouldSaveTimes && saveTimesUrl) {
+        const depResp = await fetch(saveTimesUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({
+            mode: "dep",
+            envision_flight_id: modifyLegFlight.envision_flight_id,
+            std_sched: modifyLegFlight.std_sched_nz || null,
+            dep_date: depDate || null,
+            etd: etd || null,
+            offblocks: atd || null,
+            airborne: off || null,
+          }),
+        });
+        const depJs = await depResp.json();
+        output.updates.departure_times = depJs;
+        if (!depResp.ok || !depJs.ok) output.ok = false;
+
+        const arrResp = await fetch(saveTimesUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({
+            mode: "arr",
+            envision_flight_id: modifyLegFlight.envision_flight_id,
+            sta_sched: modifyLegFlight.sta_sched_nz || null,
+            arr_date: arrDate || null,
+            eta: eta || null,
+            landing: on || null,
+            onchocks: ata || null,
+          }),
+        });
+        const arrJs = await arrResp.json();
+        output.updates.arrival_times = arrJs;
+        if (!arrResp.ok || !arrJs.ok) output.ok = false;
+      }
+
       if (shouldChangeType && envisionActionUrl) {
         const changeTypePayload = {
           action: "change_type",
@@ -1394,6 +1486,9 @@
       }
 
       if (mlApiResponses) mlApiResponses.textContent = JSON.stringify(output, null, 2);
+      if (output.ok) {
+        await loadData({ showSpinner: false });
+      }
       if (output.ok && closeOnDone && modifyLegDialog?.open) modifyLegDialog.close();
     } catch (err) {
       if (mlApiResponses) mlApiResponses.textContent = JSON.stringify({ ok: false, error: err.message, updates: output.updates }, null, 2);
@@ -1672,6 +1767,72 @@
     apgStatusDialog.showModal();
   }
 
+  function showApgConfirmModal(title, lines, confirmLabel = "Submit Anyway") {
+    const safeLines = Array.isArray(lines) ? lines.filter(Boolean) : [];
+    if (!apgConfirmDialog || !apgConfirmTitle || !apgConfirmBody || typeof apgConfirmDialog.showModal !== "function") {
+      return Promise.resolve(window.confirm([title].concat(safeLines).join("\n")));
+    }
+    const confirmBtn = apgConfirmDialog.querySelector("#apgConfirmOk");
+    if (confirmBtn) confirmBtn.textContent = confirmLabel;
+    apgConfirmTitle.textContent = title || "Confirm";
+    apgConfirmBody.innerHTML = safeLines
+      .map((line) => `<div>${escapeHtml(String(line))}</div>`)
+      .join("");
+    return new Promise((resolve) => {
+      const handleClose = () => {
+        apgConfirmDialog.removeEventListener("close", handleClose);
+        resolve(apgConfirmDialog.returnValue === "confirm");
+      };
+      apgConfirmDialog.addEventListener("close", handleClose);
+      apgConfirmDialog.showModal();
+    });
+  }
+
+  function renderApgSubmitSteps(steps) {
+    if (!apgSubmitBody) return;
+    apgSubmitBody.innerHTML = steps.map((step) => {
+      const state = String(step?.state || "pending");
+      const dot = state === "done" ? "Done" : state === "error" ? "Issue" : state === "active" ? "Sending" : "Waiting";
+      return `
+        <div class="submit-step ${state}">
+          <div class="submit-step-main">
+            <div class="submit-step-label">${escapeHtml(String(step?.label || ""))}</div>
+            <div class="submit-step-state ${state}">
+              ${state === "active" ? '<span class="submit-dots"><span></span><span></span><span></span></span>' : ""}
+              <span>${dot}</span>
+            </div>
+          </div>
+          ${step?.detail ? `<div class="submit-step-detail">${escapeHtml(String(step.detail))}</div>` : ""}
+        </div>
+      `;
+    }).join("");
+  }
+
+  function openApgSubmitModal(title, steps) {
+    if (!apgSubmitDialog || !apgSubmitTitle || !apgSubmitBody || typeof apgSubmitDialog.showModal !== "function") return;
+    apgSubmitTitle.textContent = title || "Submitting to APG";
+    if (apgSubmitClose) {
+      apgSubmitClose.disabled = true;
+      apgSubmitClose.textContent = "Working...";
+    }
+    renderApgSubmitSteps(steps);
+    if (!apgSubmitDialog.open) apgSubmitDialog.showModal();
+  }
+
+  function updateApgSubmitModal(title, steps, done = false) {
+    if (!apgSubmitDialog || !apgSubmitTitle || !apgSubmitBody) return;
+    apgSubmitTitle.textContent = title || "Submitting to APG";
+    renderApgSubmitSteps(steps);
+    if (apgSubmitClose) {
+      apgSubmitClose.disabled = !done;
+      apgSubmitClose.textContent = done ? "Close" : "Working...";
+    }
+  }
+
+  function closeApgSubmitModal() {
+    if (apgSubmitDialog?.open) apgSubmitDialog.close();
+  }
+
   function isApgCargoStationLabel(label) {
     const txt = String(label || "").trim().toLowerCase();
     if (!txt) return false;
@@ -1774,20 +1935,26 @@
   }
 
   function ensureCargoAllocations(f, stations) {
-    const prev = new Map(
-      (
-        Array.isArray(f.apgCargoAllocations) && f.apgCargoAllocations.length
-          ? f.apgCargoAllocations
-          : (apgCargoAllocationsCache.get(String(getApgPlanId(f?.apg_plan_id))) || [])
-      ).map((row) => [String(row.label || ""), row])
+    const priorRows = (
+      Array.isArray(f.apgCargoAllocations) && f.apgCargoAllocations.length
+        ? f.apgCargoAllocations
+        : (apgCargoAllocationsCache.get(String(getApgPlanId(f?.apg_plan_id))) || [])
     );
+    const prev = new Map(priorRows.map((row) => [String(row.label || ""), row]));
+    const hasManualSplit = priorRows.some((row) => (
+      Number(row?.baggage_kg || 0) > 0 || Number(row?.freight_kg || 0) > 0
+    ));
     f.apgCargoAllocations = stations.map((st) => {
       const existing = prev.get(st.label) || {};
+      const currentMass = Number.isFinite(Number(st.current_mass)) ? Number(st.current_mass) : 0;
+      const existingBaggage = Number(existing.baggage_kg || 0);
+      const existingFreight = Number(existing.freight_kg || 0);
+      const restoreFromApg = !hasManualSplit && currentMass > 0 && existingBaggage <= 0 && existingFreight <= 0;
       return {
         label: st.label,
-        baggage_kg: Number(existing.baggage_kg || 0),
-        freight_kg: Number(existing.freight_kg || 0),
-        current_mass: Number.isFinite(Number(st.current_mass)) ? Number(st.current_mass) : 0,
+        baggage_kg: restoreFromApg ? currentMass : existingBaggage,
+        freight_kg: existingFreight,
+        current_mass: currentMass,
       };
     });
     cacheCargoAllocationsForFlight(f);
@@ -1855,6 +2022,75 @@
     };
   }
 
+  function buildWeightMetrics(f, summary) {
+    const warningThresholdKg = 200;
+    const estimates = estimateOperationalWeights(f, summary);
+    const metricMeta = {
+      zfw: { title: "Loaded Weight", help: "People, bags and cargo before fuel" },
+      tow: { title: "Takeoff Weight", help: "Weight at departure" },
+      ldw: { title: "Landing Weight", help: "Expected weight on arrival" },
+    };
+    const metrics = ["zfw", "tow", "ldw"]
+      .map((key) => summary?.weights?.[key] ? { ...summary.weights[key], _key: key } : null)
+      .filter(Boolean)
+      .map((m) => {
+        const code = m._key;
+        const meta = metricMeta[code];
+        const current = code === "zfw" ? estimates.zfw : code === "tow" ? estimates.tow : estimates.ldw;
+        const limit = Number(m.limit || 0);
+        const remaining = limit > 0 ? (limit - current) : null;
+        const pct = limit > 0 ? ((current / limit) * 100.0) : null;
+        let statusClass = "is-ok";
+        let statusText = "Safe";
+        if (remaining != null) {
+          if (remaining < 0) {
+            statusClass = "is-over";
+            statusText = "Over max";
+          } else if (remaining < warningThresholdKg) {
+            statusClass = "is-near";
+            statusText = "Close to max";
+          }
+        }
+        return { code, title: meta.title, help: meta.help, current, limit, remaining, pct, statusClass, statusText };
+      });
+    return { estimates, metrics };
+  }
+
+  function summarizeWeightBalance(metrics) {
+    const limited = metrics.filter((m) => m.remaining != null).sort((a, b) => a.remaining - b.remaining);
+    const tightest = limited[0] || null;
+    if (!tightest) {
+      return {
+        cls: "is-ok",
+        title: "Safe to load",
+        text: "APG limits loaded.",
+        subtext: "No max-weight comparison available.",
+      };
+    }
+    if (tightest.remaining < 0) {
+      return {
+        cls: "is-over",
+        title: "Stop: aircraft would be overweight",
+        text: "Reduce baggage or cargo before sending to APG.",
+        subtext: `${tightest.title} is over by ${Math.abs(tightest.remaining).toFixed(0)} kg.`,
+      };
+    }
+    if (tightest.statusClass === "is-near") {
+      return {
+        cls: "is-near",
+        title: "Warning: close to aircraft maximum",
+        text: "Double-check any extra bags or cargo before sending.",
+        subtext: `About ${tightest.remaining.toFixed(0)} kg left to ${tightest.title.toLowerCase()} max.`,
+      };
+    }
+    return {
+      cls: "is-ok",
+      title: "Safe to load",
+      text: "All checked weights are within the APG maximums.",
+      subtext: `${tightest.remaining.toFixed(0)} kg left to the nearest max.`,
+    };
+  }
+
   function updateCargoEditorSummary(f) {
     const host = cargoEditor;
     if (!host) return;
@@ -1869,6 +2105,7 @@
     const freightEl = host.querySelector("#cargoFreightKg");
     const remainingEl = host.querySelector("#cargoRemainingKg");
     const statusEl = host.querySelector("#cargoRemainingStatus");
+    const badgeEl = host.querySelector("#cargoRemainingBadge");
     if (allocatedEl) allocatedEl.textContent = `${totals.baggageTotal.toFixed(1)} kg`;
     if (freightEl) freightEl.textContent = `${totals.freightTotal.toFixed(1)} kg`;
     if (remainingEl) remainingEl.textContent = `${Math.abs(totals.remaining).toFixed(1)} kg`;
@@ -1882,6 +2119,19 @@
       } else {
         statusEl.textContent = "Over allocated";
         statusEl.style.color = "#b91c1c";
+      }
+    }
+    if (badgeEl) {
+      badgeEl.className = "weight-status-pill";
+      if (Math.abs(totals.remaining) < 0.05) {
+        badgeEl.textContent = "Baggage complete";
+        badgeEl.classList.add("is-ok");
+      } else if (totals.remaining > 0) {
+        badgeEl.textContent = "Baggage remaining";
+        badgeEl.classList.add("is-near");
+      } else {
+        badgeEl.textContent = "Over allocated";
+        badgeEl.classList.add("is-over");
       }
     }
   }
@@ -1904,32 +2154,54 @@
     }
     const totals = cargoTotalsForFlight(f);
     host.innerHTML = `
-      <div class="card-sub" style="margin-top:10px;">Cargo Allocation</div>
-      <div class="kv"><span>DCS baggage total</span><strong>${totals.dcsBaggage.toFixed(1)} kg</strong></div>
-      <div class="kv"><span>Allocated baggage</span><strong id="cargoAllocatedKg">${totals.baggageTotal.toFixed(1)} kg</strong></div>
-      <div class="kv"><span>Freight added</span><strong id="cargoFreightKg">${totals.freightTotal.toFixed(1)} kg</strong></div>
-      <div class="kv"><span id="cargoRemainingStatus">Baggage remaining</span><strong id="cargoRemainingKg">${Math.abs(totals.remaining).toFixed(1)} kg</strong></div>
-      <div style="overflow:auto; margin-top:8px;">
-        <table class="pax-table">
-          <thead>
-            <tr>
-              <th>Station</th>
-              <th>Baggage Kg</th>
-              <th>Freight Kg</th>
-              <th>Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rows.map((row) => `
-              <tr data-cargo-row="${escapeHtml(row.label)}">
-                <td>${escapeHtml(row.label)}</td>
-                <td><input type="number" min="0" step="0.1" class="form-control cargo-baggage-input" data-label="${escapeHtml(row.label)}" value="${Number(row.baggage_kg || 0).toFixed(1)}"></td>
-                <td><input type="number" min="0" step="0.1" class="form-control cargo-freight-input" data-label="${escapeHtml(row.label)}" value="${Number(row.freight_kg || 0).toFixed(1)}"></td>
-                <td><strong data-cargo-total="${escapeHtml(row.label)}">${(Number(row.baggage_kg || 0) + Number(row.freight_kg || 0)).toFixed(1)} kg</strong></td>
-              </tr>
-            `).join("")}
-          </tbody>
-        </table>
+      <div class="cargo-editor-shell">
+        <div class="cargo-editor-head">
+          <div>
+            <div class="card-title">Cargo Allocation</div>
+            <div class="card-sub">Split baggage and cargo by hold, then check the live limit warning above.</div>
+          </div>
+          <div class="weight-status-pill ${Math.abs(totals.remaining) < 0.05 ? "is-ok" : totals.remaining > 0 ? "is-near" : "is-over"}" id="cargoRemainingBadge">
+            ${Math.abs(totals.remaining) < 0.05 ? "Baggage complete" : totals.remaining > 0 ? "Baggage remaining" : "Over allocated"}
+          </div>
+        </div>
+        <div class="cargo-hold-grid">
+          ${rows.map((row) => `
+            <section class="cargo-hold-card" data-cargo-row="${escapeHtml(row.label)}">
+              <div class="cargo-hold-top">
+                <div class="cargo-hold-name">${escapeHtml(row.label)}</div>
+                <div class="cargo-hold-total" data-cargo-total="${escapeHtml(row.label)}">${(Number(row.baggage_kg || 0) + Number(row.freight_kg || 0)).toFixed(1)} kg</div>
+              </div>
+              <div class="cargo-hold-fields">
+                <label class="cargo-field">
+                  <span>Baggage Kg</span>
+                  <input type="number" min="0" step="0.1" class="form-control cargo-baggage-input" data-label="${escapeHtml(row.label)}" value="${Number(row.baggage_kg || 0).toFixed(1)}">
+                </label>
+                <label class="cargo-field">
+                  <span>Cargo Kg</span>
+                  <input type="number" min="0" step="0.1" class="form-control cargo-freight-input" data-label="${escapeHtml(row.label)}" value="${Number(row.freight_kg || 0).toFixed(1)}">
+                </label>
+              </div>
+            </section>
+          `).join("")}
+        </div>
+        <div class="cargo-summary-strip">
+          <div class="cargo-summary-item">
+            <span>DCS baggage total</span>
+            <strong>${totals.dcsBaggage.toFixed(1)} kg</strong>
+          </div>
+          <div class="cargo-summary-item">
+            <span>Allocated baggage</span>
+            <strong id="cargoAllocatedKg">${totals.baggageTotal.toFixed(1)} kg</strong>
+          </div>
+          <div class="cargo-summary-item">
+            <span>Cargo added</span>
+            <strong id="cargoFreightKg">${totals.freightTotal.toFixed(1)} kg</strong>
+          </div>
+          <div class="cargo-summary-item cargo-summary-item-emphasis">
+            <span id="cargoRemainingStatus">Baggage remaining</span>
+            <strong id="cargoRemainingKg">${Math.abs(totals.remaining).toFixed(1)} kg</strong>
+          </div>
+        </div>
       </div>
     `;
     host.querySelectorAll(".cargo-baggage-input, .cargo-freight-input").forEach((input) => {
@@ -1995,69 +2267,14 @@
       return;
     }
     const massUnit = summary.units?.mass || "kg";
-    const cargoTotals = cargoTotalsForFlight(f);
-    const estimates = estimateOperationalWeights(f, summary);
+    const { estimates, metrics: computed } = buildWeightMetrics(f, summary);
     const dow = summary.weights?.dow || null;
-    const metricMeta = {
-      zfw: {
-        title: "Loaded Weight",
-        help: "People, bags and freight before fuel",
-      },
-      tow: {
-        title: "Takeoff Weight",
-        help: "Weight at departure",
-      },
-      ldw: {
-        title: "Landing Weight",
-        help: "Expected weight on arrival",
-      },
-    };
-    const metrics = ["zfw", "tow", "ldw"]
-      .map((key) => summary.weights?.[key] ? { ...summary.weights[key], _key: key } : null)
-      .filter(Boolean);
-    const computed = metrics.map((m) => {
-      const code = m._key;
-      const meta = metricMeta[code];
-      const current = code === "zfw"
-        ? estimates.zfw
-        : code === "tow"
-          ? estimates.tow
-          : estimates.ldw;
-      const limit = Number(m.limit || 0);
-      const remaining = limit > 0 ? (limit - current) : null;
-      const pct = limit > 0 ? ((current / limit) * 100.0) : null;
-      let statusClass = "is-ok";
-      let statusText = "Safe";
-      if (remaining != null) {
-        if (remaining < 0) {
-          statusClass = "is-over";
-          statusText = "Over max";
-        } else if (remaining < limit * 0.1) {
-          statusClass = "is-near";
-          statusText = "Close to max";
-        }
-      }
-      return {
-        code,
-        title: meta.title,
-        help: meta.help,
-        current,
-        limit,
-        remaining,
-        pct,
-        statusClass,
-        statusText,
-      };
-    });
-    const overallState = computed.some((m) => m.statusClass === "is-over")
-      ? { cls: "is-over", title: "Stop: aircraft would be overweight", text: "Reduce baggage or freight before sending to APG." }
-      : computed.some((m) => m.statusClass === "is-near")
-        ? { cls: "is-near", title: "Warning: close to aircraft maximum", text: "Double-check any extra bags or freight before sending." }
-        : { cls: "is-ok", title: "Safe to load", text: "All checked weights are within the APG maximums." };
+    const overallState = summarizeWeightBalance(computed);
     cargoWeightsSummary.innerHTML = `
       <div class="cargo-safety-banner ${overallState.cls}">
         <div class="cargo-safety-title">${overallState.title}</div>
         <div class="cargo-safety-text">${overallState.text}</div>
+        <div class="cargo-safety-focus">${overallState.subtext}</div>
       </div>
       <div class="cargo-weight-grid">
         ${computed.map((m) => `
@@ -2081,13 +2298,79 @@
           </div>
         `).join("")}
       </div>
-      ${dow ? `<div class="cargo-reference-line">Operational empty weight (DOW): ${Number(dow.current || 0).toFixed(0)} ${massUnit}</div>` : ""}
-      <div class="cargo-reference-line">Passenger estimate from manifest: ${estimates.dcsPaxMass.toFixed(0)} ${massUnit}</div>
-      <div class="cargo-reference-line">Manual baggage entered: ${estimates.allocatedBaggage.toFixed(0)} ${massUnit} | Manual freight entered: ${estimates.freight.toFixed(0)} ${massUnit}</div>
-      <div class="cargo-reference-line">Fuel reference: Block ${Number(summary.fuel?.block || 0).toFixed(0)} / Taxi ${Number(summary.fuel?.taxi || 0).toFixed(0)} / Landing ${Number(summary.fuel?.landing || 0).toFixed(0)} ${massUnit}</div>
+      <div class="cargo-reference-panel">
+        <div class="cargo-reference-heading">Estimate Breakdown</div>
+        <div class="cargo-reference-grid">
+          ${dow ? `
+            <div class="cargo-reference-card">
+              <span>Operational empty weight</span>
+              <strong>${Number(dow.current || 0).toFixed(0)} ${massUnit}</strong>
+              <small>DOW</small>
+            </div>
+          ` : ""}
+          <div class="cargo-reference-card">
+            <span>Passenger estimate</span>
+            <strong>${estimates.dcsPaxMass.toFixed(0)} ${massUnit}</strong>
+            <small>From checked-in manifest</small>
+          </div>
+          <div class="cargo-reference-card">
+            <span>Manual baggage</span>
+            <strong>${estimates.allocatedBaggage.toFixed(0)} ${massUnit}</strong>
+            <small>Entered by check-in</small>
+          </div>
+          <div class="cargo-reference-card">
+            <span>Manual cargo</span>
+            <strong>${estimates.freight.toFixed(0)} ${massUnit}</strong>
+            <small>Entered by check-in</small>
+          </div>
+          <div class="cargo-reference-card cargo-reference-card-wide">
+            <span>Fuel reference</span>
+            <strong>Block ${Number(summary.fuel?.block || 0).toFixed(0)} / Taxi ${Number(summary.fuel?.taxi || 0).toFixed(0)} / Landing ${Number(summary.fuel?.landing || 0).toFixed(0)} ${massUnit}</strong>
+            <small>APG planning values</small>
+          </div>
+        </div>
+      </div>
       ${summary.aircraft_error ? `<div class="muted">Aircraft limits fallback warning: ${escapeHtml(summary.aircraft_error)}</div>` : ""}
       ${summary.ofp_error ? `<div class="muted">OFP warning: ${escapeHtml(summary.ofp_error)}</div>` : ""}
     `;
+  }
+
+  function renderDetailWeightBalanceSummary(f, summary) {
+    const host = document.getElementById("detailWeightBalanceBody");
+    if (!host) return;
+    const { metrics } = buildWeightMetrics(f, summary);
+    const overall = summarizeWeightBalance(metrics);
+    host.innerHTML = `
+      <div class="wb-inline-status ${overall.cls}">
+        <div class="wb-inline-title">${overall.title}</div>
+        <div class="wb-inline-text">${overall.subtext}</div>
+      </div>
+    `;
+  }
+
+  async function populateDetailWeightBalance(f) {
+    const host = document.getElementById("detailWeightBalanceBody");
+    if (!host || !f) return;
+    const planId = getApgPlanId(f.apg_plan_id);
+    if (!planId) {
+      host.innerHTML = '<div class="muted">No APG plan linked, so W&B limits are unavailable.</div>';
+      return;
+    }
+    if (f.apgCargoWeightSummary) {
+      renderDetailWeightBalanceSummary(f, f.apgCargoWeightSummary);
+      return;
+    }
+    host.innerHTML = '<div class="muted">Checking APG weight limits...</div>';
+    try {
+      const summary = await fetchApgCargoSummary(planId);
+      if (selectedFlight !== f) return;
+      f.apgCargoWeightSummary = summary;
+      apgCargoWeightSummaryCache.set(String(planId), JSON.parse(JSON.stringify(summary)));
+      renderDetailWeightBalanceSummary(f, summary);
+    } catch (err) {
+      if (selectedFlight !== f) return;
+      host.innerHTML = `<div class="muted">Unable to check W&B right now: ${escapeHtml(err.message || String(err))}</div>`;
+    }
   }
 
   async function populateCargoWeightsSummary(f) {
@@ -2126,6 +2409,25 @@
     renderCargoEditor(f);
     cargoDialog.showModal();
     await Promise.allSettled([populateCargoWeightsSummary(f), populateCargoEditor(f)]);
+  }
+
+  async function refreshCargoDialog() {
+    const f = selectedFlight;
+    if (!f || !cargoDialog?.open) return;
+    const planId = getApgPlanId(f.apg_plan_id);
+    if (planId) {
+      apgCargoWeightSummaryCache.delete(String(planId));
+      f.apgCargoWeightSummary = null;
+    }
+    await loadData({ showSpinner: false });
+    const refreshed = findSelectedFlight();
+    if (!refreshed) throw new Error("Selected flight is no longer available.");
+    selectedFlight = refreshed;
+    const refreshedPlanId = getApgPlanId(refreshed.apg_plan_id);
+    cargoTitle.textContent = `Cargo - ${flightCode(refreshed)} ${refreshed.dep || ""}-${refreshed.ades || ""}${refreshedPlanId ? ` - APG ${refreshedPlanId}` : ""}`;
+    renderCargoWeightsSummary(refreshed);
+    renderCargoEditor(refreshed);
+    await Promise.allSettled([populateCargoWeightsSummary(refreshed), populateCargoEditor(refreshed)]);
   }
 
   function updateEnvisionEnvPill(env) {
@@ -2202,6 +2504,18 @@
       console.warn("Crew fetch failed", err);
       return null;
     }
+  }
+
+  async function setEnvisionPilotFlying(envisionFlightId, crewId) {
+    if (!envisionCrewPfUrl) throw new Error("Pilot flying endpoint not configured.");
+    const resp = await fetch(envisionCrewPfUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ flight_id: envisionFlightId, crew_id: crewId }),
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) throw new Error(data.error || `Pilot flying update failed (${resp.status})`);
+    return Array.isArray(data.crew) ? data.crew : [];
   }
 
   function fmtDefectDate(value) {
@@ -2417,11 +2731,53 @@
       host.innerHTML = '<div class="muted">No operating crew found in Envision.</div>';
       return;
     }
+    const pfGroup = `pf-${escapeHtml(String(f.envision_flight_id || ""))}`;
     host.innerHTML = crew.map((c) => {
       const role = escapeHtml(c.position || c.role || c.crewPosition || "Crew");
       const name = escapeHtml(c.name || c.fullName || c.employeeName || "-");
-      return `<div class="kv"><span>${role}</span><strong>${name}</strong></div>`;
+      const empNo = c.employee_no ? `<div class="crew-meta-line">EMP ${escapeHtml(String(c.employee_no))}</div>` : "";
+      const pfControl = c.is_pilot
+        ? `
+          <label class="crew-pf-toggle ${c.is_pilot_flying ? "is-selected" : ""}">
+            <input type="radio" name="${pfGroup}" data-pf-crew-id="${escapeHtml(String(c.id || ""))}" ${c.is_pilot_flying ? "checked" : ""}>
+            <span>Pilot flying</span>
+          </label>
+        `
+        : `<div class="crew-meta-line">Cabin crew</div>`;
+      return `
+        <div class="crew-card ${c.is_pilot ? "is-pilot" : ""}">
+          <div class="crew-card-main">
+            <div>
+              <div class="crew-role">${role}</div>
+              <div class="crew-name">${name}</div>
+              ${empNo}
+            </div>
+            <div class="crew-actions">${pfControl}</div>
+          </div>
+        </div>
+      `;
     }).join("");
+
+    host.querySelectorAll("input[data-pf-crew-id]").forEach((input) => {
+      input.addEventListener("change", async () => {
+        if (!input.checked) return;
+        const crewId = Number(input.getAttribute("data-pf-crew-id") || 0);
+        if (!crewId || !f?.envision_flight_id) return;
+        const previousCrew = Array.isArray(f.crew) ? JSON.parse(JSON.stringify(f.crew)) : [];
+        host.querySelectorAll("input[data-pf-crew-id]").forEach((el) => { el.disabled = true; });
+        try {
+          const updatedCrew = await setEnvisionPilotFlying(f.envision_flight_id, crewId);
+          f.crewLoaded = true;
+          f.crew = updatedCrew;
+          renderCrewInDetail(f, updatedCrew);
+          showApgStatusModal("Pilot Flying Updated", ["Envision pilot flying selection saved for this sector."]);
+        } catch (err) {
+          f.crew = previousCrew;
+          renderCrewInDetail(f, previousCrew);
+          showApgStatusModal("Pilot Flying Update Failed", [err.message || "Unable to save pilot flying selection."]);
+        }
+      });
+    });
   }
 
   async function populateDetailCrew(f) {
@@ -2515,7 +2871,14 @@
           <div class="kv"><span>Boarded</span><strong>${boarded}</strong></div>
           <div class="kv"><span>Flown</span><strong>${flown}</strong></div>
           <div class="kv"><span>Total</span><strong>${total}</strong></div>
+          <div class="kv"><span>DCS baggage</span><strong>${Number(f.bags_kg || 0).toFixed(1)} kg</strong></div>
           <div class="card-sub">AD ${pt.ad} / CHD ${pt.chd} / INF ${pt.inf}</div>
+          <div class="wb-inline-shell">
+            <div class="card-sub">Weight & Balance</div>
+            <div id="detailWeightBalanceBody" class="detail-weight-balance-body">
+              <div class="muted">Checking APG weight limits...</div>
+            </div>
+          </div>
         </div>
 
         <div class="detail-card">
@@ -2525,6 +2888,7 @@
       </div>
     `;
     populateDetailCrew(f);
+    populateDetailWeightBalance(f);
   }
 
   function renderFlightGroup(track, cfg) {
@@ -2602,7 +2966,7 @@
   }
   function renderRows() {
     rowsEl.innerHTML = "";
-    const sorted = [...flights].sort((a, b) => {
+    const sorted = [...getVisibleFlights()].sort((a, b) => {
       const am = flightStartMinutes(a) ?? 9999;
       const bm = flightStartMinutes(b) ?? 9999;
       return am - bm;
@@ -2651,7 +3015,7 @@
     });
 
     if (!rowsByReg.length) {
-      rowsEl.innerHTML = '<div class="row"><div class="row-label"><div class="meta">No flights or maintenance found for selected date.</div></div><div class="track"></div></div>';
+      rowsEl.innerHTML = `<div class="row"><div class="row-label"><div class="meta">${selectedLocationFilter ? `No flights found for ${escapeHtml(selectedLocationFilter)}.` : "No flights or maintenance found for selected date."}</div></div><div class="track"></div></div>`;
       return;
     }
 
@@ -2870,10 +3234,11 @@
   }
 
   function updateStats() {
-    statFlights.textContent = String(flights.length);
-    statPax.textContent = String(flights.reduce((n, f) => n + Number(f.pax_count || 0), 0));
-    statNoApg.textContent = String(flights.reduce((n, f) => n + (getApgPlanId(f.apg_plan_id) ? 0 : 1), 0));
-    statBags.textContent = String(Math.round(flights.reduce((n, f) => n + Number(f.bags_kg || 0), 0)));
+    const visibleFlights = getVisibleFlights();
+    statFlights.textContent = String(visibleFlights.length);
+    statPax.textContent = String(visibleFlights.reduce((n, f) => n + Number(f.pax_count || 0), 0));
+    statNoApg.textContent = String(visibleFlights.reduce((n, f) => n + (getApgPlanId(f.apg_plan_id) ? 0 : 1), 0));
+    statBags.textContent = String(Math.round(visibleFlights.reduce((n, f) => n + Number(f.bags_kg || 0), 0)));
   }
 
   async function loadData(opts = {}) {
@@ -2888,6 +3253,7 @@
       const data = await resp.json();
       const maybeRows = data.results || data.rows || data.data || [];
       flights = Array.isArray(maybeRows) ? maybeRows : [];
+      populateLocationFilterOptions();
       flights.forEach((f) => hydrateCargoCacheForFlight(f));
       updateTimeWindowFromFlights();
       if (!hasUserZoom) fitPxPerMinuteToViewport();
@@ -2905,9 +3271,10 @@
       preloadRegistrationMaintenance().catch(() => {});
       updateLiveNowBar();
       const refreshedSelected = findSelectedFlight();
-      if (refreshedSelected) {
+      const visibleFlightIds = new Set(getVisibleFlights().map((f) => String(f.envision_flight_id)));
+      if (refreshedSelected && visibleFlightIds.has(String(refreshedSelected.envision_flight_id))) {
         setDetail(refreshedSelected);
-      } else if (!selectedId) {
+      } else {
         setDetail(null);
       }
     } catch (err) {
@@ -2965,7 +3332,20 @@
     const cargoRows = Array.isArray(f.apgCargoAllocations) ? f.apgCargoAllocations : [];
     const { dcsBaggage, remaining } = cargoTotalsForFlight(f);
     if (cargoRows.length && Math.abs(remaining) >= 0.05) {
-      throw new Error(`Baggage allocation must match DCS total. Remaining difference: ${remaining.toFixed(1)} kg.`);
+      const warningText = remaining > 0
+        ? `Allocated baggage is under the DCS total by ${remaining.toFixed(1)} kg.`
+        : `Allocated baggage is over the DCS total by ${Math.abs(remaining).toFixed(1)} kg.`;
+      const proceed = await showApgConfirmModal(
+        "Check Cargo Weights",
+        [
+          warningText,
+          `DCS baggage total: ${dcsBaggage.toFixed(1)} kg`,
+          `Allocated baggage: ${(dcsBaggage - remaining).toFixed(1)} kg`,
+          "Submit to APG anyway?",
+        ],
+        "Submit Anyway"
+      );
+      if (!proceed) return;
     }
     const rawNo = String(f.flight_number || "").toUpperCase().replace(/\s+/g, "");
     const numberOnly = (rawNo.match(/(\d+)$/) || [null, rawNo])[1] || rawNo;
@@ -2986,30 +3366,55 @@
         freight_kg: Math.max(0, Number(row.freight_kg || 0)),
       })),
     };
-    const resp = await fetch(apgPushUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const data = await resp.json();
-    if (!resp.ok || !data.ok) throw new Error(data.error || `Submit failed (${resp.status})`);
-    cacheCargoAllocationsForFlight(f);
-    const modalLines = [
-      `Flight ${payload.designator}${payload.flight_number} submitted to APG route ${payload.apg_plan_id}.`,
+    const submitSteps = [
+      { label: "Passenger figures sent", detail: `${Array.isArray(payload.pax_list) ? payload.pax_list.length : 0} records prepared`, state: "active" },
+      { label: "Cargo figures sent", detail: `${cargoRows.length} hold entries prepared`, state: "pending" },
+      { label: "APG plan updated", detail: `Route ${payload.apg_plan_id}`, state: "pending" },
     ];
-    const totals = cargoTotalsForFlight(f);
-    modalLines.push(`Baggage allocated: ${totals.baggageTotal.toFixed(1)} kg of ${dcsBaggage.toFixed(1)} kg.`);
-    modalLines.push(`Freight added: ${totals.freightTotal.toFixed(1)} kg.`);
-    if (data.plan_version !== undefined && data.plan_version !== null) {
-      modalLines.push(`APG plan version: ${data.plan_version}`);
+    openApgSubmitModal("Submitting to APG", submitSteps);
+    try {
+      updateApgSubmitModal("Submitting to APG", [
+        { ...submitSteps[0], state: "done", detail: `${Array.isArray(payload.pax_list) ? payload.pax_list.length : 0} passenger records included` },
+        { ...submitSteps[1], state: "active", detail: `${cargoRows.length} hold entries being sent` },
+        submitSteps[2],
+      ]);
+      const resp = await fetch(apgPushUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) throw new Error(data.error || `Submit failed (${resp.status})`);
+      updateApgSubmitModal("Submitting to APG", [
+        { ...submitSteps[0], state: "done", detail: `${Array.isArray(payload.pax_list) ? payload.pax_list.length : 0} passenger records included` },
+        { ...submitSteps[1], state: "done", detail: `${cargoRows.length} hold entries sent` },
+        { ...submitSteps[2], state: "done", detail: `APG route ${payload.apg_plan_id} updated successfully` },
+      ], true);
+      cacheCargoAllocationsForFlight(f);
+      const modalLines = [
+        `Flight ${payload.designator}${payload.flight_number} submitted to APG route ${payload.apg_plan_id}.`,
+      ];
+      const totals = cargoTotalsForFlight(f);
+      modalLines.push(`Baggage allocated: ${totals.baggageTotal.toFixed(1)} kg of ${dcsBaggage.toFixed(1)} kg.`);
+      modalLines.push(`Cargo added: ${totals.freightTotal.toFixed(1)} kg.`);
+      if (data.plan_version !== undefined && data.plan_version !== null) {
+        modalLines.push(`APG plan version: ${data.plan_version}`);
+      }
+      if (data.manifest_uploaded) {
+        const manifestVersion = data.manifest_version ? ` v${data.manifest_version}` : "";
+        modalLines.push(`Manifest uploaded${manifestVersion} (doc_id: ${data.manifest_doc_id || "n/a"}).`);
+      } else if (data.manifest_error) {
+        modalLines.push(`Manifest upload issue: ${data.manifest_error}`);
+      }
+      showApgStatusModal("Submitted to APG", modalLines);
+    } catch (err) {
+      updateApgSubmitModal("Submitting to APG", [
+        { ...submitSteps[0], state: "done", detail: `${Array.isArray(payload.pax_list) ? payload.pax_list.length : 0} passenger records included` },
+        { ...submitSteps[1], state: "done", detail: `${cargoRows.length} hold entries prepared` },
+        { ...submitSteps[2], state: "error", detail: err.message || "Submit failed" },
+      ], true);
+      throw err;
     }
-    if (data.manifest_uploaded) {
-      const manifestVersion = data.manifest_version ? ` v${data.manifest_version}` : "";
-      modalLines.push(`Manifest uploaded${manifestVersion} (doc_id: ${data.manifest_doc_id || "n/a"}).`);
-    } else if (data.manifest_error) {
-      modalLines.push(`Manifest upload issue: ${data.manifest_error}`);
-    }
-    showApgStatusModal("Submitted to APG", modalLines);
   }
 
   async function resetApgPassengers() {
@@ -3040,7 +3445,14 @@
     if (!resp.ok || !js.ok) throw new Error(js.error || `Passenger sync failed (${resp.status})`);
     const updated = Number(js.updated || 0);
     const failed = Number(js.failed || 0);
-    alert(`Passenger sync complete. Updated: ${updated}, Failed: ${failed}`);
+    const expected = js.totals_sent?.expected || {};
+    const actual = js.totals_sent?.actual_preserved || {};
+    showApgStatusModal("Passenger Sync Complete", [
+      `Flights updated: ${updated}`,
+      `Flights failed: ${failed}`,
+      `Expected sent: ADT ${Number(expected.adult || 0)} / CHD ${Number(expected.child || 0)} / INF ${Number(expected.infant || 0)} / Total ${Number(expected.total || 0)}`,
+      `Actual preserved: ADT ${Number(actual.adult || 0)} / CHD ${Number(actual.child || 0)} / INF ${Number(actual.infant || 0)} / Total ${Number(actual.total || 0)}`,
+    ]);
     await loadData({ showSpinner: false });
   }
 
@@ -3310,6 +3722,22 @@
   if (boardEl) boardEl.addEventListener("mouseleave", hideCrosshairs);
 
   refreshBtn.addEventListener("click", () => loadData({ showSpinner: true }));
+  if (locationFilter) {
+    selectedLocationFilter = normalizeStationCode(localStorage.getItem(LOCATION_FILTER_STORAGE_KEY) || "");
+    locationFilter.addEventListener("change", () => {
+      selectedLocationFilter = normalizeStationCode(locationFilter.value);
+      if (selectedLocationFilter) localStorage.setItem(LOCATION_FILTER_STORAGE_KEY, selectedLocationFilter);
+      else localStorage.removeItem(LOCATION_FILTER_STORAGE_KEY);
+      updateStats();
+      renderRows();
+      const visibleIds = new Set(getVisibleFlights().map((f) => String(f.envision_flight_id)));
+      if (!selectedFlight || !visibleIds.has(String(selectedFlight.envision_flight_id))) {
+        setDetail(null);
+      } else {
+        setDetail(findSelectedFlight());
+      }
+    });
+  }
   if (zoomInBtn) {
     zoomInBtn.addEventListener("click", () => {
       hasUserZoom = true;
@@ -3374,6 +3802,7 @@
 
   if (btnPreviewManifest) btnPreviewManifest.addEventListener("click", withBusy(btnPreviewManifest, "Loading...", previewManifest));
   if (btnCargo) btnCargo.addEventListener("click", withBusy(btnCargo, "Loading...", openCargoDialog));
+  if (btnCargoRefresh) btnCargoRefresh.addEventListener("click", withBusy(btnCargoRefresh, "Refreshing...", refreshCargoDialog));
   if (btnPaxList) btnPaxList.addEventListener("click", openPassengerList);
   if (syncPaxBtn) syncPaxBtn.addEventListener("click", withBusy(syncPaxBtn, "Syncing...", runPassengerSyncTest));
   if (btnSubmitApg) btnSubmitApg.addEventListener("click", withBusy(btnSubmitApg, "Submitting...", submitToApg));

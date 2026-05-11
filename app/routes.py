@@ -1,4 +1,7 @@
 ﻿import os
+import csv
+import io
+import json
 from flask import Blueprint, request, abort, send_file, make_response, current_app, jsonify, Response, render_template, session
 from datetime import datetime, timezone, timedelta, date
 from . import db
@@ -6,6 +9,7 @@ import requests
 from sqlalchemy import func
 from zoneinfo import ZoneInfo
 from .models import SyncRun, SyncFlightLog, SyncFlightState, AppConfig, ManifestUploadState
+from .kmh_auth import get_kmh_session
 from .helpers_manifest import _seat_sort_key, _format_ssrs, _calc_age, _parse_dcs_dob, generate_manifest_pdf_from_html, generate_pdf_modern
 
 from .sync.envision_apg_sync import (
@@ -33,6 +37,11 @@ from .sync.envision_apg_sync import (
     PAX_STD_WEIGHTS_KG,
     fetch_envision_crew_for_apg,
     envision_get_flight_crew,
+    build_pic_pilot_position_sets,
+    envision_get_flight_crew_item,
+    envision_update_flight_crew,
+    envision_set_flight_crew_pilot_flying,
+    envision_update_flight_crew_recencies,
     envision_get_crew_position_setups,
     envision_get_crew_position_setup_items,
     envision_get_line_registrations,
@@ -40,6 +49,15 @@ from .sync.envision_apg_sync import (
     envision_post_flight_note,
     envision_put_flight_note,
     envision_get_flight_types,
+    envision_get_flight_note_types,
+    envision_get_cancel_codes,
+    envision_get_crew_positions,
+    envision_get_places,
+    envision_get_employees,
+    envision_get_employee_qualifications,
+    envision_get_employee_skills,
+    envision_create_flight,
+    envision_create_flight_crew,
     envision_change_type,
     envision_get_flight_passengers,
     envision_put_flight_passengers,
@@ -74,6 +92,762 @@ APG_EMAIL = os.getenv("APG_EMAIL", "")                 # API user email (from AP
 APG_PASSWORD = os.getenv("APG_PASSWORD", "")           # API user password (from APG)
 NZ_TZ  = ZoneInfo("Pacific/Auckland")
 UTC_TZ = ZoneInfo("UTC")
+KMH_REGISTRATION = "ZK-KMH"
+KMH_SKILL_KEYWORD = "206"
+KMH_NOTE_TYPE_FALLBACK_CODES = {"OPS", "OPERATIONS", "GENERAL", "NOTE"}
+KMH_NZ_TZ = ZoneInfo("Pacific/Auckland")
+KMH_ALLOWED_ROUTE_PAIRS = {
+    ("CHT", "PIT"),
+    ("PIT", "CHT"),
+    ("CHT", "CHT"),
+    ("PIT", "PIT"),
+}
+KMH_FLIGHT_NUMBER_RE = re.compile(r"^3C\d+$", re.IGNORECASE)
+KMH_PLANNING_STATUS_RE = re.compile(r"\bPLANN", re.IGNORECASE)
+KMH_SESSION_ID_KEY = "kmh_session_id"
+
+
+def _parse_iso_date(value: str | None) -> date | None:
+    try:
+        return date.fromisoformat(str(value)) if value else None
+    except ValueError:
+        return None
+
+
+def _parse_local_datetime(day_str: str, time_str: str) -> datetime:
+    day = date.fromisoformat(day_str)
+    parts = str(time_str or "").split(":")
+    if len(parts) < 2:
+        raise ValueError("Time must be HH:MM")
+    return datetime(day.year, day.month, day.day, int(parts[0]), int(parts[1]), tzinfo=KMH_NZ_TZ)
+
+
+def _kmh_session_token() -> str | None:
+    session_id = str(request.headers.get("X-KMH-Session-Id") or session.get(KMH_SESSION_ID_KEY) or "").strip()
+    record = get_kmh_session(session_id)
+    if not record:
+        return None
+    return str(record.get("token") or "").strip() or None
+
+
+def _kmh_require_token():
+    token = _kmh_session_token()
+    if token:
+        return token, None
+    return None, (jsonify(ok=False, error="KMH login required."), 401)
+
+
+def _display_employee_name(row: dict) -> str:
+    first = str(row.get("firstName") or "").strip()
+    last = str(row.get("surname") or "").strip()
+    if first or last:
+        return f"{first} {last}".strip()
+    return str(row.get("shortDisplayName") or row.get("employeeUsername") or row.get("employeeNo") or "").strip()
+
+
+def _normalise_reg(value: str | None) -> str:
+    return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+
+
+def _is_kmh_flight(row: dict) -> bool:
+    wanted = _normalise_reg(KMH_REGISTRATION)
+    candidates = {
+        _normalise_reg(row.get("flightRegistrationDescription")),
+        _normalise_reg(row.get("aircraftRegistration")),
+        _normalise_reg(row.get("registration")),
+        _normalise_reg(row.get("flightLineDescription")),
+        _normalise_reg(row.get("aircraftDescription")),
+    }
+    return wanted in candidates
+
+
+def _employee_skill_names(row: dict) -> set[str]:
+    names: set[str] = set()
+    desc = str(row.get("description") or "").strip()
+    if desc:
+        names.add(desc)
+    return names
+
+
+def _is_valid_kmh_skill(name: str) -> bool:
+    upper = str(name or "").upper()
+    return KMH_SKILL_KEYWORD in upper
+
+
+def _resolve_kmh_registration(token: str) -> dict:
+    regs = envision_get_line_registrations(token)
+    match = next((r for r in regs if str(r.get("registration") or "").strip().upper() == KMH_REGISTRATION), None)
+    if not match:
+        raise RuntimeError(f"{KMH_REGISTRATION} was not found in Envision line registrations.")
+    return match
+
+
+def _resolve_place_id(token: str, code: str) -> tuple[int, str]:
+    wanted = str(code or "").strip().upper()
+    if not wanted:
+        raise RuntimeError("Aerodrome code is required.")
+    for row in envision_get_places(token):
+        candidates = {
+            str(row.get("place") or "").strip().upper(),
+            str(row.get("iataCode") or "").strip().upper(),
+            str(row.get("icaoCode") or "").strip().upper(),
+        }
+        if wanted in candidates and row.get("id") not in (None, ""):
+            label = str(row.get("iataCode") or row.get("icaoCode") or row.get("place") or wanted).strip().upper()
+            return int(row["id"]), label
+    raise RuntimeError(f"Place '{wanted}' was not found in Envision.")
+
+
+def _resolve_note_type_id(token: str) -> int:
+    note_types = envision_get_flight_note_types(token)
+
+    def _truthy_flag(value) -> bool:
+        if isinstance(value, bool):
+            return value
+        text = str(value or "").strip().upper()
+        return text in {"1", "TRUE", "YES", "Y"}
+
+    for row in note_types:
+        code = str(row.get("noteTypeCode") or row.get("code") or "").strip().upper()
+        desc = str(row.get("description") or "").strip().upper()
+        if code in KMH_NOTE_TYPE_FALLBACK_CODES or desc in KMH_NOTE_TYPE_FALLBACK_CODES:
+            return int(row["id"])
+    for row in note_types:
+        if not _truthy_flag(row.get("crewView")) and row.get("id") not in (None, ""):
+            return int(row["id"])
+    raise RuntimeError("No non-crew Envision flight note type is available.")
+
+
+def _resolve_captain_position_id(token: str) -> int:
+    captains = sorted(
+        [p for p in envision_get_crew_positions(token) if p.get("isCaptain") and p.get("id") not in (None, "")],
+        key=lambda p: (int(p.get("displayOrder") or 9999), int(p.get("id") or 0)),
+    )
+    if not captains:
+        raise RuntimeError("No captain crew position is configured in Envision.")
+    return int(captains[0]["id"])
+
+
+def _kmh_pilot_options(token: str) -> list[dict]:
+    employees = envision_get_employees(token)
+    skills = envision_get_employee_skills(token)
+    skills_by_employee: dict[int, set[str]] = {}
+    for row in skills:
+        emp_id = int(row.get("employeeId") or 0)
+        if emp_id <= 0:
+            continue
+        skills_by_employee.setdefault(emp_id, set()).update(_employee_skill_names(row))
+    pilots: list[dict] = []
+    for emp in employees:
+        emp_id = int(emp.get("id") or 0)
+        if emp_id <= 0:
+            continue
+        active_skills = skills_by_employee.get(emp_id) or set()
+        if not active_skills:
+            continue
+        if not any(_is_valid_kmh_skill(s) for s in active_skills):
+            continue
+        pilots.append({
+            "employee_id": emp_id,
+            "employee_no": str(emp.get("employeeNo") or "").strip().upper(),
+            "name": _display_employee_name(emp),
+            "skills": sorted(s for s in active_skills if _is_valid_kmh_skill(s)),
+        })
+    pilots.sort(key=lambda row: ((row.get("name") or "").upper(), row.get("employee_no") or ""))
+    return pilots
+
+
+def _kmh_range_bounds(date_from: date, date_to: date) -> tuple[datetime, datetime]:
+    start_nz = datetime.combine(date_from, datetime.min.time(), tzinfo=KMH_NZ_TZ)
+    end_nz = datetime.combine(date_to + timedelta(days=1), datetime.min.time(), tzinfo=KMH_NZ_TZ)
+    return start_nz.astimezone(timezone.utc), end_nz.astimezone(timezone.utc)
+
+
+def _serialize_kmh_flight(row: dict, note_text: str, pilot_name: str) -> dict:
+    dep_est = row.get("departureEstimate") or row.get("departureScheduled")
+    arr_est = row.get("arrivalEstimate") or row.get("arrivalScheduled")
+
+    def _to_local_text(raw: str | None) -> tuple[str | None, str | None]:
+        if not raw:
+            return None, None
+        dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        local_dt = dt.astimezone(KMH_NZ_TZ)
+        return local_dt.date().isoformat(), local_dt.strftime("%H:%M")
+
+    flight_date, etd = _to_local_text(dep_est)
+    _arr_date, eta = _to_local_text(arr_est)
+    return {
+        "id": row.get("id"),
+        "flight_number": row.get("flightNumberDescription") or row.get("flightNumber") or "",
+        "dep": row.get("departurePlaceDescription") or row.get("departurePlaceId") or "",
+        "arr": row.get("arrivalPlaceDescription") or row.get("arrivalPlaceId") or "",
+        "registration": row.get("flightRegistrationDescription") or row.get("aircraftRegistration") or "",
+        "flight_date": flight_date,
+        "etd": etd,
+        "eta": eta,
+        "note": note_text,
+        "expected_passengers": None,
+        "expected_cargo_kg": None,
+        "pilot": pilot_name,
+        "status": row.get("flightStatusDescription") or row.get("flightStatusId") or "",
+        "envision_flight_id": row.get("id"),
+    }
+
+
+def _parse_kmh_expected_fields(note_text: str | None) -> dict:
+    text = str(note_text or "")
+    passengers = None
+    cargo_kg = None
+    body_lines: list[str] = []
+    for raw_line in text.splitlines():
+        line = str(raw_line or "").strip()
+        if not line:
+            continue
+        if re.match(r"(?i)^Expected\s+Passengers?\s*:", line):
+            continue
+        if re.match(r"(?i)^Expected\s+Cargo\s*:", line):
+            continue
+        body_lines.append(line)
+
+    m = re.search(r"(?im)^\s*Expected\s+Passengers?\s*:\s*(\d+)\s*$", text)
+    if m:
+        try:
+            passengers = int(m.group(1))
+        except ValueError:
+            passengers = None
+
+    m = re.search(r"(?im)^\s*Expected\s+Cargo\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*kg?\s*$", text)
+    if m:
+        try:
+            cargo_kg = float(m.group(1))
+        except ValueError:
+            cargo_kg = None
+
+    return {
+        "expected_passengers": passengers,
+        "expected_cargo_kg": cargo_kg,
+        "note_body": "\n".join(body_lines).strip(),
+    }
+
+
+def _compose_kmh_note(note_text: str | None, expected_passengers: int | None, expected_cargo_kg: float | None) -> str:
+    parts: list[str] = []
+    base_note = str(note_text or "").strip()
+    if base_note:
+        parts.append(base_note)
+    meta: list[str] = []
+    if expected_passengers not in (None, ""):
+        meta.append(f"Expected Passengers: {int(expected_passengers)}")
+    if expected_cargo_kg not in (None, ""):
+        cargo_val = float(expected_cargo_kg)
+        cargo_txt = f"{cargo_val:g}"
+        meta.append(f"Expected Cargo: {cargo_txt} kg")
+    if meta:
+        parts.append("\n".join(meta))
+    return "\n".join(parts).strip()
+
+
+def _is_kmh_planning_status(value: str | None) -> bool:
+    return bool(KMH_PLANNING_STATUS_RE.search(str(value or "")))
+
+
+def _crew_summary_for_calendar(crew: list[dict]) -> tuple[str, str]:
+    pilot = next((c for c in crew if str(c.get("position") or "").upper() == "PIC"), None)
+    if not pilot:
+        pilot = next((c for c in crew if c.get("is_pilot_flying")), None)
+    crew_code = str((pilot or {}).get("employee_no") or "").strip()
+    crew_name = str((pilot or {}).get("name") or "").strip()
+    return crew_name, crew_code
+
+
+def _fetch_kmh_note_text(token: str, flight_id: int) -> str:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for crew_view in (False, True):
+        try:
+            notes = envision_get_flight_notes(token, flight_id, crew_view=crew_view) or []
+        except Exception:
+            notes = []
+        for note in notes:
+            text = str(note.get("text") or "").strip()
+            if not text:
+                continue
+            note_key = str(note.get("id") or text)
+            if note_key in seen:
+                continue
+            seen.add(note_key)
+            merged.append(text)
+    return " | ".join(merged)
+
+
+def _friendly_kmh_create_error(exc: Exception) -> str:
+    message = str(exc or "").strip()
+    if "body=" not in message:
+        return message
+    raw_body = message.split("body=", 1)[1].strip()
+    try:
+        payload = json.loads(raw_body)
+    except Exception:
+        return message
+    messages = payload.get("messages") or []
+    if not isinstance(messages, list):
+        return message
+    for item in messages:
+        text = str(item or "").strip()
+        if text.startswith("Place mismatch with previous flight"):
+            return (
+                f"{text}. Envision requires the next flight with the same number to depart from "
+                f"the place where the previous same-number flight ended. Use the next 3C number, "
+                f"or make the departure match the previous arrival."
+            )
+        if "Flights overlaps with existing flights" in text:
+            return (
+                "This flight overlaps an existing Envision flight for ZK-KMH. "
+                "Adjust the time, or if the overlap is intentional it needs to be created with confirmation."
+            )
+    return message
+
+
+def _kmh_envision_error_payload(exc: Exception) -> dict:
+    message = str(exc or "").strip()
+    if "body=" not in message:
+        return {}
+    raw_body = message.split("body=", 1)[1].strip()
+    try:
+        payload = json.loads(raw_body)
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _kmh_requires_confirmation(exc: Exception) -> bool:
+    payload = _kmh_envision_error_payload(exc)
+    return str(payload.get("typeDescription") or "").strip().upper() == "REQUIRES_CONFIRMATION"
+
+
+def _assign_kmh_pilot_to_existing_or_new_slot(token: str, flight_id: int, pilot_employee_id: int) -> int | None:
+    captain_position_id = _resolve_captain_position_id(token)
+    pic_pos_ids, pilot_pos_ids = build_pic_pilot_position_sets(token)
+    crew_rows = envision_get_flight_crew(token, flight_id) or []
+
+    preferred_open_row = None
+    fallback_open_row = None
+    for row in crew_rows:
+        try:
+            row_id = int(row.get("id") or 0)
+            pos_id = int(row.get("crewPositionId") or row.get("positionId") or 0)
+            employee_id = int(row.get("employeeId") or 0)
+        except (TypeError, ValueError):
+            continue
+        if row_id <= 0 or employee_id > 0:
+            continue
+        if pos_id == captain_position_id:
+            preferred_open_row = row
+            break
+        if pos_id in pic_pos_ids or pos_id in pilot_pos_ids:
+            fallback_open_row = fallback_open_row or row
+
+    target_row = preferred_open_row or fallback_open_row
+    crew_id = None
+    if target_row:
+        crew_id = int(target_row.get("id") or 0)
+        pos_id = int(target_row.get("crewPositionId") or target_row.get("positionId") or captain_position_id)
+        envision_update_flight_crew(token, flight_id, crew_id, {
+            "id": crew_id,
+            "flightId": flight_id,
+            "crewPositionId": pos_id,
+            "employeeId": pilot_employee_id,
+        })
+    else:
+        crew_row = envision_create_flight_crew(token, flight_id, {
+            "flightId": flight_id,
+            "crewPositionId": captain_position_id,
+            "employeeId": pilot_employee_id,
+        })
+        if crew_row.get("id") not in (None, ""):
+            crew_id = int(crew_row["id"])
+
+    if crew_id:
+        for row in crew_rows:
+            try:
+                row_id = int(row.get("id") or 0)
+                pos_id = int(row.get("crewPositionId") or row.get("positionId") or 0)
+            except (TypeError, ValueError):
+                continue
+            if row_id <= 0 or pos_id not in pilot_pos_ids:
+                continue
+            envision_set_flight_crew_pilot_flying(token, flight_id, row_id, row_id == crew_id)
+        envision_set_flight_crew_pilot_flying(token, flight_id, crew_id, True)
+    return crew_id
+
+
+def _change_kmh_pilot_for_existing_flight(token: str, flight_id: int, pilot_employee_id: int) -> int | None:
+    captain_position_id = _resolve_captain_position_id(token)
+    pic_pos_ids, pilot_pos_ids = build_pic_pilot_position_sets(token)
+    crew_rows = envision_get_flight_crew(token, flight_id) or []
+
+    target_row = None
+    for row in crew_rows:
+        try:
+            row_id = int(row.get("id") or 0)
+            pos_id = int(row.get("crewPositionId") or row.get("positionId") or 0)
+            employee_id = int(row.get("employeeId") or 0)
+        except (TypeError, ValueError):
+            continue
+        if row_id <= 0 or pos_id not in pilot_pos_ids:
+            continue
+        if employee_id > 0 and bool(row.get("isPilotFlying")):
+            target_row = row
+            break
+        if employee_id > 0 and pos_id == captain_position_id:
+            target_row = row
+            break
+
+    if target_row:
+        crew_id = int(target_row.get("id") or 0)
+        pos_id = int(target_row.get("crewPositionId") or target_row.get("positionId") or captain_position_id)
+        envision_update_flight_crew(token, flight_id, crew_id, {
+            "id": crew_id,
+            "flightId": flight_id,
+            "crewPositionId": pos_id,
+            "employeeId": pilot_employee_id,
+        })
+        for row in crew_rows:
+            try:
+                row_id = int(row.get("id") or 0)
+                row_pos_id = int(row.get("crewPositionId") or row.get("positionId") or 0)
+            except (TypeError, ValueError):
+                continue
+            if row_id <= 0 or row_pos_id not in pilot_pos_ids:
+                continue
+            envision_set_flight_crew_pilot_flying(token, flight_id, row_id, row_id == crew_id)
+        envision_set_flight_crew_pilot_flying(token, flight_id, crew_id, True)
+        return crew_id
+
+    return _assign_kmh_pilot_to_existing_or_new_slot(token, flight_id, pilot_employee_id)
+
+
+@api_bp.get("/kmh/lookups")
+def api_kmh_lookups():
+    try:
+        token, auth_resp = _kmh_require_token()
+        if auth_resp:
+            return auth_resp
+        pilots = _kmh_pilot_options(token)
+        flight_types = [
+            {
+                "id": int(row.get("id")),
+                "description": str(row.get("description") or row.get("flightType") or row.get("flightTypeCode") or row.get("id")),
+                "code": str(row.get("flightTypeCode") or ""),
+                "new_journey_default": bool(row.get("newJourneyDefault")),
+            }
+            for row in (envision_get_flight_types(token) or [])
+            if row.get("id") not in (None, "")
+        ]
+        cancel_codes = [
+            {
+                "id": int(row.get("id")),
+                "code": str(row.get("code") or row.get("cancelCode") or row.get("cancelCodeCode") or "").strip().upper(),
+                "description": str(row.get("description") or row.get("name") or row.get("remarks") or "").strip(),
+            }
+            for row in (envision_get_cancel_codes(token) or [])
+            if row.get("id") not in (None, "")
+        ]
+        flight_types.sort(key=lambda row: (not row["new_journey_default"], row["description"].upper()))
+        cancel_codes.sort(key=lambda row: ((row.get("code") or row.get("description") or "").upper(), row["id"]))
+        return jsonify(ok=True, pilots=pilots, flight_types=flight_types, cancel_codes=cancel_codes, registration=KMH_REGISTRATION)
+    except Exception as e:
+        current_app.logger.exception("api_kmh_lookups failed")
+        return jsonify(ok=False, error=str(e)), 502
+
+
+@api_bp.route("/kmh/flights", methods=["GET", "POST"])
+def api_kmh_flights():
+    if request.method == "GET":
+        date_from = _parse_iso_date(request.args.get("date_from")) or date.today().replace(day=1)
+        date_to = _parse_iso_date(request.args.get("date_to")) or (date_from + timedelta(days=41))
+        try:
+            token, auth_resp = _kmh_require_token()
+            if auth_resp:
+                return auth_resp
+            start_utc, end_utc = _kmh_range_bounds(date_from, date_to)
+            flights = envision_get_flights(token, start_utc, end_utc) or []
+            kmh_rows = [row for row in flights if _is_kmh_flight(row)]
+            items: list[dict] = []
+            for row in kmh_rows:
+                fid = row.get("id")
+                if not fid:
+                    continue
+                try:
+                    crew = fetch_envision_crew_for_apg(int(fid), include_available_employees=False)
+                except Exception:
+                    crew = []
+                note_text = _fetch_kmh_note_text(token, int(fid))
+                pilot_row = next((c for c in crew if str(c.get("position") or "").upper() == "PIC"), None)
+                if not pilot_row:
+                    pilot_row = next((c for c in crew if c.get("is_pilot_flying")), None)
+                pilot_name, crew_code = _crew_summary_for_calendar(crew)
+                item = _serialize_kmh_flight(row, note_text, pilot_name)
+                item.update(_parse_kmh_expected_fields(note_text))
+                item["note_display"] = item.get("note_body") or note_text
+                item["crew_code"] = crew_code
+                item["pilot_employee_id"] = int((pilot_row or {}).get("employee_id") or 0)
+                item["crew"] = [
+                    {
+                        "position": c.get("position"),
+                        "name": c.get("name"),
+                        "employee_no": c.get("employee_no"),
+                        "is_operating": c.get("is_operating"),
+                        "is_pilot_flying": c.get("is_pilot_flying"),
+                        "employee_id": c.get("employee_id"),
+                    }
+                    for c in crew
+                ]
+                items.append(item)
+            items.sort(key=lambda row: ((row.get("flight_date") or ""), (row.get("etd") or ""), str(row.get("flight_number") or "")))
+            return jsonify(ok=True, flights=items)
+        except Exception as e:
+            current_app.logger.exception("api_kmh_flights GET failed")
+            return jsonify(ok=False, error=str(e)), 502
+
+    data = request.get_json(force=True) or {}
+    try:
+        dep_code = str(data.get("dep") or "").strip().upper()
+        arr_code = str(data.get("arr") or "").strip().upper()
+        flight_day = str(data.get("flight_date") or "").strip()
+        etd_local = str(data.get("etd") or "").strip()
+        eta_local = str(data.get("eta") or "").strip()
+        note_text = str(data.get("note") or "").strip()
+        expected_passengers_raw = data.get("expected_passengers")
+        expected_cargo_kg_raw = data.get("expected_cargo_kg")
+        pilot_employee_id = int(data.get("pilot_employee_id") or 0)
+        flight_type_id = int(data.get("flight_type_id") or 0)
+        flight_number = str(data.get("flight_number") or "").strip().upper()
+        if not (dep_code and arr_code and flight_day and etd_local and eta_local and pilot_employee_id and flight_type_id):
+            return jsonify(ok=False, error="dep, arr, flight_date, etd, eta, pilot_employee_id and flight_type_id are required"), 400
+        if (dep_code, arr_code) not in KMH_ALLOWED_ROUTE_PAIRS:
+            return jsonify(ok=False, error="Route must be CHT-PIT, PIT-CHT, CHT-CHT, or PIT-PIT."), 400
+        if not KMH_FLIGHT_NUMBER_RE.fullmatch(flight_number):
+            return jsonify(ok=False, error="Flight number must be in the format 3C followed by digits, e.g. 3C1."), 400
+        etd_dt = _parse_local_datetime(flight_day, etd_local)
+        eta_dt = _parse_local_datetime(flight_day, eta_local)
+        if eta_dt <= etd_dt:
+            eta_dt += timedelta(days=1)
+    except (TypeError, ValueError) as e:
+        return jsonify(ok=False, error=f"Invalid request: {e}"), 400
+
+    try:
+        token, auth_resp = _kmh_require_token()
+        if auth_resp:
+            return auth_resp
+        pilot = next((row for row in _kmh_pilot_options(token) if int(row.get("employee_id") or 0) == pilot_employee_id), None)
+        if not pilot:
+            return jsonify(ok=False, error="Selected pilot is not a valid 206 (CPT) employee."), 400
+        kmh_reg = _resolve_kmh_registration(token)
+        dep_place_id, dep_label = _resolve_place_id(token, dep_code)
+        arr_place_id, arr_label = _resolve_place_id(token, arr_code)
+        try:
+            expected_passengers = int(expected_passengers_raw) if expected_passengers_raw not in (None, "") else None
+        except (TypeError, ValueError):
+            return jsonify(ok=False, error="Expected passenger count must be a whole number."), 400
+        try:
+            expected_cargo_kg = float(expected_cargo_kg_raw) if expected_cargo_kg_raw not in (None, "") else None
+        except (TypeError, ValueError):
+            return jsonify(ok=False, error="Expected cargo must be a number."), 400
+        note_text = _compose_kmh_note(note_text, expected_passengers, expected_cargo_kg)
+        create_payload = {
+            "ignoreValidations": False,
+            "flightDate": etd_dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "departurePlaceId": dep_place_id,
+            "arrivalPlaceId": arr_place_id,
+            "scheduledTimeDeparture": etd_dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "scheduledTimeArrival": eta_dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "flightTypeId": flight_type_id,
+            "modelId": int(kmh_reg.get("modelId") or 0),
+            "registrationId": int(kmh_reg.get("id") or 0),
+            "flightNumber": flight_number or None,
+        }
+        try:
+            created = envision_create_flight(token, create_payload)
+        except Exception as create_exc:
+            if not _kmh_requires_confirmation(create_exc):
+                raise
+            create_payload["ignoreValidations"] = True
+            created = envision_create_flight(token, create_payload)
+        flight_id = int(created.get("id") or 0)
+        if flight_id <= 0:
+            raise RuntimeError(f"Unexpected Envision create response: {created!r}")
+
+        warnings: list[str] = []
+        crew_id = None
+        try:
+            crew_id = _assign_kmh_pilot_to_existing_or_new_slot(token, flight_id, pilot_employee_id)
+        except Exception as crew_exc:
+            current_app.logger.exception("KMH pilot assignment failed for flight %s", flight_id)
+            warnings.append(
+                "Flight was created in Envision, but pilot assignment failed. "
+                "The flight may need crew to be assigned manually in Envision."
+            )
+
+        note_id = None
+        if note_text:
+            try:
+                note_resp = envision_post_flight_note(token, flight_id, {
+                    "flightId": flight_id,
+                    "noteTypeId": _resolve_note_type_id(token),
+                    "text": note_text,
+                    "isImportant": False,
+                })
+                note_id = note_resp.get("id")
+            except Exception:
+                current_app.logger.exception("KMH note save failed for flight %s", flight_id)
+                warnings.append(
+                    "Flight was created, but the note could not be saved to Envision."
+                )
+
+        return jsonify(
+            ok=True,
+            flight_id=flight_id,
+            crew_id=crew_id,
+            note_id=note_id,
+            registration=KMH_REGISTRATION,
+            dep=dep_label,
+            arr=arr_label,
+            pilot=pilot.get("name"),
+            expected_passengers=expected_passengers,
+            expected_cargo_kg=expected_cargo_kg,
+            warnings=warnings,
+        )
+    except Exception as e:
+        current_app.logger.exception("api_kmh_flights POST failed")
+        return jsonify(ok=False, error=_friendly_kmh_create_error(e)), 502
+
+
+@api_bp.patch("/kmh/flights/<int:flight_id>")
+def api_kmh_flight_action(flight_id: int):
+    data = request.get_json(force=True) or {}
+    action = str(data.get("action") or "").strip().lower()
+    if action not in {"reschedule", "cancel", "change_pilot"}:
+        return jsonify(ok=False, error="action must be 'reschedule', 'cancel', or 'change_pilot'"), 400
+
+    try:
+        token, auth_resp = _kmh_require_token()
+        if auth_resp:
+            return auth_resp
+        base = envision_get_flight_times(token, flight_id)
+        status_text = str(base.get("flightStatusDescription") or base.get("flightStatus") or base.get("flightStatusId") or "").strip()
+        if not _is_kmh_planning_status(status_text):
+            return jsonify(ok=False, error=f"Flight is '{status_text or 'unknown'}'. Only planning flights can be edited or cancelled."), 400
+
+        if action == "change_pilot":
+            pilot_employee_id = int(data.get("pilot_employee_id") or 0)
+            if pilot_employee_id <= 0:
+                return jsonify(ok=False, error="pilot_employee_id is required to change the pilot"), 400
+            pilot = next((row for row in _kmh_pilot_options(token) if int(row.get("employee_id") or 0) == pilot_employee_id), None)
+            if not pilot:
+                return jsonify(ok=False, error="Selected pilot is not a valid 206 (CPT) employee."), 400
+            crew_id = _change_kmh_pilot_for_existing_flight(token, flight_id, pilot_employee_id)
+            return jsonify(ok=True, action="change_pilot", flight_id=flight_id, crew_id=crew_id, pilot=pilot.get("name"))
+
+        if action == "reschedule":
+            flight_day = str(data.get("flight_date") or "").strip()
+            etd_local = str(data.get("etd") or "").strip()
+            eta_local = str(data.get("eta") or "").strip()
+            if not (flight_day and etd_local and eta_local):
+                return jsonify(ok=False, error="flight_date, etd and eta are required to reschedule"), 400
+            etd_dt = _parse_local_datetime(flight_day, etd_local)
+            eta_dt = _parse_local_datetime(flight_day, eta_local)
+            if eta_dt <= etd_dt:
+                eta_dt += timedelta(days=1)
+            update_body = {
+                "id": int(base.get("id") or flight_id),
+                "flightStatusId": base.get("flightStatusId") or 0,
+                "departureEstimate": etd_dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "arrivalEstimate": eta_dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "departureActual": base.get("departureActual"),
+                "departureTakeOff": base.get("departureTakeOff"),
+                "arrivalLanded": base.get("arrivalLanded"),
+                "arrivalActual": base.get("arrivalActual"),
+                "plannedFlightTime": base.get("plannedFlightTime") or 0,
+                "calculatedTakeOffTime": base.get("calculatedTakeOffTime"),
+            }
+            envision_update_flight_times(token, flight_id, update_body)
+            return jsonify(
+                ok=True,
+                action="reschedule",
+                flight_id=flight_id,
+                flight_date=flight_day,
+                etd=etd_dt.strftime("%H:%M"),
+                eta=eta_dt.astimezone(KMH_NZ_TZ).strftime("%H:%M"),
+            )
+
+        cancel_code_id = int(data.get("cancel_code_id") or data.get("cancelCodeId") or 0)
+        remarks = str(data.get("remarks") or "").strip()
+        if cancel_code_id <= 0:
+            return jsonify(ok=False, error="Cancellation code is required"), 400
+        if not remarks:
+            return jsonify(ok=False, error="Cancellation reason is required"), 400
+        body = {
+            "flightId": flight_id,
+            "cancelCodeId": cancel_code_id,
+            "remarks": remarks,
+        }
+        result = envision_cancel_flight(token, flight_id, body)
+        return jsonify(ok=True, action="cancel", flight_id=flight_id, result=result)
+    except Exception as e:
+        current_app.logger.exception("api_kmh_flight_action failed for %s", flight_id)
+        return jsonify(ok=False, error=str(e)), 502
+
+
+@api_bp.get("/kmh/export")
+def api_kmh_export():
+    date_from = _parse_iso_date(request.args.get("date_from")) or date.today().replace(day=1)
+    date_to = _parse_iso_date(request.args.get("date_to")) or (date_from + timedelta(days=41))
+    try:
+        token, auth_resp = _kmh_require_token()
+        if auth_resp:
+            return auth_resp
+        start_utc, end_utc = _kmh_range_bounds(date_from, date_to)
+        flights = envision_get_flights(token, start_utc, end_utc) or []
+        rows = [row for row in flights if _is_kmh_flight(row)]
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["Flight Date", "Flight", "From", "To", "ETD", "ETA", "Pilot", "Expected Passengers", "Expected Cargo Kg", "Note", "Envision Flight ID"])
+        for row in rows:
+            fid = row.get("id")
+            if not fid:
+                continue
+            try:
+                crew = fetch_envision_crew_for_apg(int(fid), include_available_employees=False)
+            except Exception:
+                crew = []
+            note_text = _fetch_kmh_note_text(token, int(fid))
+            pilot_name, crew_code = _crew_summary_for_calendar(crew)
+            payload = _serialize_kmh_flight(row, note_text, pilot_name)
+            payload.update(_parse_kmh_expected_fields(note_text))
+            note_display = payload.get("note_body") or note_text
+            writer.writerow([
+                payload.get("flight_date") or "",
+                payload.get("flight_number") or "",
+                payload.get("dep") or "",
+                payload.get("arr") or "",
+                payload.get("etd") or "",
+                payload.get("eta") or "",
+                payload.get("pilot") or "",
+                "" if payload.get("expected_passengers") is None else payload.get("expected_passengers"),
+                "" if payload.get("expected_cargo_kg") is None else payload.get("expected_cargo_kg"),
+                note_display or "",
+                payload.get("envision_flight_id") or "",
+            ])
+        resp = make_response(output.getvalue().encode("utf-8-sig"))
+        resp.headers["Content-Type"] = "text/csv; charset=utf-8"
+        resp.headers["Content-Disposition"] = f'attachment; filename="kmh_flights_{date_from.isoformat()}_{date_to.isoformat()}.csv"'
+        return resp
+    except Exception as e:
+        current_app.logger.exception("api_kmh_export failed")
+        return jsonify(ok=False, error=str(e)), 502
 
 # ---- Manual run ----
 @api_bp.post("/sync/run")
@@ -360,15 +1134,39 @@ def _is_dcs_passenger_flown(p: dict) -> bool:
     return s in {"F", "FLW", "FLWN"}
 
 
+def _is_dcs_passenger_operational(p: dict) -> bool:
+    raw = (
+        p.get("DCSStatus")
+        or p.get("DcsStatus")
+        or p.get("Status")
+        or p.get("status")
+        or p.get("IataStatus")
+        or p.get("StatusCode")
+        or ""
+    )
+    s = str(raw).strip().upper()
+    if not s:
+        return False
+    if "FLOWN" in s or "BOARD" in s or "CHECK" in s:
+        return True
+    return s in {"F", "FLW", "FLWN", "BD", "BRD", "BOARDED", "CI", "CKI", "CKIN", "CHECKED"}
+
+
 def _count_passengers_for_envision(passengers: list[dict], flown_only: bool = False) -> dict:
+    return _count_passengers_for_envision_by_mode(passengers, mode="flown" if flown_only else "all")
+
+
+def _count_passengers_for_envision_by_mode(passengers: list[dict], mode: str = "all") -> dict:
     adult = child = infant = male = female = 0
     for p in passengers if isinstance(passengers, list) else []:
-        if flown_only and not _is_dcs_passenger_flown(p):
+        if mode == "flown" and not _is_dcs_passenger_flown(p):
+            continue
+        if mode == "operational" and not _is_dcs_passenger_operational(p):
             continue
         ptype = normalise_pax_type(p.get("PassengerType"))
         if ptype == "INF":
             infant += 1
-        elif ptype == "CH":
+        elif ptype in {"CH", "CHD", "UMNR"}:
             child += 1
         else:
             adult += 1
@@ -390,7 +1188,21 @@ def _count_passengers_for_envision(passengers: list[dict], flown_only: bool = Fa
     }
 
 
-def _build_envision_pax_payload(flight_id: int, expected_counts: dict, actual_counts: dict | None, existing_actuals: dict) -> dict:
+def _choose_best_dcs_flight_for_passenger_sync(dcs_payload: dict) -> dict | None:
+    flights = dcs_payload.get("Flights") if isinstance(dcs_payload, dict) else []
+    if not isinstance(flights, list) or not flights:
+        return None
+    scored = []
+    for fl in flights:
+      pax = (fl or {}).get("Passengers") or []
+      expected = _count_passengers_for_envision_by_mode(pax, mode="all")
+      operational = _count_passengers_for_envision_by_mode(pax, mode="operational")
+      scored.append((expected.get("total", 0), operational.get("total", 0), fl))
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return scored[0][2] if scored else None
+
+
+def _build_envision_pax_payload(flight_id: int, expected_counts: dict, existing_actuals: dict) -> dict:
     payload = {
         "flightId": int(flight_id),
         "expected": int(expected_counts.get("total", 0)),
@@ -405,14 +1217,6 @@ def _build_envision_pax_payload(flight_id: int, expected_counts: dict, actual_co
         "expectedChild": int(expected_counts.get("child", 0)),
         "expectedInfant": int(expected_counts.get("infant", 0)),
     }
-    if actual_counts:
-        payload.update({
-            "adult": int(actual_counts.get("adult", 0)),
-            "male": int(actual_counts.get("male", 0)),
-            "female": int(actual_counts.get("female", 0)),
-            "child": int(actual_counts.get("child", 0)),
-            "infant": int(actual_counts.get("infant", 0)),
-        })
     return payload
 
 
@@ -518,7 +1322,7 @@ def run_envision_passenger_sync_once() -> dict:
     Update Envision flight passenger counts from DCS.
     - Window: flights departing between now+24h and now+48h.
     - Update expected counts always.
-    - Update actual counts only if DCS passenger status is flown.
+    - Never overwrite Envision actual counts.
     """
     restore_logs = _enable_passenger_sync_log_focus()
     try:
@@ -536,6 +1340,10 @@ def run_envision_passenger_sync_once() -> dict:
         updates = []
         ok_count = 0
         fail_count = 0
+        totals_sent = {
+            "expected": {"adult": 0, "child": 0, "infant": 0, "total": 0},
+            "actual_preserved": {"adult": 0, "child": 0, "infant": 0, "total": 0},
+        }
 
         for f in flights:
             flight_id = f.get("id")
@@ -557,12 +1365,10 @@ def run_envision_passenger_sync_once() -> dict:
 
             try:
                 dcs = fetch_dcs_for_flight(dep, dep_utc_date, designator, number, False)
-                dcs_flights = dcs.get("Flights") if isinstance(dcs, dict) else []
-                pax = (dcs_flights[0].get("Passengers") or []) if dcs_flights else []
+                matched_dcs_flight = _choose_best_dcs_flight_for_passenger_sync(dcs)
+                pax = (matched_dcs_flight.get("Passengers") or []) if matched_dcs_flight else []
 
                 expected_counts = _count_passengers_for_envision(pax, flown_only=False)
-                flown_counts = _count_passengers_for_envision(pax, flown_only=True)
-                has_flown = int(flown_counts.get("total", 0)) > 0
 
                 try:
                     existing = envision_get_flight_passengers(token, int(flight_id)) or {}
@@ -576,29 +1382,37 @@ def run_envision_passenger_sync_once() -> dict:
                     "child": int(existing.get("child") or 0),
                     "infant": int(existing.get("infant") or 0),
                 }
+                existing_actuals["total"] = (
+                    int(existing_actuals.get("adult", 0))
+                    + int(existing_actuals.get("child", 0))
+                    + int(existing_actuals.get("infant", 0))
+                )
 
                 payload = _build_envision_pax_payload(
                     int(flight_id),
                     expected_counts,
-                    flown_counts if has_flown else None,
                     existing_actuals,
                 )
                 print(
                     f"[PAX_SYNC] PUT /Flights/{int(flight_id)}/Passengers "
                     f"flight={str(fnum)} dep={dep} expected={expected_counts} "
-                    f"actual_mode={'flown' if has_flown else 'preserve'} payload={payload}"
+                    f"actual_mode=preserve payload={payload}"
                 )
                 put_resp = envision_put_flight_passengers(token, int(flight_id), payload)
                 print(f"[PAX_SYNC] PUT success flightId={int(flight_id)} response={put_resp}")
                 ok_count += 1
+                for key in ("adult", "child", "infant", "total"):
+                    totals_sent["expected"][key] += int(expected_counts.get(key, 0))
+                    totals_sent["actual_preserved"][key] += int(existing_actuals.get(key, 0))
                 updates.append({
                     "ok": True,
                     "flightId": int(flight_id),
                     "flightNumber": str(fnum),
                     "dep": dep,
                     "expected": expected_counts,
-                    "actualUpdated": has_flown,
-                    "actual": flown_counts if has_flown else existing_actuals,
+                    "actualUpdated": False,
+                    "actual": existing_actuals,
+                    "payload": payload,
                     "response": put_resp,
                 })
             except Exception as e:
@@ -620,6 +1434,7 @@ def run_envision_passenger_sync_once() -> dict:
             },
             "updated": ok_count,
             "failed": fail_count,
+            "totals_sent": totals_sent,
             "updates": updates,
         }
         print(f"[PAX_SYNC] done updated={ok_count} failed={fail_count}")
@@ -1288,14 +2103,17 @@ def api_dcs_save_times():
     )
 
     if mode == "dep":
-        # We DO NOT modify departureEstimate (ETD)
         if dep_date:
+            dep_est = _local_date_hm_to_utc_iso(dep_date, etd)
             dep_act = _local_date_hm_to_utc_iso(dep_date, offblocks)
             dep_to  = _local_date_hm_to_utc_iso(dep_date, airborne)
         else:
+            dep_est = _combine_date_and_hm(base_dep_sched, etd)
             dep_act = _combine_date_and_hm(base_dep_sched, offblocks)
             dep_to  = _combine_date_and_hm(base_dep_sched, airborne)
 
+        if dep_est:
+            update_body["departureEstimate"] = dep_est
         if dep_act:
             update_body["departureActual"] = dep_act
         if dep_to:
@@ -1642,6 +2460,62 @@ def _local_date_hm_to_utc_iso(local_date: str | None, hm: str | None) -> str | N
     dt_utc = dt_local.astimezone(timezone.utc).replace(microsecond=0)
     # Keep a 'Z' suffix like Envision's example
     return dt_utc.isoformat().replace("+00:00", "Z")
+
+
+def _parse_env_time_to_nz_local(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        text = str(value).strip()
+        if not text:
+            return None
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(NZ_TZ)
+    except Exception:
+        return None
+
+
+def _build_envision_flight_detail_payload(flight_id: int, raw: dict) -> dict:
+    def as_local_iso(key: str):
+      dt = _parse_env_time_to_nz_local(raw.get(key))
+      return dt.isoformat() if dt else None
+
+    def as_local_hm(key: str):
+      dt = _parse_env_time_to_nz_local(raw.get(key))
+      return dt.strftime("%H:%M") if dt else None
+
+    return {
+        "ok": True,
+        "flight_id": flight_id,
+        "flightStatusId": raw.get("flightStatusId"),
+        "raw": raw,
+        "local_iso": {
+            "departureScheduled": as_local_iso("departureScheduled"),
+            "departureEstimate": as_local_iso("departureEstimate"),
+            "departureActual": as_local_iso("departureActual"),
+            "departureTakeOff": as_local_iso("departureTakeOff"),
+            "arrivalScheduled": as_local_iso("arrivalScheduled"),
+            "arrivalEstimate": as_local_iso("arrivalEstimate"),
+            "arrivalLanded": as_local_iso("arrivalLanded"),
+            "arrivalActual": as_local_iso("arrivalActual"),
+            "calculatedTakeOffTime": as_local_iso("calculatedTakeOffTime"),
+        },
+        "local_hm": {
+            "departureScheduled": as_local_hm("departureScheduled"),
+            "departureEstimate": as_local_hm("departureEstimate"),
+            "departureActual": as_local_hm("departureActual"),
+            "departureTakeOff": as_local_hm("departureTakeOff"),
+            "arrivalScheduled": as_local_hm("arrivalScheduled"),
+            "arrivalEstimate": as_local_hm("arrivalEstimate"),
+            "arrivalLanded": as_local_hm("arrivalLanded"),
+            "arrivalActual": as_local_hm("arrivalActual"),
+            "calculatedTakeOffTime": as_local_hm("calculatedTakeOffTime"),
+        },
+    }
 
 @api_bp.route("/dcs/manifest_preview", methods=["POST"])
 def api_dcs_manifest_preview():
@@ -2220,6 +3094,59 @@ def api_envision_flight_crew_raw():
         return jsonify(ok=False, error=str(e)), 500
 
 
+@api_bp.post("/envision/flight_crew_pilot_flying")
+@api_bp.post("/api/envision/flight_crew_pilot_flying")  # legacy path
+def api_envision_flight_crew_pilot_flying():
+    data = request.get_json(force=True) or {}
+    flight_id = data.get("flight_id")
+    crew_id = data.get("crew_id")
+    if flight_id in (None, "") or crew_id in (None, ""):
+        return jsonify(ok=False, error="flight_id and crew_id are required"), 400
+
+    try:
+        flight_id = int(flight_id)
+        crew_id = int(crew_id)
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error="flight_id and crew_id must be integers"), 400
+
+    try:
+        auth = envision_authenticate()
+        token = auth["token"]
+        crew_rows = envision_get_flight_crew(token, flight_id) or []
+        _pic_pos_ids, pilot_pos_ids = build_pic_pilot_position_sets(token)
+
+        target = next((row for row in crew_rows if int(row.get("id") or 0) == crew_id), None)
+        if not target:
+            return jsonify(ok=False, error="Crew row not found on this flight"), 404
+
+        target_pos_id = int(target.get("crewPositionId") or target.get("positionId") or 0)
+        if target_pos_id not in pilot_pos_ids:
+            return jsonify(ok=False, error="Selected crew member is not in a pilot position"), 400
+
+        changed = []
+        for row in crew_rows:
+            row_id = int(row.get("id") or 0)
+            pos_id = int(row.get("crewPositionId") or row.get("positionId") or 0)
+            if row_id <= 0 or pos_id not in pilot_pos_ids:
+                continue
+            should_be_pf = row_id == crew_id
+            currently_pf = bool(row.get("isPilotFlying"))
+            if should_be_pf == currently_pf:
+                continue
+            envision_set_flight_crew_pilot_flying(token, flight_id, row_id, should_be_pf)
+            changed.append({"crew_id": row_id, "is_pilot_flying": should_be_pf})
+
+        fresh = fetch_envision_crew_for_apg(flight_id)
+        return jsonify(ok=True, flight_id=flight_id, crew_id=crew_id, changed=changed, crew=fresh)
+    except Exception as e:
+        current_app.logger.exception(
+            "flight_crew_pilot_flying failed for Envision flight_id=%s crew_id=%s",
+            flight_id,
+            crew_id,
+        )
+        return jsonify(ok=False, error=str(e)), 502
+
+
 @api_bp.get("/envision/line_registrations")
 @api_bp.get("/api/envision/line_registrations")  # legacy path
 def api_envision_line_registrations():
@@ -2341,6 +3268,25 @@ def api_envision_flight_raw():
     except Exception as e:
         current_app.logger.exception(
             "flight_raw failed for Envision flight_id=%s", flight_id
+        )
+        return jsonify(ok=False, error=str(e)), 500
+
+
+@api_bp.get("/envision/flight_detail")
+@api_bp.get("/api/envision/flight_detail")  # legacy path
+def api_envision_flight_detail():
+    flight_id = request.args.get("flight_id", type=int)
+    if not flight_id:
+        return jsonify(ok=False, error="Missing flight_id"), 400
+
+    try:
+        auth = envision_authenticate()
+        token = auth["token"]
+        raw = envision_get_flight_times(token, flight_id)
+        return jsonify(_build_envision_flight_detail_payload(flight_id, raw))
+    except Exception as e:
+        current_app.logger.exception(
+            "flight_detail failed for Envision flight_id=%s", flight_id
         )
         return jsonify(ok=False, error=str(e)), 500
 

@@ -13,7 +13,7 @@ from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from apscheduler.schedulers.background import BackgroundScheduler
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy import inspect
 from werkzeug.middleware.proxy_fix import ProxyFix
 import threading
@@ -107,6 +107,7 @@ def create_app():
     app.config.setdefault("SQLALCHEMY_DATABASE_URI", "sqlite:///apg_importer.db")
     app.config.setdefault("SQLALCHEMY_TRACK_MODIFICATIONS", False)
     app.secret_key = app.config.get("SECRET_KEY", "dev")
+    app.permanent_session_lifetime = timedelta(hours=8)
 
     # Log (masked) DCS config so you can confirm it’s loaded
     dcs_base = app.config.get("DCS_API_BASE")

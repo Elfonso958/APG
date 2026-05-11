@@ -1,0 +1,235 @@
+{% extends "kmh_base.html" %}
+
+{% block shell_kicker %}Crew Access{% endblock %}
+{% block shell_title %}KMH Sign In{% endblock %}
+
+{% block head_extra %}
+<style>
+  .kmh-login-grid {
+    display: grid;
+    grid-template-columns: minmax(280px, 1.1fr) minmax(320px, 0.9fr);
+    gap: 18px;
+    align-items: stretch;
+  }
+
+  .kmh-login-hero,
+  .kmh-login-card {
+    border: 1px solid var(--kmh-line);
+    border-radius: 24px;
+    background: rgba(255, 255, 255, 0.82);
+    box-shadow: var(--kmh-shadow);
+    overflow: hidden;
+  }
+
+  .kmh-login-hero {
+    padding: 28px;
+    position: relative;
+    min-height: 420px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    background:
+      linear-gradient(135deg, rgba(8, 21, 31, 0.76), rgba(18, 50, 71, 0.58)),
+      url("{{ url_for('static', filename='images/AC Logo.jpg') }}") center / cover no-repeat;
+    color: #fff;
+  }
+
+  .kmh-login-hero::before,
+  .kmh-login-hero::after {
+    content: "";
+    position: absolute;
+    inset: auto;
+    border-radius: 999px;
+    pointer-events: none;
+    opacity: 0.9;
+  }
+
+  .kmh-login-hero::before {
+    width: 220px;
+    height: 220px;
+    right: -70px;
+    top: -55px;
+    background: radial-gradient(circle, rgba(20, 108, 128, 0.22), transparent 68%);
+  }
+
+  .kmh-login-hero::after {
+    width: 280px;
+    height: 280px;
+    left: -100px;
+    bottom: -110px;
+    background: radial-gradient(circle, rgba(18, 50, 71, 0.18), transparent 70%);
+  }
+
+  .kmh-login-mark {
+    position: relative;
+    z-index: 1;
+    max-width: 240px;
+  }
+
+  .kmh-login-mark img {
+    width: 180px;
+    height: auto;
+    display: block;
+    margin-bottom: 18px;
+  }
+
+  .kmh-login-mark h1 {
+    margin: 0 0 12px;
+    color: #fff;
+    font-size: 34px;
+    line-height: 1.02;
+    font-weight: 900;
+  }
+
+  .kmh-login-mark p {
+    margin: 0;
+    color: rgba(255, 255, 255, 0.88);
+    line-height: 1.5;
+    max-width: 34rem;
+  }
+
+  .kmh-login-note {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    gap: 10px;
+    color: #fff;
+  }
+
+  .kmh-login-pill {
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+    min-height: 34px;
+    padding: 0 12px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.16);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 900;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .kmh-login-card {
+    padding: 28px;
+    align-self: start;
+  }
+
+  .kmh-login-card h2 {
+    margin: 0 0 10px;
+    color: var(--kmh-navy);
+    font-size: 24px;
+    font-weight: 900;
+  }
+
+  .kmh-login-card p {
+    margin: 0 0 18px;
+    color: var(--kmh-muted);
+  }
+
+  .kmh-login-form {
+    display: grid;
+    gap: 14px;
+  }
+
+  .kmh-login-error {
+    border-radius: 16px;
+    padding: 12px 14px;
+    background: #fff1f1;
+    color: #9f3434;
+    border: 1px solid #f0c7c7;
+    font-weight: 700;
+  }
+
+  .kmh-field {
+    display: grid;
+    gap: 6px;
+  }
+
+  .kmh-field label {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #526879;
+  }
+
+  .kmh-field input {
+    width: 100%;
+    min-height: 48px;
+    padding: 12px 14px;
+    border: 1px solid var(--kmh-line);
+    border-radius: 14px;
+    background: #fff;
+    color: var(--kmh-text);
+    font: inherit;
+  }
+
+  .kmh-login-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 4px;
+  }
+
+  .kmh-login-help {
+    margin-top: 12px;
+    font-size: 13px;
+    color: var(--kmh-muted);
+    line-height: 1.45;
+  }
+
+  @media (max-width: 900px) {
+    .kmh-login-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .kmh-login-hero,
+    .kmh-login-card {
+      min-height: auto;
+    }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="kmh-login-grid">
+  <section class="kmh-login-hero">
+    <div class="kmh-login-mark">
+      <img src="{{ url_for('static', filename='images/AC Logo.jpg') }}" alt="Air Chathams">
+      <h1>KMH planning board</h1>
+      <p>Sign in with your Envision crew credentials to create, view, and manage ZK-KMH flights.</p>
+    </div>
+    <div class="kmh-login-note">
+      <div class="kmh-login-pill">Air Chathams</div>
+      <div>Local calendar view, Envision-backed flights, and crew-specific access for KMH operations.</div>
+    </div>
+  </section>
+
+  <section class="kmh-login-card">
+    <h2>Crew sign in</h2>
+    <p>Use your Envision username and password to enter the KMH calendar.</p>
+
+    {% if error %}
+      <div class="kmh-login-error">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" class="kmh-login-form">
+      <input type="hidden" name="next" value="{{ next_url }}">
+      <div class="kmh-field">
+        <label for="username">Envision username</label>
+        <input id="username" name="username" type="text" autocomplete="username" value="{{ username or '' }}" required>
+      </div>
+      <div class="kmh-field">
+        <label for="password">Envision password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+      </div>
+      <div class="kmh-login-actions">
+        <button class="kmh-btn" type="submit">Enter KMH</button>
+      </div>
+    </form>
+
+  </section>
+</div>
+{% endblock %}

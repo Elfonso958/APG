@@ -27,6 +27,7 @@
         <a href="{{ url_for('ui.home') }}" class="{{ 'nav-active' if request.path in ['/', '/sync/runs', '/sync/runs/'] else '' }}">Sync runs</a>
         <a href="{{ url_for('ui.settings_page') }}" class="{{ 'nav-active' if request.path.startswith('/settings') else '' }}">Schedule</a>
         <a href="{{ url_for('ui.dcs_from_envision') }}" class="{{ 'nav-active' if request.path.startswith('/dcs/from-envision') else '' }}">DCS &rarr; Schedule</a>
+        <a href="{{ url_for('ui.ops_kmh_calendar') }}" class="{{ 'nav-active' if request.path.startswith('/ops/kmh-calendar') else '' }}">KMH Calendar</a>
         <button id="run-once-btn" type="button" class="btn btn-sm">
           Run Sync (once)
         </button>

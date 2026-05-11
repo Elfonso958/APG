@@ -19,13 +19,13 @@
        data-manifest-preview-url="{{ url_for('api.api_dcs_manifest_preview') }}"
        data-envision-action-url="{{ url_for('api.api_envision_flight_action') }}"
        data-envision-crew-url="{{ url_for('api.api_envision_flight_crew') }}"
+       data-envision-crew-pf-url="{{ url_for('api.api_envision_flight_crew_pilot_flying') }}"
        data-envision-line-registrations-url="{{ url_for('api.api_envision_line_registrations') }}"
        data-envision-flight-types-url="{{ url_for('api.api_envision_flight_types') }}"
        data-envision-flight-notes-url="{{ url_for('api.api_envision_flight_notes') }}"
        data-envision-flight-notes-upsert-url="{{ url_for('api.api_envision_flight_notes_upsert') }}"
        data-envision-environment-url="{{ url_for('api.api_envision_environment') }}"
-       data-envision-flight-raw-url="{{ url_for('api.api_envision_flight_raw') }}"
-       data-envision-times-url="{{ url_for('ui.api_envision_flight_times') }}"
+       data-envision-flight-detail-url="{{ url_for('api.api_envision_flight_detail') }}"
        data-envision-reg-defects-url="{{ url_for('ui.api_envision_registration_defects') }}"
        data-envision-reg-maintenance-url="{{ url_for('ui.api_envision_registration_maintenance') }}"
        data-envision-pax-sync-url="{{ url_for('api.api_envision_passenger_sync_run') }}"
@@ -34,9 +34,8 @@
        data-envision-test-available="{{ '1' if envision_test_available else '0' }}"
        data-day="{{ day.isoformat() }}">
     <header class="topbar">
-      <div class="brand">
-        <div class="brand-kicker">Operations</div>
-        <h1>Live Gantt</h1>
+      <div class="topbar-meta">
+        <div class="topbar-label">Flight Board Controls</div>
         <div id="envisionEnvPill" class="envision-env-pill envision-env-{{ (envision_env_key or 'base')|lower }}">
           Envision: {{ envision_env_name or "PROD" }}{% if envision_env_host %} - {{ envision_env_host }}{% endif %}
         </div>
@@ -52,6 +51,12 @@
             <option value="Pacific/Auckland" selected>NZ Local</option>
             <option value="UTC">UTC</option>
             <option value="__browser__">Browser Local</option>
+          </select>
+        </label>
+        <label class="ctrl">
+          <span>Location</span>
+          <select id="locationFilter">
+            <option value="">All Stations</option>
           </select>
         </label>
         <button id="refreshBtn" class="btn btn-primary" type="button">Refresh</button>
@@ -176,11 +181,40 @@
     </form>
   </dialog>
 
+  <dialog id="apgConfirmDialog" class="status-dialog">
+    <form method="dialog" class="status-shell">
+      <header>
+        <h3 id="apgConfirmTitle">Check Cargo Weights</h3>
+        <button class="btn btn-ghost" value="cancel">Close</button>
+      </header>
+      <div id="apgConfirmBody" class="status-body"></div>
+      <div class="status-actions status-actions-split">
+        <button id="apgConfirmCancel" class="btn btn-ghost" value="cancel">Go Back</button>
+        <button id="apgConfirmOk" class="btn btn-primary" value="confirm">Submit Anyway</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="apgSubmitDialog" class="status-dialog">
+    <form method="dialog" class="status-shell">
+      <header>
+        <h3 id="apgSubmitTitle">Submitting to APG</h3>
+      </header>
+      <div id="apgSubmitBody" class="status-body"></div>
+      <div class="status-actions">
+        <button id="apgSubmitClose" class="btn btn-primary" value="default" disabled>Working...</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="cargoDialog" class="flight-edit-dialog">
     <form method="dialog" class="flight-edit-shell">
       <header>
         <h3 id="cargoTitle">Cargo</h3>
-        <button class="btn btn-ghost" value="cancel">Close</button>
+        <div class="status-actions" style="margin-top:0;">
+          <button id="btnCargoRefresh" class="btn btn-ghost" type="button">Refresh Estimates</button>
+          <button class="btn btn-ghost" value="cancel">Close</button>
+        </div>
       </header>
       <div id="cargoWeightsSummary" class="status-body"></div>
       <div id="cargoEditor" class="status-body"></div>
@@ -375,8 +409,8 @@
         <button class="btn btn-ghost" value="cancel">Close</button>
       </header>
       <div class="modify-leg-body">
-        <section class="modify-card modify-grid-5">
-          <label class="ctrl"><span>Registration</span><select id="mlReg"><option value="">Loading...</option></select></label>
+        <section class="modify-card modify-card-hero modify-grid-5">
+          <label class="ctrl"><span>Registration</span><select id="mlReg" disabled><option value="">Loading...</option></select></label>
           <label class="ctrl"><span>Airline</span><input id="mlAirline" type="text" value="Air Chathams" readonly></label>
           <label class="ctrl"><span>Flight Number</span><input id="mlFlightNo" type="text" readonly></label>
           <label class="ctrl"><span>Date</span><input id="mlDate" type="date" readonly></label>
@@ -384,31 +418,33 @@
         </section>
 
         <section class="modify-card">
-          <h4>Scheduled Flight</h4>
+          <h4>Scheduled</h4>
+          <div class="modify-placeholder">Reference only. Scheduled routing is not updated from this window.</div>
           <div class="modify-grid-5">
-            <label class="ctrl"><span>Date</span><input id="mlSchedDate" type="date"></label>
-            <label class="ctrl"><span>Departure</span><input id="mlDep" type="text"></label>
-            <label class="ctrl"><span>STD</span><input id="mlStd" type="time"></label>
-            <label class="ctrl"><span>Arrival</span><input id="mlArr" type="text"></label>
-            <label class="ctrl"><span>STA</span><input id="mlSta" type="time"></label>
+            <label class="ctrl"><span>Date</span><input id="mlSchedDate" type="date" readonly></label>
+            <label class="ctrl"><span>Departure</span><input id="mlDep" type="text" readonly></label>
+            <label class="ctrl"><span>STD</span><input id="mlStd" type="time" readonly></label>
+            <label class="ctrl"><span>Arrival</span><input id="mlArr" type="text" readonly></label>
+            <label class="ctrl"><span>STA</span><input id="mlSta" type="time" readonly></label>
           </div>
         </section>
 
         <section class="modify-card">
-          <h4>Estimated / Operational Times</h4>
-          <div class="modify-grid-7">
+          <h4>Estimated</h4>
+          <div class="modify-placeholder">These fields update Envision ETD and ETA.</div>
+          <div class="modify-grid-6">
             <label class="ctrl"><span>Date</span><input id="mlOpDate" type="date"></label>
-            <label class="ctrl"><span>OUT</span><input id="mlOut" type="time"></label>
-            <label class="ctrl"><span>OFF</span><input id="mlOff" type="time"></label>
-            <label class="ctrl"><span>Enroute</span><input id="mlEnroute" type="text"></label>
-            <label class="ctrl"><span>ON</span><input id="mlOn" type="time"></label>
-            <label class="ctrl"><span>IN</span><input id="mlIn" type="time"></label>
-            <label class="ctrl"><span>CTOT</span><input id="mlCtot" type="time"></label>
+            <label class="ctrl"><span>ETD</span><input id="mlOut" type="time"></label>
+            <label class="ctrl"><span>Calc Takeoff</span><input id="mlOff" type="time" readonly></label>
+            <label class="ctrl"><span>Planned Time</span><input id="mlEnroute" type="text" readonly></label>
+            <label class="ctrl"><span>ETA</span><input id="mlOn" type="time"></label>
+            <label class="ctrl"><span>CTOT</span><input id="mlCtot" type="time" readonly></label>
           </div>
         </section>
 
         <section class="modify-card">
           <h4>Actuals</h4>
+          <div class="modify-placeholder">These fields update Envision ATD, OFF, ON and ATA.</div>
           <div class="modify-grid-6">
             <label class="ctrl"><span>Date</span><input id="mlActDate" type="date"></label>
             <label class="ctrl"><span>OUT</span><input id="mlActOut" type="time"></label>
@@ -421,37 +457,32 @@
 
         <section class="modify-card">
           <h4>Passenger / Load</h4>
+          <div class="modify-placeholder">Reference only. Passenger and load figures are managed elsewhere.</div>
           <div class="modify-grid-6">
-            <label class="ctrl"><span>E.Pax</span><input id="mlEpax" type="number" value="0"></label>
-            <label class="ctrl"><span>E.Tr.Pax</span><input id="mlEtpax" type="number" value="0"></label>
-            <label class="ctrl"><span>A.Pax</span><input id="mlApax" type="number" value="0"></label>
-            <label class="ctrl"><span>A.Tr.Pax</span><input id="mlAtpax" type="number" value="0"></label>
-            <label class="ctrl"><span>Crew</span><input id="mlCrew" type="number" value="3"></label>
-            <label class="ctrl"><span>Cargo</span><input id="mlCargo" type="number" value="0"></label>
+            <label class="ctrl"><span>E.Pax</span><input id="mlEpax" type="number" value="0" readonly></label>
+            <label class="ctrl"><span>E.Tr.Pax</span><input id="mlEtpax" type="number" value="0" readonly></label>
+            <label class="ctrl"><span>A.Pax</span><input id="mlApax" type="number" value="0" readonly></label>
+            <label class="ctrl"><span>A.Tr.Pax</span><input id="mlAtpax" type="number" value="0" readonly></label>
+            <label class="ctrl"><span>Crew</span><input id="mlCrew" type="number" value="3" readonly></label>
+            <label class="ctrl"><span>Cargo</span><input id="mlCargo" type="number" value="0" readonly></label>
           </div>
         </section>
 
         <section class="modify-card">
           <h4>Remarks</h4>
           <div class="modify-remarks-grid single">
-            <label class="ctrl"><input id="mlRemark" type="text" placeholder="Remark"></label>
+            <label class="ctrl"><input id="mlRemark" type="text" placeholder="Add operational remark"></label>
           </div>
         </section>
 
-        <section class="modify-card">
-          <h4>Dailies and Revisions</h4>
-          <div class="modify-placeholder">Reserved for future content.</div>
-        </section>
-
-        <section class="modify-card">
-          <h4>API Responses (Development)</h4>
+        <section class="modify-card modify-card-dev">
+          <h4>API Response</h4>
           <pre id="mlApiResponses" class="flight-edit-result">{}</pre>
         </section>
 
         <section class="modify-card modify-actions">
           <button id="mlPrev" class="btn btn-ghost" type="button">Previous</button>
           <button id="mlNext" class="btn btn-ghost" type="button">Next</button>
-          <button class="btn btn-ghost" type="button">Cargo</button>
           <button id="mlOk" class="btn btn-primary" type="button">OK</button>
           <button class="btn btn-ghost" value="cancel">Close</button>
         </section>

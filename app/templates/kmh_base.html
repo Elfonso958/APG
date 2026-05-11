@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KMH Calendar</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    :root {
+      --kmh-navy: #123247;
+      --kmh-teal: #1f8a57;
+      --kmh-sky: #dff3e7;
+      --kmh-cream: #f4fbf6;
+      --kmh-line: #cfe6d7;
+      --kmh-text: #173042;
+      --kmh-muted: #5c7384;
+      --kmh-shadow: 0 24px 60px rgba(18, 50, 71, 0.12);
+    }
+
+    html, body {
+      min-height: 100%;
+    }
+
+    body.kmh-shell-body {
+      margin: 0;
+      color: var(--kmh-text);
+      background:
+        radial-gradient(circle at top left, rgba(31, 138, 87, 0.18), transparent 36%),
+        radial-gradient(circle at right 12%, rgba(18, 50, 71, 0.14), transparent 28%),
+        linear-gradient(180deg, #f8fbfc 0%, #eef5f8 100%);
+      font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    }
+
+    .kmh-shell-frame {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .kmh-shell-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: center;
+      padding: 16px 22px;
+      border-bottom: 1px solid rgba(18, 50, 71, 0.08);
+      background: rgba(255, 255, 255, 0.74);
+      backdrop-filter: blur(18px);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    .kmh-brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-width: 0;
+    }
+
+    .kmh-brand img {
+      width: 126px;
+      height: auto;
+      object-fit: contain;
+      filter: drop-shadow(0 8px 16px rgba(18, 50, 71, 0.12));
+    }
+
+    .kmh-brand-copy {
+      min-width: 0;
+    }
+
+    .kmh-brand-kicker {
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--kmh-teal);
+      margin-bottom: 4px;
+    }
+
+    .kmh-brand-title {
+      font-size: 20px;
+      line-height: 1.1;
+      font-weight: 900;
+      color: var(--kmh-navy);
+    }
+
+    .kmh-shell-actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .kmh-user-chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 38px;
+      padding: 0 14px;
+      border-radius: 999px;
+      background: var(--kmh-sky);
+      color: var(--kmh-navy);
+      font-weight: 800;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .kmh-shell-main {
+      width: 100%;
+      max-width: 1680px;
+      margin: 0 auto;
+      padding: 18px;
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+
+    .kmh-shell-footer {
+      padding: 0 22px 20px;
+      color: var(--kmh-muted);
+      font-size: 12px;
+    }
+
+    .kmh-btn {
+      appearance: none;
+      border: 0;
+      border-radius: 999px;
+      min-height: 40px;
+      padding: 10px 16px;
+      background: linear-gradient(135deg, #218f5a 0%, #1b774a 100%);
+      color: #fff;
+      font-weight: 800;
+      text-decoration: none;
+      cursor: pointer;
+    }
+
+    .kmh-btn.secondary {
+      background: #e8f5ed;
+      color: var(--kmh-navy);
+    }
+
+    .kmh-btn.ghost {
+      background: transparent;
+      border: 1px solid var(--kmh-line);
+      color: var(--kmh-navy);
+    }
+
+    .kmh-btn:hover {
+      filter: brightness(1.03);
+    }
+
+    @media (max-width: 720px) {
+      .kmh-shell-top {
+        align-items: flex-start;
+        padding: 14px 14px 12px;
+      }
+
+      .kmh-brand img {
+        width: 102px;
+      }
+
+      .kmh-brand-title {
+        font-size: 17px;
+      }
+
+      .kmh-shell-main {
+        padding: 12px;
+      }
+    }
+  </style>
+  {% block head_extra %}{% endblock %}
+</head>
+<body class="kmh-shell-body">
+  <div class="kmh-shell-frame">
+    <header class="kmh-shell-top">
+      <div class="kmh-brand">
+        <img src="{{ url_for('static', filename='images/AC Logo.jpg') }}" alt="Air Chathams">
+        <div class="kmh-brand-copy">
+          <div class="kmh-brand-kicker">{% block shell_kicker %}Air Chathams Ops{% endblock %}</div>
+          <div class="kmh-brand-title">{% block shell_title %}KMH Calendar{% endblock %}</div>
+        </div>
+      </div>
+      <div class="kmh-shell-actions">
+        {% if kmh_user %}
+          <span class="kmh-user-chip">{{ kmh_user }}</span>
+          <form method="post" action="{{ url_for('ui.ops_kmh_logout') }}" class="d-inline">
+            <button class="kmh-btn secondary" type="submit">Log out</button>
+          </form>
+        {% endif %}
+      </div>
+    </header>
+
+    <main class="kmh-shell-main">
+      {% block content %}{% endblock %}
+    </main>
+
+    <div class="kmh-shell-footer">
+      {% block footer_text %}Stand-alone KMH planning board.{% endblock %}
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

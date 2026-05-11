@@ -3,6 +3,7 @@ from datetime import date, datetime, time, timezone, timedelta
 from flask import session
 from .models import SyncRun, SyncFlightLog, AppConfig
 from . import db
+from .kmh_auth import create_kmh_session, clear_kmh_session, get_kmh_session
 from .zenith_client import fetch_dcs_for_flight
 from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -20,6 +21,7 @@ NZ = ZoneInfo("Pacific/Auckland")
 
 from .sync.envision_apg_sync import (
     envision_authenticate,
+    envision_authenticate_with_credentials,
     envision_get_flights,
     ENVISION_BASE,               # diagnostics
     ENVISION_ACTIVE_NAME,
@@ -66,6 +68,76 @@ def _runtime_envision_base() -> str:
 @ui_bp.route("/ops/modify-leg")
 def ops_modify_leg():
     return render_template("flight_details.html")
+
+
+@ui_bp.route("/ops/kmh-login", methods=["GET", "POST"])
+def ops_kmh_login():
+    if get_kmh_session(session.get("kmh_session_id")):
+        return redirect(url_for("ui.ops_kmh_calendar"))
+
+    next_url = request.values.get("next") or url_for("ui.ops_kmh_calendar")
+    if not str(next_url).startswith("/"):
+        next_url = url_for("ui.ops_kmh_calendar")
+
+    error = None
+    username = ""
+    if request.method == "POST":
+        username = str(request.form.get("username") or "").strip()
+        password = str(request.form.get("password") or "")
+        try:
+            auth = envision_authenticate_with_credentials(username, password, base=ENVISION_BASE)
+            session.permanent = True
+            session_id = create_kmh_session(
+                token=auth["token"],
+                username=username,
+                refresh_token=auth.get("refreshToken"),
+                expires_at=auth.get("expires_at"),
+            )
+            session["kmh_session_id"] = session_id
+            session["kmh_envision_username"] = username
+            session["envision_env"] = "base"
+            set_envision_environment("base")
+            return redirect(next_url)
+        except Exception as exc:
+            error = str(exc)
+
+    return render_template(
+        "kmh_login.html",
+        next_url=next_url,
+        error=error,
+        username=username,
+        kmh_session_id=session.get("kmh_session_id") or "",
+    )
+
+
+@ui_bp.route("/ops/kmh-logout", methods=["POST", "GET"])
+def ops_kmh_logout():
+    for key in (
+        "kmh_session_id",
+        "kmh_envision_username",
+    ):
+        if key == "kmh_session_id":
+            clear_kmh_session(session.get(key))
+        session.pop(key, None)
+    return redirect(url_for("ui.ops_kmh_login"))
+
+
+@ui_bp.route("/ops/kmh-calendar")
+def ops_kmh_calendar():
+    kmh_session = get_kmh_session(session.get("kmh_session_id"))
+    if not kmh_session:
+        session.pop("kmh_session_id", None)
+        session.pop("kmh_envision_username", None)
+        return redirect(url_for("ui.ops_kmh_login", next=request.path))
+
+    session["envision_env"] = "base"
+    set_envision_environment("base")
+    return render_template(
+        "kmh_calendar.html",
+        today=date.today(),
+        kmh_user=str(kmh_session.get("username") or session.get("kmh_envision_username") or ""),
+        kmh_session_id=session.get("kmh_session_id") or "",
+    )
 
 @ui_bp.route("/", endpoint="home")
 @ui_bp.route("/sync/runs")

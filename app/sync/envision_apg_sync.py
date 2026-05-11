@@ -19,6 +19,8 @@ import signal
 import argparse
 
 import hashlib
+import base64
+import threading
 from urllib.parse import urlparse
 CACHE_FILE = os.getenv("SYNC_CACHE_FILE", ".apg_sync_cache.json")
 
@@ -48,7 +50,9 @@ ENVISION_BASE_TEST = os.getenv("ENVISION_TEST", "").strip()
 ENVISION_ENV = (os.getenv("ENVISION_ENV") or "").strip().lower()
 ENVISION_USE_TEST = (os.getenv("ENVISION_USE_TEST") or "").strip().lower() in {"1", "true", "yes", "on"}
 
-if ENVISION_ENV in {"test", "uat", "staging"} or ENVISION_USE_TEST:
+# Default runtime target is always ENVISION_BASE from .env.
+# TEST is only used when explicitly selected in-session or via ENVISION_USE_TEST.
+if ENVISION_USE_TEST:
     ENVISION_BASE = ENVISION_BASE_TEST or ENVISION_BASE_PROD
     ENVISION_ACTIVE_NAME = "TEST" if ENVISION_BASE_TEST else "BASE"
 else:
@@ -94,6 +98,19 @@ def set_envision_environment(env_name: str | None) -> dict:
     except Exception:
         host = ""
     ENVISION_ACTIVE_HOST = host or ENVISION_BASE
+    _EMP_CACHE.clear()
+    _CREW_POS_CACHE.clear()
+    _CREW_POS_RECENCY_CACHE.clear()
+    _FLIGHT_RECENCY_CACHE.clear()
+    _PIC_POS_IDS.clear()
+    _PILOT_POS_IDS.clear()
+    _MISSING_EMPLOYEE_IDS.clear()
+    _PLACES_CACHE.update({"ts": 0.0, "items": []})
+    _EMPLOYEE_LIST_CACHE.update({"ts": 0.0, "items": []})
+    _EMPLOYEE_QUAL_CACHE.update({"ts": 0.0, "items": []})
+    _EMPLOYEE_SKILL_CACHE.update({"ts": 0.0, "items": []})
+    _NOTE_TYPES_CACHE.update({"ts": 0.0, "items": []})
+    _CANCEL_CODES_CACHE.update({"ts": 0.0, "items": []})
     return get_envision_environment()
 
 
@@ -138,8 +155,17 @@ DEFAULT_FL    = os.getenv("DEFAULT_FL", "300")       # FL as string, e.g. "300"
 # --- PIC resolution caches (add near other globals) ---
 _EMP_CACHE: dict[int, dict] = {}
 _CREW_POS_CACHE: list[dict] = []
+_CREW_POS_RECENCY_CACHE: list[dict] = []
+_FLIGHT_RECENCY_CACHE: list[dict] = []
 _PIC_POS_IDS: set[int] = set()
 _PILOT_POS_IDS: set[int] = set()
+_MISSING_EMPLOYEE_IDS: set[int] = set()
+_PLACES_CACHE: dict[str, Any] = {"ts": 0.0, "items": []}
+_EMPLOYEE_LIST_CACHE: dict[str, Any] = {"ts": 0.0, "items": []}
+_EMPLOYEE_QUAL_CACHE: dict[str, Any] = {"ts": 0.0, "items": []}
+_EMPLOYEE_SKILL_CACHE: dict[str, Any] = {"ts": 0.0, "items": []}
+_NOTE_TYPES_CACHE: dict[str, Any] = {"ts": 0.0, "items": []}
+_CANCEL_CODES_CACHE: dict[str, Any] = {"ts": 0.0, "items": []}
 
 # IATA -> ICAO mapping (extend as needed)
 IATA_TO_ICAO = {
@@ -189,6 +215,8 @@ IATA_TO_ICAO = {
 # --- APG aircraft caches/indexes ---
 _APG_AIRCRAFT_RAW: list[dict] = []
 _APG_BY_REG: dict[str, list[dict]] = {}   # REG (no/with dash variants) -> list of APG aircraft rows
+_ENVISION_AUTH_CACHE: dict[str, Any] = {"token": None, "refreshToken": None, "expires_at": 0.0, "cache_key": None}
+_ENVISION_AUTH_LOCK = threading.Lock()
 
 # Logging
 logging.basicConfig(
@@ -201,7 +229,7 @@ logging.basicConfig(
 ### APG HELPER ###
 ##################
 
-def fetch_envision_crew_for_apg(envision_flight_id: int):
+def fetch_envision_crew_for_apg(envision_flight_id: int, include_available_employees: bool = True):
     """
     Fetch operating crew from Envision for a given flight and normalise into:
         {
@@ -217,6 +245,29 @@ def fetch_envision_crew_for_apg(envision_flight_id: int):
 
     # Build / cache PIC + pilot position ID sets
     pic_pos_ids, pilot_pos_ids = build_pic_pilot_position_sets(env_token)
+    crew_positions = envision_get_crew_positions(env_token) or []
+    crew_position_by_id = {
+        int(row.get("id") or 0): row
+        for row in crew_positions
+        if int(row.get("id") or 0) > 0
+    }
+    crew_pos_recencies = envision_get_crew_position_recencies(env_token) or []
+    flight_recencies = envision_get_flight_recencies(env_token) or []
+    recency_def_by_id = {
+        int(row.get("id") or 0): row
+        for row in flight_recencies
+        if int(row.get("id") or 0) > 0
+    }
+    recency_ids_by_position: dict[int, set[int]] = {}
+    for row in crew_pos_recencies:
+        try:
+            pos_id = int(row.get("crewPositionId") or 0)
+            recency_id = int(row.get("recencyId") or 0)
+        except (TypeError, ValueError):
+            continue
+        if pos_id <= 0 or recency_id <= 0:
+            continue
+        recency_ids_by_position.setdefault(pos_id, set()).add(recency_id)
 
     # Raw crew from /Flights/{flightId}/Crew
     crew_raw = envision_get_flight_crew(env_token, envision_flight_id)
@@ -224,15 +275,22 @@ def fetch_envision_crew_for_apg(envision_flight_id: int):
     def _normalise_crew_member(c: dict, is_operating: bool) -> dict:
         emp_id = c.get("employeeId")
         pos_id = c.get("positionId") or c.get("crewPositionId")
+        try:
+            pos_id_int = int(pos_id or 0)
+        except (TypeError, ValueError):
+            pos_id_int = 0
+        crew_row_id = int(c.get("id") or 0)
+        available_employees = []
 
         # --- Look up employee to get proper names ---
         emp: dict = {}
-        if emp_id:
+        if emp_id and int(emp_id) not in _MISSING_EMPLOYEE_IDS:
             try:
                 emp = envision_get_employee(env_token, emp_id)
             except HTTPError as e:
                 # 400 "Sequence contains no elements." -> missing employee in Envision
                 if e.response is not None and e.response.status_code == 400:
+                    _MISSING_EMPLOYEE_IDS.add(int(emp_id))
                     logging.warning(
                         "fetch_envision_crew_for_apg: employee %s not found (400). "
                         "Skipping name enrichment for this crew member.",
@@ -253,10 +311,38 @@ def fetch_envision_crew_for_apg(envision_flight_id: int):
                 )
                 emp = {}
 
+        should_fetch_available = crew_row_id > 0 and (
+            include_available_employees
+            or not emp
+            or not (
+                str(c.get("firstName") or c.get("givenName") or "").strip()
+                or str(c.get("lastName") or c.get("familyName") or c.get("surname") or "").strip()
+            )
+        )
+        if should_fetch_available:
+            try:
+                available_employees = envision_get_flight_crew_employees(env_token, envision_flight_id, crew_row_id)
+            except Exception:
+                logging.exception(
+                    "fetch_envision_crew_for_apg: failed to load available employees for flight %s crew %s",
+                    envision_flight_id, crew_row_id,
+                )
+                available_employees = []
+
+        try:
+            assigned_emp_id = int(emp_id or 0)
+        except (TypeError, ValueError):
+            assigned_emp_id = 0
+        assigned_employee = next(
+            (row for row in available_employees if int(row.get("id") or 0) == assigned_emp_id),
+            {},
+        ) if assigned_emp_id > 0 else {}
+
         # Prefer employee record names, fall back to crew record
         first = (
             emp.get("firstName")
             or emp.get("givenName")
+            or assigned_employee.get("firstName")
             or c.get("firstName")
             or c.get("givenName")
             or ""
@@ -266,6 +352,7 @@ def fetch_envision_crew_for_apg(envision_flight_id: int):
             emp.get("lastName")
             or emp.get("familyName")
             or emp.get("surname")
+            or assigned_employee.get("surname")
             or c.get("lastName")
             or c.get("familyName")
             or c.get("surname")
@@ -281,9 +368,9 @@ def fetch_envision_crew_for_apg(envision_flight_id: int):
 
         # Derive a clean position label if we don't already have one
         if not pos_desc:
-            if pos_id in pic_pos_ids:
+            if pos_id_int in pic_pos_ids:
                 pos_desc = "PIC"
-            elif pos_id in pilot_pos_ids:
+            elif pos_id_int in pilot_pos_ids:
                 pos_desc = "FO"
             else:
                 # Anything not a pilot -> treat as cabin crew
@@ -292,12 +379,114 @@ def fetch_envision_crew_for_apg(envision_flight_id: int):
         if not is_operating:
             pos_desc = f"{pos_desc} (non-op)" if pos_desc else "Non-op"
 
+        position_meta = crew_position_by_id.get(pos_id_int) or {}
+        allowed_recency_ids = recency_ids_by_position.get(pos_id_int, set())
+        recencies = []
+        for rec in (c.get("recencies") or []):
+            try:
+                recency_id = int(rec.get("recencyId") or 0)
+            except (TypeError, ValueError):
+                recency_id = 0
+            meta = recency_def_by_id.get(recency_id) or {}
+            recencies.append({
+                "id": rec.get("id"),
+                "recency_id": recency_id or None,
+                "name": meta.get("recency") or f"Recency {recency_id}",
+                "value": rec.get("value"),
+                "approach_type_id": rec.get("approachTypeId"),
+                "is_boolean": bool(meta.get("isBoolean")),
+                "is_numeric": bool(meta.get("isNumeric")),
+                "is_time": bool(meta.get("isTime")),
+                "is_landing": bool(meta.get("isLanding")),
+            })
+
+        ir_candidates = [
+            r for r in recencies
+            if re.search(r"\bIR\b|instrument", str(r.get("name") or ""), flags=re.IGNORECASE)
+        ]
+        if not ir_candidates:
+            for recency_id in sorted(allowed_recency_ids):
+                meta = recency_def_by_id.get(recency_id) or {}
+                name = str(meta.get("recency") or "")
+                if not re.search(r"\bIR\b|instrument", name, flags=re.IGNORECASE):
+                    continue
+                ir_candidates.append({
+                    "id": None,
+                    "recency_id": recency_id,
+                    "name": name or f"Recency {recency_id}",
+                    "value": None,
+                    "approach_type_id": None,
+                    "is_boolean": bool(meta.get("isBoolean")),
+                    "is_numeric": bool(meta.get("isNumeric")),
+                    "is_time": bool(meta.get("isTime")),
+                    "is_landing": bool(meta.get("isLanding")),
+                })
+        ir_recency = ir_candidates[0] if ir_candidates else None
+
+        employee_no = (emp.get("employeeNo") or "").strip().upper() or None
+        if not employee_no:
+            employee_no = (
+                str(
+                    assigned_employee.get("employeeNo")
+                    or assigned_employee.get("employeeCode")
+                    or c.get("employeeNo")
+                    or c.get("employeeCode")
+                    or c.get("employeeUsername")
+                    or ""
+                ).strip().upper() or None
+            )
+        if not first and not last:
+            display_name = (
+                str(
+                    assigned_employee.get("employeeName")
+                    or assigned_employee.get("displayName")
+                    or c.get("employeeName")
+                    or c.get("displayName")
+                    or c.get("crewMemberName")
+                    or ""
+                ).strip()
+            )
+            if display_name:
+                parts = display_name.split()
+                if len(parts) == 1:
+                    last = parts[0]
+                elif len(parts) >= 2:
+                    first = " ".join(parts[:-1])
+                    last = parts[-1]
+        phone_value = (
+            emp.get("mobilePhoneNumber")
+            or emp.get("phoneNumber")
+            or emp.get("officePhone")
+            or emp.get("telephone")
+            or None
+        )
+
         return {
+            "id": crew_row_id,
+            "flight_id": envision_flight_id,
             "position": pos_desc,
             "name": f"{last.upper()} {first}".strip(),
             "employee_id": emp_id,
-            "position_id": pos_id,
+            "employee_no": employee_no,
+            "phone": phone_value,
+            "position_id": pos_id_int or None,
+            "position_code": position_meta.get("crewPosition") or None,
+            "position_description": position_meta.get("description") or None,
             "is_operating": is_operating,
+            "is_pilot": pos_id_int in pilot_pos_ids,
+            "is_pilot_flying": bool(c.get("isPilotFlying")),
+            "is_complete": bool(c.get("isComplete")),
+            "display_order": c.get("displayOrder"),
+            "recencies": recencies,
+            "ir_recency": ir_recency,
+            "available_employees": [
+                {
+                    "id": row.get("id"),
+                    "name": f"{str(row.get('surname') or '').strip().upper()} {str(row.get('firstName') or '').strip()}".strip(),
+                    "valid_skill": bool(row.get("validSkill")),
+                }
+                for row in available_employees if row.get("id")
+            ],
         }
 
     operating: list[dict] = []
@@ -470,6 +659,124 @@ def envision_get_flight_types(token: str) -> list[dict]:
         raise RuntimeError(f"Unexpected /Flights/Types response: {data!r}")
     return data
 
+
+def _cached_lookup(cache: dict[str, Any], ttl_seconds: int) -> Optional[list[dict]]:
+    items = cache.get("items")
+    ts = float(cache.get("ts") or 0.0)
+    if items and (time.time() - ts) <= ttl_seconds:
+        return items if isinstance(items, list) else None
+    return None
+
+
+def _store_lookup(cache: dict[str, Any], items: list[dict]) -> list[dict]:
+    cache["ts"] = time.time()
+    cache["items"] = items
+    return items
+
+
+def _fetch_envision_list(token: str, path: str, ttl_cache: Optional[dict[str, Any]] = None, ttl_seconds: int = 0, params: Optional[dict] = None) -> list[dict]:
+    if ttl_cache is not None:
+        cached = _cached_lookup(ttl_cache, ttl_seconds)
+        if cached is not None:
+            return cached
+
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    url = f"{ENVISION_BASE.rstrip('/')}/{path.lstrip('/')}"
+
+    # Some Envision endpoints support limit/offset. Others appear to ignore offset and
+    # keep returning the same first page, so we stop on repeated page signatures.
+    page_size = ENVISION_PAGE_LIMIT
+    offset = 0
+    results: list[dict] = []
+    seen_page_signatures: set[str] = set()
+
+    while True:
+        query = dict(params or {})
+        query.setdefault("limit", page_size)
+        query.setdefault("offset", offset)
+        resp = requests.get(url, headers=headers, params=query, timeout=30)
+        resp.raise_for_status()
+        data = resp.json() or []
+        if not isinstance(data, list):
+            raise RuntimeError(f"Unexpected {path} response: {data!r}")
+
+        page_signature = json.dumps(data, sort_keys=True, default=str)
+        if page_signature in seen_page_signatures:
+            logging.warning(
+                "Envision list endpoint %s repeated page data at offset=%s; stopping pagination.",
+                path,
+                offset,
+            )
+            break
+        seen_page_signatures.add(page_signature)
+
+        results.extend(data)
+        if len(data) < page_size:
+            break
+        offset += page_size
+
+    if ttl_cache is not None:
+        return _store_lookup(ttl_cache, results)
+    return results
+
+
+def envision_get_places(token: str, ttl_seconds: int = 3600) -> list[dict]:
+    return _fetch_envision_list(token, "Places", ttl_cache=_PLACES_CACHE, ttl_seconds=ttl_seconds)
+
+
+def envision_get_employees(token: str, employee_no: Optional[str] = None, ttl_seconds: int = 900) -> list[dict]:
+    if not employee_no:
+        return _fetch_envision_list(token, "Employees", ttl_cache=_EMPLOYEE_LIST_CACHE, ttl_seconds=ttl_seconds)
+    return _fetch_envision_list(token, "Employees", params={"employeeNo": employee_no})
+
+
+def envision_get_employee_qualifications(token: str, ttl_seconds: int = 900) -> list[dict]:
+    return _fetch_envision_list(token, "Employees/Qualifications", ttl_cache=_EMPLOYEE_QUAL_CACHE, ttl_seconds=ttl_seconds)
+
+
+def envision_get_employee_skills(token: str, ttl_seconds: int = 900) -> list[dict]:
+    return _fetch_envision_list(token, "Employees/Skills", ttl_cache=_EMPLOYEE_SKILL_CACHE, ttl_seconds=ttl_seconds)
+
+
+def envision_get_flight_note_types(token: str, ttl_seconds: int = 3600) -> list[dict]:
+    cached = _cached_lookup(_NOTE_TYPES_CACHE, ttl_seconds)
+    if cached is not None:
+        return cached
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    url = f"{ENVISION_BASE.rstrip('/')}/Flights/NoteTypes"
+    resp = requests.get(url, headers=headers, timeout=30)
+    resp.raise_for_status()
+    data = resp.json() or []
+    if not isinstance(data, list):
+        raise RuntimeError(f"Unexpected /Flights/NoteTypes response: {data!r}")
+    return _store_lookup(_NOTE_TYPES_CACHE, data)
+
+
+def envision_get_cancel_codes(token: str, ttl_seconds: int = 3600) -> list[dict]:
+    cached = _cached_lookup(_CANCEL_CODES_CACHE, ttl_seconds)
+    if cached is not None:
+        return cached
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    for path in ("CancelCodes", "Flights/CancelCodes"):
+        url = f"{ENVISION_BASE.rstrip('/')}/{path}"
+        resp = requests.get(url, headers=headers, timeout=30)
+        if resp.status_code == 404:
+            continue
+        resp.raise_for_status()
+        data = resp.json() or []
+        if not isinstance(data, list):
+            raise RuntimeError(f"Unexpected /{path} response: {data!r}")
+        return _store_lookup(_CANCEL_CODES_CACHE, data)
+    raise RuntimeError("Envision cancel codes endpoint was not found.")
+
+
+def envision_create_flight(token: str, payload: dict) -> dict:
+    return _envision_request(token, "POST", "Flights", payload, timeout=90)
+
+
+def envision_create_flight_crew(token: str, flight_id: int | str, payload: dict) -> dict:
+    return _envision_request(token, "POST", f"Flights/{flight_id}/Crew", payload, timeout=60)
+
 def _core_from(payload: dict, pic_name: str|None, apg_pic_id: int|None) -> dict:
     crew = payload.get("crew") or {}
     return {
@@ -572,6 +879,90 @@ def envision_get_employee(token: str, employee_id: int) -> dict:
     emp = r.json() or {}
     _EMP_CACHE[employee_id] = emp
     return emp
+
+def envision_get_flight_crew_item(token: str, flight_id: int, crew_id: int) -> dict:
+    """GET /v1/Flights/{flightId}/Crew/{crewId}."""
+    headers = {"Authorization": f"Bearer {token}"}
+    url = f"{ENVISION_BASE}/Flights/{flight_id}/Crew/{crew_id}"
+    r = requests.get(url, headers=headers, timeout=30)
+    r.raise_for_status()
+    data = r.json() or {}
+    if not isinstance(data, dict):
+        raise RuntimeError(f"Unexpected /Crew/{{crewId}} response for flight {flight_id}: {data}")
+    return data
+
+def envision_update_flight_crew(token: str, flight_id: int, crew_id: int, payload: dict) -> dict:
+    """PUT /v1/Flights/{flightId}/Crew/{crewId}."""
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    url = f"{ENVISION_BASE}/Flights/{flight_id}/Crew/{crew_id}"
+    r = requests.put(url, headers=headers, json=payload, timeout=30)
+    r.raise_for_status()
+    data = r.json() or {}
+    if not isinstance(data, dict):
+        raise RuntimeError(f"Unexpected crew update response for flight {flight_id}: {data}")
+    return data
+
+def envision_get_flight_crew_employees(token: str, flight_id: int, crew_id: int) -> list[dict]:
+    """GET /v1/Flights/{flightId}/Crew/{crewId}/Employees."""
+    headers = {"Authorization": f"Bearer {token}"}
+    url = f"{ENVISION_BASE}/Flights/{flight_id}/Crew/{crew_id}/Employees"
+    r = requests.get(url, headers=headers, timeout=30)
+    r.raise_for_status()
+    data = r.json() or []
+    if not isinstance(data, list):
+        raise RuntimeError(f"Unexpected crew employees response for flight {flight_id}: {data}")
+    return data
+
+def envision_set_flight_crew_pilot_flying(token: str, flight_id: int, crew_id: int, enabled: bool) -> None:
+    """PUT or DELETE /v1/Flights/{flightId}/Crew/{crewId}/PilotFlying."""
+    headers = {"Authorization": f"Bearer {token}"}
+    url = f"{ENVISION_BASE}/Flights/{flight_id}/Crew/{crew_id}/PilotFlying"
+    if enabled:
+        r = requests.put(url, headers=headers, timeout=30)
+    else:
+        r = requests.delete(url, headers=headers, timeout=30)
+    r.raise_for_status()
+
+def envision_update_flight_crew_recencies(token: str, flight_id: int, crew_id: int, payload: dict) -> list[dict]:
+    """PUT /v1/Flights/{flightId}/Crew/{crewId}/Recencies."""
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    url = f"{ENVISION_BASE}/Flights/{flight_id}/Crew/{crew_id}/Recencies"
+    r = requests.put(url, headers=headers, json=payload, timeout=30)
+    r.raise_for_status()
+    data = r.json() or []
+    if not isinstance(data, list):
+        raise RuntimeError(f"Unexpected crew recencies response for flight {flight_id}: {data}")
+    return data
+
+def envision_get_crew_position_recencies(token: str) -> list[dict]:
+    """GET /v1/Crews/Positions/Recencies (cached)."""
+    global _CREW_POS_RECENCY_CACHE
+    if _CREW_POS_RECENCY_CACHE:
+        return _CREW_POS_RECENCY_CACHE
+    headers = {"Authorization": f"Bearer {token}"}
+    url = f"{ENVISION_BASE}/Crews/Positions/Recencies"
+    r = requests.get(url, headers=headers, timeout=30)
+    r.raise_for_status()
+    data = r.json() or []
+    if not isinstance(data, list):
+        raise RuntimeError(f"Unexpected crew position recencies response: {data}")
+    _CREW_POS_RECENCY_CACHE = data
+    return data
+
+def envision_get_flight_recencies(token: str) -> list[dict]:
+    """GET /v1/Flights/Recencies (cached)."""
+    global _FLIGHT_RECENCY_CACHE
+    if _FLIGHT_RECENCY_CACHE:
+        return _FLIGHT_RECENCY_CACHE
+    headers = {"Authorization": f"Bearer {token}"}
+    url = f"{ENVISION_BASE}/Flights/Recencies"
+    r = requests.get(url, headers=headers, timeout=30)
+    r.raise_for_status()
+    data = r.json() or []
+    if not isinstance(data, list):
+        raise RuntimeError(f"Unexpected flight recencies response: {data}")
+    _FLIGHT_RECENCY_CACHE = data
+    return data
 
 def format_employee_name(emp: dict) -> Optional[str]:
     first = (emp.get("firstName") or "").strip()
@@ -1010,6 +1401,23 @@ def apg_get_plan_list(bearer: str, status: Optional[str] = None, page_size: int 
 # ===========================
 def envision_authenticate() -> Dict[str, str]:
     base = ENVISION_BASE.rstrip("/")
+    cache_key = (
+        base,
+        (ENVISION_USER or "").strip(),
+        (os.getenv("ENVISION_TENANT") or "").strip(),
+    )
+    now_ts = time.time()
+    with _ENVISION_AUTH_LOCK:
+        if (
+            _ENVISION_AUTH_CACHE.get("token")
+            and _ENVISION_AUTH_CACHE.get("cache_key") == cache_key
+            and float(_ENVISION_AUTH_CACHE.get("expires_at") or 0) > now_ts + 60
+        ):
+            return {
+                "token": str(_ENVISION_AUTH_CACHE.get("token") or ""),
+                "refreshToken": str(_ENVISION_AUTH_CACHE.get("refreshToken") or ""),
+            }
+
     if base.endswith("/v1"):
         auth_url = f"{base}/Authenticate"
     else:
@@ -1044,7 +1452,76 @@ def envision_authenticate() -> Dict[str, str]:
     token = data.get("token")
     if not token:
         raise RuntimeError(f"Envision auth response missing token. Body={r.text}")
-    return {"token": token, "refreshToken": data.get("refreshToken")}
+    refresh_token = data.get("refreshToken")
+
+    expires_at = now_ts + 900
+    try:
+        token_parts = str(token).split(".")
+        if len(token_parts) >= 2:
+            payload_b64 = token_parts[1] + "=" * (-len(token_parts[1]) % 4)
+            payload = json.loads(base64.urlsafe_b64decode(payload_b64.encode("ascii")).decode("utf-8"))
+            exp = payload.get("exp")
+            if exp:
+                expires_at = float(exp)
+    except Exception:
+        logging.debug("Unable to decode Envision JWT expiry; using fallback TTL.", exc_info=True)
+
+    with _ENVISION_AUTH_LOCK:
+        _ENVISION_AUTH_CACHE.update({
+            "token": token,
+            "refreshToken": refresh_token,
+            "expires_at": expires_at,
+            "cache_key": cache_key,
+        })
+    return {"token": token, "refreshToken": refresh_token, "expires_at": expires_at}
+
+
+def envision_authenticate_with_credentials(username: str, password: str, base: str | None = None) -> Dict[str, str]:
+    env_base = (base or ENVISION_BASE or "").rstrip("/")
+    if env_base.endswith("/v1"):
+        auth_url = f"{env_base}/Authenticate"
+    else:
+        auth_url = f"{env_base}/v1/Authenticate"
+
+    payload = {
+        "username": (username or "").strip(),
+        "password": (password or "").strip(),
+    }
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    tenant = os.getenv("ENVISION_TENANT")
+    if tenant:
+        headers["X-Tenant-Id"] = tenant
+
+    try:
+        r = requests.post(auth_url, json=payload, headers=headers, timeout=30)
+        if r.status_code == 401:
+            raise RuntimeError(f"Envision auth 401. URL={auth_url} Body={r.text}")
+        r.raise_for_status()
+    except requests.RequestException as e:
+        raise RuntimeError(f"Envision auth failed. URL={auth_url} Error={e}") from e
+
+    data = r.json()
+    token = data.get("token")
+    if not token:
+        raise RuntimeError(f"Envision auth response missing token. Body={r.text}")
+    refresh_token = data.get("refreshToken")
+
+    expires_at = time.time() + 900
+    try:
+        token_parts = str(token).split(".")
+        if len(token_parts) >= 2:
+            payload_b64 = token_parts[1] + "=" * (-len(token_parts[1]) % 4)
+            payload = json.loads(base64.urlsafe_b64decode(payload_b64.encode("ascii")).decode("utf-8"))
+            exp = payload.get("exp")
+            if exp:
+                expires_at = float(exp)
+    except Exception:
+        logging.debug("Unable to decode Envision JWT expiry for manual login; using fallback TTL.", exc_info=True)
+
+    return {"token": token, "refreshToken": refresh_token, "expires_at": expires_at}
 
 
 def envision_get_flights(token: str, date_from: datetime, date_to: datetime) -> List[Dict[str, Any]]:
@@ -3368,7 +3845,22 @@ def _envision_request(
     headers = _envision_headers(token)
     url = f"{ENVISION_BASE.rstrip('/')}/{path.lstrip('/')}"
     resp = requests.request(method.upper(), url, headers=headers, json=payload, timeout=timeout)
-    resp.raise_for_status()
+    try:
+        resp.raise_for_status()
+    except requests.HTTPError as exc:
+        body = (resp.text or "").strip()
+        logging.error(
+            "[ENVISION] %s %s failed: HTTP %s body=%s payload=%s",
+            method.upper(),
+            path,
+            resp.status_code,
+            body[:2000],
+            json.dumps(payload or {}, default=str)[:2000],
+        )
+        message = f"{exc}"
+        if body:
+            message = f"{message} | body={body[:2000]}"
+        raise RuntimeError(message) from exc
 
     if not resp.content:
         return {"ok": True, "status_code": resp.status_code}
@@ -3391,7 +3883,43 @@ def envision_change_type(token: str, flight_id: int | str, payload: dict) -> dic
 
 
 def envision_cancel_flight(token: str, flight_id: int | str, payload: dict) -> dict:
-    return _envision_request(token, "POST", f"Flights/{flight_id}/Cancel", payload)
+    last_error = None
+    last_status = None
+
+    def _status_from_exc(exc: Exception) -> int | None:
+        resp = getattr(exc, "response", None)
+        if resp is not None and getattr(resp, "status_code", None):
+            return int(resp.status_code)
+        text = str(exc)
+        match = re.search(r"\b(\d{3})\b", text)
+        if match:
+            try:
+                return int(match.group(1))
+            except ValueError:
+                return None
+        return None
+
+    for method in ("POST", "PUT", "DELETE"):
+        try:
+            return _envision_request(token, method, f"Flights/{flight_id}/Cancel", payload)
+        except Exception as exc:
+            last_error = exc
+            status = _status_from_exc(exc)
+            last_status = status
+            if status != 405:
+                raise
+            logging.warning(
+                "Envision cancel flight rejected %s for flight %s with 405; trying next verb.",
+                method,
+                flight_id,
+            )
+    if last_error:
+        if last_status == 405:
+            raise RuntimeError(
+                f"Envision cancel endpoint rejected POST/PUT/DELETE for flight {flight_id} with 405."
+            ) from last_error
+        raise last_error
+    raise RuntimeError(f"Unable to cancel Envision flight {flight_id}.")
 
 
 def envision_divert_flight(token: str, flight_id: int | str, payload: dict) -> dict:
