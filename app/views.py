@@ -128,7 +128,7 @@ def ops_kmh_calendar():
     if not kmh_session:
         session.pop("kmh_session_id", None)
         session.pop("kmh_envision_username", None)
-        return redirect(url_for("ui.ops_kmh_login", next=request.path))
+        return redirect(url_for("ui.ops_kmh_login", next=url_for("ui.ops_kmh_calendar")))
 
     session["envision_env"] = "base"
     set_envision_environment("base")
