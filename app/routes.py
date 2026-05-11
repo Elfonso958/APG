@@ -462,14 +462,21 @@ def _assign_kmh_pilot_to_existing_or_new_slot(token: str, flight_id: int, pilot_
         envision_update_flight_crew(token, flight_id, crew_id, {
             "id": crew_id,
             "flightId": flight_id,
+            "positionId": pos_id,
             "crewPositionId": pos_id,
             "employeeId": pilot_employee_id,
+            "displayOrder": int(target_row.get("displayOrder") or 0),
+            "isComplete": bool(target_row.get("isComplete", False)),
         })
     else:
         crew_row = envision_create_flight_crew(token, flight_id, {
             "flightId": flight_id,
+            "positionId": captain_position_id,
             "crewPositionId": captain_position_id,
             "employeeId": pilot_employee_id,
+            "displayOrder": 0,
+            "isComplete": False,
+            "isPilotFlying": True,
         })
         if crew_row.get("id") not in (None, ""):
             crew_id = int(crew_row["id"])
@@ -503,10 +510,13 @@ def _change_kmh_pilot_for_existing_flight(token: str, flight_id: int, pilot_empl
             continue
         if row_id <= 0 or pos_id not in pilot_pos_ids:
             continue
-        if employee_id > 0 and bool(row.get("isPilotFlying")):
+        if employee_id <= 0:
             target_row = row
             break
-        if employee_id > 0 and pos_id == captain_position_id:
+        if bool(row.get("isPilotFlying")):
+            target_row = row
+            break
+        if pos_id == captain_position_id:
             target_row = row
             break
 
@@ -516,8 +526,11 @@ def _change_kmh_pilot_for_existing_flight(token: str, flight_id: int, pilot_empl
         envision_update_flight_crew(token, flight_id, crew_id, {
             "id": crew_id,
             "flightId": flight_id,
+            "positionId": pos_id,
             "crewPositionId": pos_id,
             "employeeId": pilot_employee_id,
+            "displayOrder": int(target_row.get("displayOrder") or 0),
+            "isComplete": bool(target_row.get("isComplete", False)),
         })
         for row in crew_rows:
             try:
