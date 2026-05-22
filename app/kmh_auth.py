@@ -63,6 +63,11 @@ def get_kmh_session(session_id: str | None) -> dict[str, Any] | None:
             sessions.pop(sid, None)
             _save_sessions(sessions)
             return None
+        token_expires_at = float(record.get("token_expires_at") or 0)
+        if token_expires_at and token_expires_at <= now + 30:
+            sessions.pop(sid, None)
+            _save_sessions(sessions)
+            return None
         return dict(record)
 
 

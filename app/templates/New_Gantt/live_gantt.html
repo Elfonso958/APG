@@ -17,6 +17,9 @@
        data-apg-cargo-summary-url-template="{{ url_for('api.api_apg_plan_cargo_summary', plan_id=0) }}"
        data-apg-reset-url="{{ url_for('api.api_apg_reset_passengers') }}"
        data-manifest-preview-url="{{ url_for('api.api_dcs_manifest_preview') }}"
+       data-charter-manifest-template-url="{{ url_for('api.api_charter_manifest_template') }}"
+       data-charter-manifest-url="{{ url_for('api.api_charter_manifest_get') }}"
+       data-charter-manifest-upload-url="{{ url_for('api.api_charter_manifest_upload') }}"
        data-envision-action-url="{{ url_for('api.api_envision_flight_action') }}"
        data-envision-crew-url="{{ url_for('api.api_envision_flight_crew') }}"
        data-envision-crew-pf-url="{{ url_for('api.api_envision_flight_crew_pilot_flying') }}"
@@ -107,6 +110,7 @@
           <button id="btnPaxList" class="btn btn-ghost" type="button">Passenger List</button>
           <button id="btnCargo" class="btn btn-ghost" type="button">Cargo</button>
           <button id="btnPreviewManifest" class="btn btn-ghost" type="button">Preview Manifest</button>
+          <button id="btnCharterManifest" class="btn btn-ghost" type="button">Charter Manifest</button>
           <button id="btnResetApg" class="btn btn-ghost" type="button">Reset APG Pax</button>
           <button id="btnSeatmap" class="btn btn-ghost" type="button">Seatmap</button>
           <button id="btnMovementMsg" class="btn btn-ghost" type="button">Movement Message</button>
@@ -163,6 +167,45 @@
             </tr>
           </thead>
           <tbody id="paxTbody"></tbody>
+        </table>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="charterManifestDialog" class="pax-dialog">
+    <form method="dialog" class="pax-shell">
+      <header>
+        <h3 id="charterManifestTitle">Charter Manifest</h3>
+        <button class="btn btn-ghost" value="cancel">Close</button>
+      </header>
+      <div class="charter-manifest-actions">
+        <a id="btnDownloadCharterTemplate" class="btn btn-ghost" href="#" download>Download Template</a>
+        <input id="charterManifestFile" type="file" accept=".xlsx,.xlsm,.xltx,.xltm">
+        <button id="btnUploadCharterManifest" class="btn btn-ghost" type="button">Upload Excel</button>
+        <button id="btnAddCharterPax" class="btn btn-ghost" type="button">Add Row</button>
+        <button id="btnSaveCharterManifest" class="btn btn-primary" type="button">Save Edits</button>
+      </div>
+      <div id="charterManifestStatus" class="muted"></div>
+      <div class="pax-table-wrap">
+        <table class="pax-table charter-manifest-table">
+          <thead>
+            <tr>
+              <th>Seat</th>
+              <th>Title</th>
+              <th>Given</th>
+              <th>Surname</th>
+              <th>Origin</th>
+              <th>Dest</th>
+              <th>Type</th>
+              <th>Gender</th>
+              <th>Bag Kg</th>
+              <th>PNR</th>
+              <th>Status</th>
+              <th>SSR</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="charterManifestTbody"></tbody>
         </table>
       </div>
     </form>

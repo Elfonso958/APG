@@ -704,6 +704,11 @@ body {
 .seat-aisle {
   width: 18px;
 }
+.seat-aisle-jump {
+  width: 28px;
+  display: flex;
+  justify-content: center;
+}
 .seat {
   width: 28px;
   height: 28px;
@@ -725,6 +730,18 @@ body {
   box-shadow: 0 4px 10px rgba(15, 23, 42, 0.6);
 }
 .seat-empty { background: #4b5563; }
+.seat-placeholder {
+  visibility: hidden;
+  pointer-events: none;
+}
+.seat-jump {
+  background: #64748b;
+  color: #ffffff;
+  border: 1px dashed color-mix(in srgb, var(--line) 70%, #ffffff);
+}
+.seat-block-inline-4 {
+  grid-column: 2 / -1;
+}
 .seat-adult { background: #eab308; color: #111827; }
 .seat-child { background: #22c55e; color: #022c22; }
 .seat-adult-infant, .seat-infant { background: #0ea5e9; }
@@ -1357,6 +1374,34 @@ body[data-theme="dark"] .wb-inline-status.is-over {
   top: 0;
   background: var(--panel);
   z-index: 1;
+}
+.charter-manifest-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.charter-manifest-actions input[type="file"] {
+  max-width: 280px;
+}
+.charter-manifest-table input,
+.charter-manifest-table select {
+  width: 100%;
+  min-width: 70px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 6px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+}
+.charter-manifest-table td {
+  padding: 4px;
+}
+.charter-manifest-table th:nth-child(12),
+.charter-manifest-table td:nth-child(12) {
+  min-width: 180px;
 }
 
 .flight-edit-dialog {

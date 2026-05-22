@@ -411,6 +411,9 @@
       {% set ns.pax_weight_kg = ns.pax_weight_kg + (p.pax_weight_kg or 0) %}
       {% set ns.bag_pcs       = ns.bag_pcs       + (p.bags_pcs     or 0) %}
       {% set ns.bag_weight_kg = ns.bag_weight_kg + (p.bags_kg      or 0) %}
+      {% if p.is_jump_seat %}
+          {% set ns.jump_seats = ns.jump_seats + 1 %}
+      {% endif %}
     {% endfor %}
 
     {% set total_weight_kg = ns.pax_weight_kg + ns.bag_weight_kg %}
@@ -421,7 +424,7 @@
     <h2>Passenger List</h2>
 
     <div class="section-subnote">
-      Weights based on DCS standard weights and recorded baggage.
+      Manifest figures include boarded and flown passengers only. Checked-in or booked passengers are excluded from counts, weights and baggage totals.
     </div>
 
     <table class="manifest pax-table">
@@ -446,7 +449,9 @@
           <td class="text-center">{{ p.dest or flight.ades }}</td>
           <td class="text-center">
             {% set gen_display = "" %}
-            {% if p.is_child or p.is_infant or p.is_um %}
+            {% if p.is_infant %}
+                {% set gen_display = "I" %}
+            {% elif p.is_child or p.is_um %}
                 {% if p.is_um %}
                     {% set gen_display = "C (UM)" %}
                 {% else %}
@@ -487,7 +492,7 @@
             <td class="numeric totals-value">{{ flight.ades }}</td>
           </tr>
           <tr>
-            <td class="totals-label">Passenger count</td>
+            <td class="totals-label">Carried passenger count</td>
             <td class="numeric totals-value">{{ ns.total }}</td>
           </tr>
           <tr>
@@ -495,7 +500,7 @@
             <td class="numeric totals-value">{{ ns.jump_seats }}</td>
           </tr>
           <tr>
-            <td class="totals-label">Passenger weight</td>
+            <td class="totals-label">Carried passenger weight</td>
             <td class="numeric totals-value">{{ "%.0f"|format(ns.pax_weight_kg) }} kg</td>
           </tr>
           <tr>
@@ -530,7 +535,7 @@
             <td class="numeric totals-value">{{ ns.infants }}</td>
           </tr>
           <tr class="totals-row-strong">
-            <td class="totals-label">Total passengers</td>
+            <td class="totals-label">Total carried passengers</td>
             <td class="numeric totals-value">{{ ns.total }}</td>
           </tr>
           <tr>
@@ -546,6 +551,7 @@
       <span>Female: {{ ns.female }}</span>
       <span>Children: {{ ns.children }}</span>
       <span>Infants: {{ ns.infants }}</span>
+      <span>Basis: Boarded/Flown</span>
     </div>
 
     <div class="footer-meta">

@@ -63,6 +63,7 @@ build/
 *.xls
 *.pdf
 *.docx
+!app/static/templates/charter-passenger-manifest-template.xlsx
 Things_to_do.txt
 
 # ----------------------------

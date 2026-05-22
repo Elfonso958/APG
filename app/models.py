@@ -92,6 +92,20 @@ class ManifestUploadState(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
+
+class CharterManifest(db.Model):
+    __tablename__ = "charter_manifests"
+
+    id = db.Column(db.Integer, primary_key=True)
+    envision_flight_id = db.Column(db.String(32), unique=True, index=True, nullable=False)
+    flight_no = db.Column(db.String(16), index=True, nullable=True)
+    dep = db.Column(db.String(8), nullable=True)
+    ades = db.Column(db.String(8), nullable=True)
+    pax_json = db.Column(db.Text, nullable=False, default="[]")
+    uploaded_filename = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
 # NEW: simple key/value schedule settings (singleton row: id=1)
 class AppConfig(db.Model):
     __tablename__ = "app_config"

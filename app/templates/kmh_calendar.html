@@ -1110,7 +1110,16 @@
         headers: mergedHeaders,
       };
       const resp = await fetch(url, finalOptions);
-      const data = await resp.json();
+      let data = {};
+      try {
+        data = await resp.json();
+      } catch (err) {
+        data = {};
+      }
+      if (resp.status === 401 && (data.session_expired || data.redirect_url)) {
+        window.location.href = data.redirect_url || `${loginUrl}?next=${encodeURIComponent(window.location.pathname)}`;
+        throw new Error(data.error || "Your session expired. Redirecting to login...");
+      }
       if (!resp.ok || data.ok === false) {
         throw new Error(data.error || `Request failed (${resp.status})`);
       }

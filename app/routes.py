@@ -8,7 +8,7 @@ from . import db
 import requests
 from sqlalchemy import func
 from zoneinfo import ZoneInfo
-from .models import SyncRun, SyncFlightLog, SyncFlightState, AppConfig, ManifestUploadState
+from .models import SyncRun, SyncFlightLog, SyncFlightState, AppConfig, ManifestUploadState, CharterManifest
 from .kmh_auth import get_kmh_session
 from .helpers_manifest import _seat_sort_key, _format_ssrs, _calc_age, _parse_dcs_dob, generate_manifest_pdf_from_html, generate_pdf_modern
 
@@ -61,7 +61,6 @@ from .sync.envision_apg_sync import (
     envision_change_type,
     envision_get_flight_passengers,
     envision_put_flight_passengers,
-    is_dcs_passenger_boarded_or_flown,
     normalise_pax_type,
     get_envision_environment,
     set_envision_environment,
@@ -73,6 +72,14 @@ import re
 from .zenith_client import fetch_dcs_for_flight
 
 api_bp = Blueprint("api", __name__)
+
+
+def _clear_live_gantt_cache() -> None:
+    try:
+        from .views import clear_gantt_flight_cache
+        clear_gantt_flight_cache()
+    except Exception:
+        current_app.logger.exception("Failed to clear live Gantt flight cache")
 
 
 @api_bp.before_app_request
@@ -135,11 +142,48 @@ def _kmh_session_token() -> str | None:
     return str(record.get("token") or "").strip() or None
 
 
+def _kmh_clear_flask_session() -> None:
+    session.pop(KMH_SESSION_ID_KEY, None)
+    session.pop("kmh_envision_username", None)
+
+
+def _kmh_login_redirect_url(reason: str = "expired") -> str:
+    return url_for("ui.ops_kmh_login", next=url_for("ui.ops_kmh_calendar"), reason=reason)
+
+
+def _kmh_session_response(message: str, status_code: int = 401, *, expired: bool = False):
+    payload = {
+        "ok": False,
+        "error": message,
+        "redirect_url": _kmh_login_redirect_url("expired" if expired else "login"),
+    }
+    if expired:
+        payload["session_expired"] = True
+        _kmh_clear_flask_session()
+    resp = make_response(jsonify(payload), status_code)
+    if expired:
+        resp.delete_cookie(KMH_SESSION_ID_KEY, path=request.script_root or "/")
+    return resp
+
+
+def _kmh_is_unauthorized_error(exc: Exception) -> bool:
+    response = getattr(exc, "response", None)
+    return isinstance(exc, requests.HTTPError) and getattr(response, "status_code", None) == 401
+
+
 def _kmh_require_token():
     token = _kmh_session_token()
     if token:
         return token, None
-    return None, (jsonify(ok=False, error="KMH login required."), 401)
+    return None, _kmh_session_response("Your Envision session expired. Sign in again to continue.", expired=True)
+
+
+def _kmh_handle_error(exc: Exception, log_message: str):
+    if _kmh_is_unauthorized_error(exc):
+        current_app.logger.warning("%s: Envision returned 401; clearing KMH session", log_message)
+        return _kmh_session_response("Your Envision session expired. Sign in again to continue.", expired=True)
+    current_app.logger.exception(log_message)
+    return jsonify(ok=False, error=str(exc)), 502
 
 
 def _display_employee_name(row: dict) -> str:
@@ -612,8 +656,7 @@ def api_kmh_lookups():
         cancel_codes.sort(key=lambda row: ((row.get("code") or row.get("description") or "").upper(), row["id"]))
         return jsonify(ok=True, pilots=pilots, flight_types=flight_types, cancel_codes=cancel_codes, registration=KMH_REGISTRATION)
     except Exception as e:
-        current_app.logger.exception("api_kmh_lookups failed")
-        return jsonify(ok=False, error=str(e)), 502
+        return _kmh_handle_error(e, "api_kmh_lookups failed")
 
 
 @api_bp.route("/kmh/flights", methods=["GET", "POST"])
@@ -662,8 +705,7 @@ def api_kmh_flights():
             items.sort(key=lambda row: ((row.get("flight_date") or ""), (row.get("etd") or ""), str(row.get("flight_number") or "")))
             return jsonify(ok=True, flights=items)
         except Exception as e:
-            current_app.logger.exception("api_kmh_flights GET failed")
-            return jsonify(ok=False, error=str(e)), 502
+            return _kmh_handle_error(e, "api_kmh_flights GET failed")
 
     data = request.get_json(force=True) or {}
     try:
@@ -774,6 +816,8 @@ def api_kmh_flights():
             warnings=warnings,
         )
     except Exception as e:
+        if _kmh_is_unauthorized_error(e):
+            return _kmh_handle_error(e, "api_kmh_flights POST failed")
         current_app.logger.exception("api_kmh_flights POST failed")
         return jsonify(ok=False, error=_friendly_kmh_create_error(e)), 502
 
@@ -850,8 +894,7 @@ def api_kmh_flight_action(flight_id: int):
         result = envision_cancel_flight(token, flight_id, body)
         return jsonify(ok=True, action="cancel", flight_id=flight_id, result=result)
     except Exception as e:
-        current_app.logger.exception("api_kmh_flight_action failed for %s", flight_id)
-        return jsonify(ok=False, error=str(e)), 502
+        return _kmh_handle_error(e, f"api_kmh_flight_action failed for {flight_id}")
 
 
 @api_bp.get("/kmh/export")
@@ -899,8 +942,7 @@ def api_kmh_export():
         resp.headers["Content-Disposition"] = f'attachment; filename="kmh_flights_{date_from.isoformat()}_{date_to.isoformat()}.csv"'
         return resp
     except Exception as e:
-        current_app.logger.exception("api_kmh_export failed")
-        return jsonify(ok=False, error=str(e)), 502
+        return _kmh_handle_error(e, "api_kmh_export failed")
 
 # ---- Manual run ----
 @api_bp.post("/sync/run")
@@ -1348,6 +1390,233 @@ def _record_manifest_upload_success(plan_id: int, doc_id: str | None = None) -> 
         state.updated_at = now
     db.session.commit()
     return int(state.upload_count or 0)
+
+
+CHARTER_MANIFEST_COLUMNS = [
+    "Seat",
+    "Title",
+    "GivenName",
+    "Surname",
+    "Origin",
+    "Destination",
+    "PassengerType",
+    "Gender",
+    "BaggageWeight",
+    "BookingReferenceID",
+    "Status",
+    "SSR",
+]
+
+
+def _require_openpyxl():
+    try:
+        from openpyxl import Workbook, load_workbook
+    except ImportError as exc:
+        raise RuntimeError("openpyxl is required for Excel manifest import/export. Run: pip install openpyxl") from exc
+    return Workbook, load_workbook
+
+
+def _normalise_charter_status(value: str | None) -> str:
+    s = str(value or "").strip().upper()
+    if not s:
+        return "Boarded"
+    if "FLOWN" in s:
+        return "Flown"
+    if "BOARD" in s or s in {"BD", "BRD"}:
+        return "Boarded"
+    return str(value or "").strip()
+
+
+def _charter_pax_from_row(row: dict, default_dep: str = "", default_ades: str = "") -> dict | None:
+    given = str(row.get("GivenName") or row.get("FirstName") or "").strip()
+    surname = str(row.get("Surname") or row.get("LastName") or "").strip()
+    title = str(row.get("Title") or row.get("NamePrefix") or "").strip()
+    if not (given or surname):
+        return None
+
+    ssr_text = str(row.get("SSR") or row.get("Ssrs") or "").strip()
+    ssrs = []
+    if ssr_text:
+        for part in [p.strip() for p in ssr_text.split(",") if p.strip()]:
+            m = re.match(r"^([A-Z0-9]{2,5})(?:\s*\((.*)\))?$", part, re.IGNORECASE)
+            if m:
+                ssrs.append({"Code": m.group(1).upper(), "FreeText": (m.group(2) or "").strip()})
+            else:
+                ssrs.append({"Code": "OTHS", "FreeText": part})
+
+    return {
+        "Seat": str(row.get("Seat") or "").strip().upper(),
+        "NamePrefix": title,
+        "GivenName": given,
+        "Surname": surname,
+        "__manifest_origin": str(row.get("Origin") or default_dep or "").strip().upper(),
+        "__manifest_dest": str(row.get("Destination") or default_ades or "").strip().upper(),
+        "PassengerType": str(row.get("PassengerType") or "AD").strip().upper() or "AD",
+        "Gender": str(row.get("Gender") or "").strip().upper(),
+        "BaggageWeight": float(row.get("BaggageWeight") or 0),
+        "BookingReferenceID": str(row.get("BookingReferenceID") or "").strip(),
+        "Status": _normalise_charter_status(row.get("Status")),
+        "Boarded": _normalise_charter_status(row.get("Status")).upper() == "BOARDED",
+        "Flown": _normalise_charter_status(row.get("Status")).upper() == "FLOWN",
+        "Ssrs": ssrs,
+        "__manual_manifest": True,
+    }
+
+
+def _serialize_charter_manifest(manifest: CharterManifest | None) -> list[dict]:
+    if not manifest:
+        return []
+    try:
+        data = json.loads(manifest.pax_json or "[]")
+    except Exception:
+        data = []
+    return data if isinstance(data, list) else []
+
+
+def _upsert_charter_manifest(
+    flight_id: str,
+    passengers: list[dict],
+    *,
+    flight_no: str = "",
+    dep: str = "",
+    ades: str = "",
+    filename: str | None = None,
+) -> CharterManifest:
+    manifest = CharterManifest.query.filter_by(envision_flight_id=str(flight_id)).first()
+    now = datetime.utcnow()
+    if not manifest:
+        manifest = CharterManifest(
+            envision_flight_id=str(flight_id),
+            created_at=now,
+            updated_at=now,
+        )
+    manifest.flight_no = flight_no or manifest.flight_no
+    manifest.dep = dep or manifest.dep
+    manifest.ades = ades or manifest.ades
+    manifest.pax_json = json.dumps(passengers)
+    manifest.uploaded_filename = filename or manifest.uploaded_filename
+    manifest.updated_at = now
+    db.session.add(manifest)
+    db.session.commit()
+    return manifest
+
+
+@api_bp.get("/dcs/charter_manifest/template")
+def api_charter_manifest_template():
+    template_path = os.path.join(
+        current_app.root_path,
+        "static",
+        "templates",
+        "charter-passenger-manifest-template.xlsx",
+    )
+    if os.path.exists(template_path):
+        return send_file(
+            template_path,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name="charter-passenger-manifest-template.xlsx",
+        )
+
+    Workbook, _load_workbook = _require_openpyxl()
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Passengers"
+    ws.append(CHARTER_MANIFEST_COLUMNS)
+    ws.append(["1A", "Mr", "Example", "Passenger", "CHT", "AKL", "AD", "M", 0, "CHARTER1", "Boarded", ""])
+    ws.append(["", "Infant", "Example", "Infant", "CHT", "AKL", "INF", "", 0, "CHARTER1", "Boarded", ""])
+    for idx, width in enumerate([10, 12, 18, 20, 12, 14, 16, 10, 16, 20, 14, 36], start=1):
+        ws.column_dimensions[ws.cell(row=1, column=idx).column_letter].width = width
+    bio = io.BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    return send_file(
+        bio,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name="charter-passenger-manifest-template.xlsx",
+    )
+
+
+@api_bp.get("/dcs/charter_manifest")
+def api_charter_manifest_get():
+    flight_id = request.args.get("flight_id") or request.args.get("envision_flight_id")
+    if not flight_id:
+        return jsonify(ok=False, error="Missing flight_id"), 400
+    manifest = CharterManifest.query.filter_by(envision_flight_id=str(flight_id)).first()
+    return jsonify(
+        ok=True,
+        manifest_exists=bool(manifest),
+        passengers=_serialize_charter_manifest(manifest),
+        uploaded_filename=manifest.uploaded_filename if manifest else "",
+        updated_at=manifest.updated_at.isoformat() if manifest and manifest.updated_at else None,
+    )
+
+
+@api_bp.post("/dcs/charter_manifest/upload")
+def api_charter_manifest_upload():
+    flight_id = request.form.get("flight_id") or request.form.get("envision_flight_id")
+    if not flight_id:
+        return jsonify(ok=False, error="Missing flight_id"), 400
+    file = request.files.get("file")
+    if not file or not file.filename:
+        return jsonify(ok=False, error="Missing Excel file"), 400
+
+    _Workbook, load_workbook = _require_openpyxl()
+    try:
+        wb = load_workbook(file, data_only=True)
+        ws = wb.active
+        headers = [str(c.value or "").strip() for c in ws[1]]
+        rows = []
+        for values in ws.iter_rows(min_row=2, values_only=True):
+            raw = {headers[i]: values[i] for i in range(min(len(headers), len(values))) if headers[i]}
+            pax = _charter_pax_from_row(
+                raw,
+                default_dep=request.form.get("dep") or "",
+                default_ades=request.form.get("ades") or "",
+            )
+            if pax:
+                rows.append(pax)
+    except Exception as exc:
+        current_app.logger.exception("Charter manifest upload parse failed")
+        return jsonify(ok=False, error=f"Unable to parse Excel manifest: {exc}"), 400
+
+    manifest = _upsert_charter_manifest(
+        str(flight_id),
+        rows,
+        flight_no=request.form.get("flight_number") or "",
+        dep=request.form.get("dep") or "",
+        ades=request.form.get("ades") or "",
+        filename=file.filename,
+    )
+    _clear_live_gantt_cache()
+    return jsonify(ok=True, passengers=_serialize_charter_manifest(manifest), count=len(rows))
+
+
+@api_bp.put("/dcs/charter_manifest")
+def api_charter_manifest_save():
+    data = request.get_json(force=True) or {}
+    flight_id = data.get("flight_id") or data.get("envision_flight_id")
+    if not flight_id:
+        return jsonify(ok=False, error="Missing flight_id"), 400
+    passengers = []
+    for row in data.get("passengers") or []:
+        if isinstance(row, dict):
+            pax = _charter_pax_from_row(
+                row,
+                default_dep=data.get("dep") or "",
+                default_ades=data.get("ades") or "",
+            )
+            if pax:
+                passengers.append(pax)
+    manifest = _upsert_charter_manifest(
+        str(flight_id),
+        passengers,
+        flight_no=data.get("flight_number") or "",
+        dep=data.get("dep") or "",
+        ades=data.get("ades") or "",
+    )
+    _clear_live_gantt_cache()
+    return jsonify(ok=True, passengers=_serialize_charter_manifest(manifest), count=len(passengers))
 
 
 @api_bp.route("/envision/environment", methods=["GET", "POST"])
@@ -2244,6 +2513,8 @@ def api_dcs_save_times():
         # keep same behaviour you’re seeing now: treat as fatal so UI shows error
         return jsonify({"ok": False, "error": f"Envision delay update failed: {e}"}), 502
 
+    _clear_live_gantt_cache()
+
     # 6) Success response (times + delays)
     return jsonify({
         "ok": True,
@@ -2516,6 +2787,9 @@ def api_envision_flight_action():
         current_app.logger.exception("api_envision_flight_action failed action=%s flight_id=%s", action, flight_id)
         return jsonify({"ok": False, "error": str(exc)}), 500
 
+    if action != "delay_get":
+        _clear_live_gantt_cache()
+
     return jsonify({"ok": True, "action": action, "flight_id": flight_id, "result": result}), 200
 
 
@@ -2630,9 +2904,6 @@ def api_dcs_manifest_preview():
     except (TypeError, ValueError):
         envision_flight_id = None
 
-    status_mode = (data.get("status_mode") or "exclude_booked").strip().lower()
-    include_all_status = status_mode == "all"
-
     try:
         html, _flight_ctx = _build_manifest_html_and_ctx(
             dep=data.get("dep") or "",
@@ -2643,7 +2914,6 @@ def api_dcs_manifest_preview():
             reg=data.get("reg") or "",
             envision_flight_id=envision_flight_id,
             pax_override=data.get("pax_list") or [],
-            include_all_status=include_all_status,
         )
     except Exception as e:
         current_app.logger.exception("Manifest preview failed: %s", e)
@@ -2661,7 +2931,6 @@ def _build_manifest_html_and_ctx(
     reg: str,
     envision_flight_id: int | None,
     pax_override: list[dict] | None = None,
-    include_all_status: bool = False,
 ) -> tuple[str, dict]:
     """
     Core logic to fetch DCS + Envision crew and render manifest.html.
@@ -2816,8 +3085,101 @@ def _build_manifest_html_and_ctx(
             keys.append(f"{seat}|{name}|{dob}")
         return [k for k in keys if k.strip("|")]
 
+    def _manifest_passenger_status(r: dict) -> str:
+        if not isinstance(r, dict):
+            return ""
+        if r.get("Flown") is True or r.get("flown") is True:
+            return "FLOWN"
+        if r.get("Boarded") is True or r.get("boarded") is True:
+            return "BOARDED"
+
+        raw = (
+            r.get("DCSStatus")
+            or r.get("DcsStatus")
+            or r.get("Status")
+            or r.get("status")
+            or r.get("BoardingStatus")
+            or r.get("boardingStatus")
+            or r.get("IataStatus")
+            or r.get("StatusCode")
+            or r.get("IataPaxStatus")
+            or ""
+        )
+        s = str(raw).strip().upper()
+        if not s:
+            return ""
+        if "FLOWN" in s or s in {"F", "FLW", "FLWN"}:
+            return "FLOWN"
+        if "BOARD" in s or s in {"BD", "BRD"}:
+            return "BOARDED"
+        return ""
+
+    def _is_manifest_carried_passenger(r: dict) -> bool:
+        return _manifest_passenger_status(r) in {"BOARDED", "FLOWN"}
+
+    def _is_jump_seat(seat: str | None) -> bool:
+        normalized = re.sub(r"[\s/_-]+", "", str(seat or "").strip().upper())
+        return normalized in {"JUMP", "JUMPSEAT", "JS", "0J", "0JS"}
+
+    def _name_tokens_for_infant_match(value: str | None) -> set[str]:
+        text = re.sub(r"[^A-Z0-9]+", " ", str(value or "").upper())
+        tokens: set[str] = set()
+        ignored = {"INF", "INFT", "INFANT", "MR", "MRS", "MS", "MISS", "MASTER", "MSTR"}
+        for token in text.split():
+            if len(token) <= 1 or token in ignored:
+                continue
+            tokens.add(token)
+            if token.endswith("INF") and len(token) > 4:
+                tokens.add(token[:-3])
+        return tokens
+
+    def _assign_infant_seats_from_parent_ssr(manifest_passengers: list[dict]) -> None:
+        parents = [
+            p for p in manifest_passengers
+            if p.get("seat") and not p.get("is_infant") and "INFT" in str(p.get("ssrs") or "").upper()
+        ]
+        infants = [
+            p for p in manifest_passengers
+            if p.get("is_infant") and not str(p.get("seat") or "").strip()
+        ]
+        if not parents or not infants:
+            return
+
+        for infant in infants:
+            infant_tokens = _name_tokens_for_infant_match(infant.get("name"))
+            if not infant_tokens:
+                continue
+            for parent in parents:
+                ssr_tokens = _name_tokens_for_infant_match(parent.get("ssrs"))
+                # Require at least a given-name/surname style match. This avoids
+                # assigning by shared family name alone.
+                if len(infant_tokens.intersection(ssr_tokens)) >= 2:
+                    infant["seat"] = parent.get("seat") or ""
+                    infant["parent_seat"] = parent.get("seat") or ""
+                    break
+
+    def _infer_manifest_gender(r: dict) -> str:
+        raw_gender = str(r.get("Gender") or "").strip().upper()
+        if raw_gender.startswith("M"):
+            return "M"
+        if raw_gender.startswith("F"):
+            return "F"
+
+        title = str(
+            r.get("NamePrefix")
+            or r.get("Title")
+            or r.get("Greeting")
+            or ""
+        ).strip().upper().replace(".", "")
+        if title in {"MR", "MSTR", "MASTER"}:
+            return "M"
+        if title in {"MRS", "MS", "MISS", "MADAM"}:
+            return "F"
+        return ""
+
     def _build_manifest_passenger(r: dict, origin_code: str, dest_code: str) -> dict | None:
-        if not include_all_status and not is_dcs_passenger_boarded_or_flown(r):
+        status = _manifest_passenger_status(r)
+        if not _is_manifest_carried_passenger(r):
             return None
 
         dob, dob_fmt = _parse_dcs_dob(r.get("DateOfBirth"))
@@ -2825,7 +3187,7 @@ def _build_manifest_html_and_ctx(
 
         raw_ptype = (r.get("PassengerType") or "").strip().upper()
         ptype  = normalise_pax_type(raw_ptype)
-        gender = (r.get("Gender") or "").strip().upper()
+        gender = _infer_manifest_gender(r)
         ssrs   = r.get("Ssrs") or []
 
         has_um_code = any(
@@ -2853,8 +3215,10 @@ def _build_manifest_html_and_ctx(
         is_child  = ptype == "CHD" or is_um
         is_adult  = not (is_infant or is_child)
 
+        seat = r.get("Seat") or r.get("SeatNumber") or r.get("SeatNo") or ""
+
         return {
-            "seat": r.get("Seat") or "",
+            "seat": seat,
             "name": " ".join(
                 x for x in [
                     (r.get("NamePrefix") or "").strip(),
@@ -2877,6 +3241,8 @@ def _build_manifest_html_and_ctx(
             "is_child": is_child,
             "is_infant": is_infant,
             "is_um": is_um,
+            "is_jump_seat": _is_jump_seat(seat),
+            "status": status,
         }
 
     # 1) Fetch from DCS – we want full passenger list
@@ -3081,6 +3447,7 @@ def _build_manifest_html_and_ctx(
                     cand_dep,
                 )
 
+    _assign_infant_seats_from_parent_ssr(passengers)
     passengers.sort(key=lambda p: _seat_sort_key(p["seat"]))
     status_counts: dict[str, int] = {}
     for rp in raw_passengers:
@@ -3091,17 +3458,16 @@ def _build_manifest_html_and_ctx(
             or ""
         ).strip() or "<blank>"
         status_counts[sval] = status_counts.get(sval, 0) + 1
-    if not include_all_status:
-        current_app.logger.info(
-            "Manifest preview status filter: mode=exclude_booked raw=%s kept=%s filtered=%s statuses=%s flight=%s%s date=%s",
-            len(raw_passengers),
-            len(passengers),
-            filtered_out_booked,
-            status_counts,
-            designator,
-            number,
-            date_str,
-        )
+    current_app.logger.info(
+        "Manifest status filter: mode=boarded_flown_only raw=%s kept=%s filtered=%s statuses=%s flight=%s%s date=%s",
+        len(raw_passengers),
+        len(passengers),
+        filtered_out_booked,
+        status_counts,
+        designator,
+        number,
+        date_str,
+    )
 
     # 3) Flight metadata for header
     flight_date_raw = dcs_f.get("FlightDate")
@@ -3115,6 +3481,7 @@ def _build_manifest_html_and_ctx(
         # this date is what we'll use for the filename (local date)
         "date": flight_date_fmt or date_str,
         "reg": reg,
+        "manifest_basis": "Boarded/flown passengers only",
     }
 
     # 4) Crew (optional)

@@ -8,6 +8,9 @@
   const apgCargoSummaryUrlTemplate = app.dataset.apgCargoSummaryUrlTemplate;
   const apgResetUrl = app.dataset.apgResetUrl;
   const manifestPreviewUrl = app.dataset.manifestPreviewUrl;
+  const charterManifestTemplateUrl = app.dataset.charterManifestTemplateUrl;
+  const charterManifestUrl = app.dataset.charterManifestUrl;
+  const charterManifestUploadUrl = app.dataset.charterManifestUploadUrl;
   const envisionActionUrl = app.dataset.envisionActionUrl;
   const envisionCrewUrl = app.dataset.envisionCrewUrl;
   const envisionCrewPfUrl = app.dataset.envisionCrewPfUrl;
@@ -55,6 +58,7 @@
   const btnResetApg = document.getElementById("btnResetApg");
   const btnSeatmap = document.getElementById("btnSeatmap");
   const btnMovementMsg = document.getElementById("btnMovementMsg");
+  const btnCharterManifest = document.getElementById("btnCharterManifest");
 
   const seatmapDialog = document.getElementById("seatmapDialog");
   const seatmapGrid = document.getElementById("seatmapGrid");
@@ -63,6 +67,15 @@
   const paxDialog = document.getElementById("paxDialog");
   const paxTitle = document.getElementById("paxTitle");
   const paxTbody = document.getElementById("paxTbody");
+  const charterManifestDialog = document.getElementById("charterManifestDialog");
+  const charterManifestTitle = document.getElementById("charterManifestTitle");
+  const charterManifestTbody = document.getElementById("charterManifestTbody");
+  const charterManifestStatus = document.getElementById("charterManifestStatus");
+  const charterManifestFile = document.getElementById("charterManifestFile");
+  const btnDownloadCharterTemplate = document.getElementById("btnDownloadCharterTemplate");
+  const btnUploadCharterManifest = document.getElementById("btnUploadCharterManifest");
+  const btnAddCharterPax = document.getElementById("btnAddCharterPax");
+  const btnSaveCharterManifest = document.getElementById("btnSaveCharterManifest");
   const cargoDialog = document.getElementById("cargoDialog");
   const cargoTitle = document.getElementById("cargoTitle");
   const cargoWeightsSummary = document.getElementById("cargoWeightsSummary");
@@ -203,6 +216,8 @@
   let timer = null;
   let selectedId = null;
   let selectedFlight = null;
+  let charterManifestFlight = null;
+  let charterManifestRows = [];
   let axisScrollEl = null;
   let hasUserZoom = false;
   let editingFlight = null;
@@ -346,9 +361,12 @@
   }
 
   function setActionsEnabled(enabled) {
-    [btnPaxList, btnCargo, btnPreviewManifest, btnSubmitApg, btnResetApg, btnSeatmap, btnMovementMsg].forEach((b) => {
+    [btnPaxList, btnCargo, btnPreviewManifest, btnSubmitApg, btnResetApg, btnSeatmap, btnMovementMsg, btnCharterManifest].forEach((b) => {
       if (b) b.disabled = !enabled;
     });
+    if (btnCharterManifest && enabled) {
+      btnCharterManifest.disabled = !canUseCharterManifest(selectedFlight);
+    }
   }
 
   function withBusy(button, label, fn) {
@@ -443,8 +461,26 @@
   function flightCode(f) {
     const des = String(f.designator || "").toUpperCase().trim();
     const raw = String(f.flight_number || "").toUpperCase().replace(/\s+/g, "");
+    if (!raw) return des;
+    if (des && raw.startsWith(des)) return raw;
     const digits = (raw.match(/(\d+)$/) || [null, raw])[1] || raw;
-    return `${des}${digits}`;
+    return des ? `${des}${digits}` : raw;
+  }
+
+  function flightNumberOnly(f) {
+    const des = String(f.designator || "").toUpperCase().trim();
+    const raw = String(f.flight_number || "").toUpperCase().replace(/\s+/g, "");
+    if (des && raw.startsWith(des)) return raw.slice(des.length) || raw;
+    return (raw.match(/(\d+)$/) || [null, raw])[1] || raw;
+  }
+
+  function isCharterFlight(f) {
+    const text = `${f?.service_type || ""} ${f?.flight_type || ""}`.toLowerCase();
+    return text.includes("charter");
+  }
+
+  function canUseCharterManifest(f) {
+    return Boolean(f?.envision_flight_id) && isCharterFlight(f);
   }
 
   function toLocalInputValue(iso) {
@@ -750,7 +786,7 @@
       movementInitial = now;
       if (movementResult) movementResult.textContent = JSON.stringify({ ok: true, updates: out }, null, 2);
       // Do not block button reset on a background refresh request.
-      loadData({ showSpinner: false }).catch((err) => {
+      loadData({ showSpinner: false, force: true }).catch((err) => {
         console.warn("Background refresh after movement save failed", err);
       });
     } catch (e) {
@@ -1487,7 +1523,7 @@
 
       if (mlApiResponses) mlApiResponses.textContent = JSON.stringify(output, null, 2);
       if (output.ok) {
-        await loadData({ showSpinner: false });
+        await loadData({ showSpinner: false, force: true });
       }
       if (output.ok && closeOnDone && modifyLegDialog?.open) modifyLegDialog.close();
     } catch (err) {
@@ -1537,7 +1573,7 @@
       if (flightEditResult) flightEditResult.textContent = JSON.stringify(json, null, 2);
       if (resp.ok && json.ok) {
         editInitialByAction[action] = currentForCompare;
-        await loadData({ showSpinner: false });
+        await loadData({ showSpinner: false, force: true });
       }
     } catch (e) {
       if (flightEditResult) flightEditResult.textContent = `Request failed: ${e.message}`;
@@ -2809,10 +2845,16 @@
       detailMuted.style.display = "";
       detailList.innerHTML = "";
       setActionsEnabled(false);
+      if (btnCharterManifest) btnCharterManifest.hidden = true;
       return;
     }
     detailMuted.style.display = "none";
     setActionsEnabled(true);
+    if (btnCharterManifest) {
+      const charter = canUseCharterManifest(f);
+      btnCharterManifest.hidden = !charter;
+      btnCharterManifest.disabled = !charter;
+    }
     const pax = Array.isArray(f.pax_list) ? f.pax_list : [];
     const booked = pax.filter((p) => classifyPaxStatus(p) === "BOOKED").length;
     const checked = pax.filter((p) => classifyPaxStatus(p) === "CHECKED").length;
@@ -2844,6 +2886,7 @@
           <div class="card-title">Flight</div>
           <div class="card-main">${flightCode(f)}</div>
           <div class="card-sub">${f.dep || ""} -> ${f.ades || ""} | ${f.reg || "-"}</div>
+          <div class="kv"><span>Type</span><strong>${f.service_type || f.flight_type || "-"}</strong></div>
           <div class="kv"><span>Status</span><strong>${f.flight_status || "-"}</strong></div>
           <div class="kv"><span>Defects</span><strong title="Open defects ${defectCount}, total records ${defectTotal}">${defectCount} open</strong></div>
           <div class="kv">
@@ -3243,8 +3286,9 @@
 
   async function loadData(opts = {}) {
     const showSpinner = opts.showSpinner !== false;
+    const forceRefresh = opts.force === true;
     const day = dayInput.value || app.dataset.day;
-    const u = `${apiUrl}?date=${encodeURIComponent(day)}&include_delays=1`;
+    const u = `${apiUrl}?date=${encodeURIComponent(day)}&include_delays=1${forceRefresh ? "&force=1" : ""}`;
     refreshBtn.disabled = true;
     if (showSpinner) setBoardLoading(true);
     try {
@@ -3286,9 +3330,253 @@
     }
   }
 
+  function setCharterManifestStatus(text, isError = false) {
+    if (!charterManifestStatus) return;
+    charterManifestStatus.textContent = text || "";
+    charterManifestStatus.classList.toggle("error", !!isError);
+  }
+
+  function normalizeCharterPaxType(value) {
+    const t = String(value || "AD").trim().toUpperCase();
+    if (["INF", "IN", "INFANT", "I"].includes(t)) return "INF";
+    if (["CHD", "CH", "C", "CNN", "CHILD"].includes(t)) return "CHD";
+    if (["UM", "UMNR"].includes(t)) return "UMNR";
+    return "AD";
+  }
+
+  function editableCharterRowFromPax(p = {}, f = selectedFlight) {
+    const status = classifyPaxStatus(p);
+    return {
+      Seat: String(p.Seat || p.SeatNumber || "").toUpperCase(),
+      Title: String(p.Title || p.NamePrefix || ""),
+      GivenName: String(p.GivenName || p.FirstName || ""),
+      Surname: String(p.Surname || p.LastName || ""),
+      Origin: String(p.Origin || p.__manifest_origin || f?.dep || "").toUpperCase(),
+      Destination: String(p.Destination || p.__manifest_dest || f?.ades || "").toUpperCase(),
+      PassengerType: normalizeCharterPaxType(p.PassengerType || p.passengerType),
+      Gender: String(p.Gender || p.gender || "").toUpperCase(),
+      BaggageWeight: Number(p.BaggageWeight || p.baggageWeight || 0),
+      BookingReferenceID: String(p.BookingReferenceID || p.PNR || p.RecordLocator || ""),
+      Status: status === "FLOWN" ? "Flown" : "Boarded",
+      SSR: String(p.SSR || p.SsrsText || ssrText(p) || ""),
+    };
+  }
+
+  function newEmptyCharterRow(f = selectedFlight) {
+    return editableCharterRowFromPax({
+      PassengerType: "AD",
+      Status: "Boarded",
+      __manifest_origin: f?.dep || "",
+      __manifest_dest: f?.ades || "",
+    }, f);
+  }
+
+  function collectCharterManifestRows() {
+    return charterManifestRows.map((row) => ({
+      Seat: String(row.Seat || "").trim().toUpperCase(),
+      Title: String(row.Title || "").trim(),
+      GivenName: String(row.GivenName || "").trim(),
+      Surname: String(row.Surname || "").trim(),
+      Origin: String(row.Origin || charterManifestFlight?.dep || "").trim().toUpperCase(),
+      Destination: String(row.Destination || charterManifestFlight?.ades || "").trim().toUpperCase(),
+      PassengerType: normalizeCharterPaxType(row.PassengerType),
+      Gender: String(row.Gender || "").trim().toUpperCase(),
+      BaggageWeight: Number(row.BaggageWeight || 0),
+      BookingReferenceID: String(row.BookingReferenceID || "").trim(),
+      Status: String(row.Status || "Boarded").trim() || "Boarded",
+      SSR: String(row.SSR || "").trim(),
+    })).filter((row) => row.GivenName || row.Surname);
+  }
+
+  function setSelectedFlightCharterRows(passengers) {
+    if (!selectedFlight || !Array.isArray(passengers)) return;
+    selectedFlight.pax_list = passengers;
+    const breakdown = paxTypeBreakdown(passengers);
+    selectedFlight.adt = breakdown.ad;
+    selectedFlight.chd = breakdown.chd;
+    selectedFlight.inf = breakdown.inf;
+    selectedFlight.pax_count = passengers.length;
+    selectedFlight.bags_kg = passengers.reduce((sum, p) => sum + Number(p.BaggageWeight || 0), 0);
+    selectedFlight.charter_manifest_uploaded = true;
+  }
+
+  function charterManifestInput(rowIndex, field, options = {}) {
+    const row = charterManifestRows[rowIndex] || {};
+    const tag = options.select ? "select" : "input";
+    const el = document.createElement(tag);
+    el.dataset.rowIndex = String(rowIndex);
+    el.dataset.field = field;
+    if (options.type) el.type = options.type;
+    if (options.step) el.step = options.step;
+    if (options.select) {
+      for (const opt of options.select) {
+        const option = document.createElement("option");
+        option.value = opt.value;
+        option.textContent = opt.label;
+        el.appendChild(option);
+      }
+    }
+    el.value = row[field] ?? "";
+    el.addEventListener("input", () => {
+      charterManifestRows[rowIndex][field] = field === "BaggageWeight" ? Number(el.value || 0) : el.value;
+    });
+    el.addEventListener("change", () => {
+      charterManifestRows[rowIndex][field] = field === "BaggageWeight" ? Number(el.value || 0) : el.value;
+    });
+    return el;
+  }
+
+  function renderCharterManifestRows() {
+    if (!charterManifestTbody) return;
+    charterManifestTbody.innerHTML = "";
+    if (!charterManifestRows.length) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = '<td colspan="13">No passengers uploaded yet. Download the template or add rows manually.</td>';
+      charterManifestTbody.appendChild(tr);
+      return;
+    }
+    charterManifestRows.forEach((row, idx) => {
+      const tr = document.createElement("tr");
+      const cells = [
+        charterManifestInput(idx, "Seat"),
+        charterManifestInput(idx, "Title"),
+        charterManifestInput(idx, "GivenName"),
+        charterManifestInput(idx, "Surname"),
+        charterManifestInput(idx, "Origin"),
+        charterManifestInput(idx, "Destination"),
+        charterManifestInput(idx, "PassengerType", {
+          select: [
+            { value: "AD", label: "AD" },
+            { value: "CHD", label: "CHD" },
+            { value: "INF", label: "INF" },
+            { value: "UMNR", label: "UMNR" },
+          ],
+        }),
+        charterManifestInput(idx, "Gender", {
+          select: [
+            { value: "", label: "-" },
+            { value: "M", label: "M" },
+            { value: "F", label: "F" },
+          ],
+        }),
+        charterManifestInput(idx, "BaggageWeight", { type: "number", step: "0.1" }),
+        charterManifestInput(idx, "BookingReferenceID"),
+        charterManifestInput(idx, "Status", {
+          select: [
+            { value: "Boarded", label: "Boarded" },
+            { value: "Flown", label: "Flown" },
+          ],
+        }),
+        charterManifestInput(idx, "SSR"),
+      ];
+      cells.forEach((input) => {
+        const td = document.createElement("td");
+        td.appendChild(input);
+        tr.appendChild(td);
+      });
+      const delCell = document.createElement("td");
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "btn btn-ghost";
+      delBtn.textContent = "Remove";
+      delBtn.addEventListener("click", () => {
+        charterManifestRows.splice(idx, 1);
+        renderCharterManifestRows();
+      });
+      delCell.appendChild(delBtn);
+      tr.appendChild(delCell);
+      charterManifestTbody.appendChild(tr);
+    });
+  }
+
+  async function fetchCharterManifestRows(f) {
+    if (!charterManifestUrl || !f?.envision_flight_id) return [];
+    const url = new URL(charterManifestUrl, window.location.href);
+    url.searchParams.set("flight_id", f.envision_flight_id);
+    const resp = await fetch(url, { headers: { Accept: "application/json" } });
+    const data = await resp.json();
+    if (!resp.ok || data.ok === false) throw new Error(data.error || `Manifest load failed (${resp.status})`);
+    return Array.isArray(data.passengers) ? data.passengers : [];
+  }
+
+  async function openCharterManifestDialog() {
+    const f = selectedFlight;
+    if (!f || !charterManifestDialog || !charterManifestTbody) return;
+    if (!canUseCharterManifest(f)) {
+      alert("Charter manifest upload is only available for Charter and Charter Positioning flights.");
+      return;
+    }
+    charterManifestFlight = f;
+    if (btnDownloadCharterTemplate) btnDownloadCharterTemplate.href = charterManifestTemplateUrl || "#";
+    if (charterManifestTitle) charterManifestTitle.textContent = `Charter Manifest - ${flightCode(f)} ${f.dep || ""}-${f.ades || ""}`;
+    setCharterManifestStatus("Loading saved manifest...");
+    charterManifestRows = [];
+    renderCharterManifestRows();
+    charterManifestDialog.showModal();
+    try {
+      const passengers = await fetchCharterManifestRows(f);
+      charterManifestRows = passengers.map((p) => editableCharterRowFromPax(p, f));
+      setCharterManifestStatus(passengers.length ? `${passengers.length} passenger rows loaded.` : "No saved manifest yet.");
+      renderCharterManifestRows();
+    } catch (err) {
+      setCharterManifestStatus(err.message || "Unable to load saved manifest.", true);
+    }
+  }
+
+  async function uploadCharterManifest() {
+    const f = charterManifestFlight || selectedFlight;
+    if (!f || !charterManifestUploadUrl || !charterManifestFile) return;
+    const file = charterManifestFile.files && charterManifestFile.files[0];
+    if (!file) {
+      setCharterManifestStatus("Choose an Excel file first.", true);
+      return;
+    }
+    const body = new FormData();
+    body.append("flight_id", f.envision_flight_id || "");
+    body.append("flight_number", flightCode(f));
+    body.append("dep", f.dep || "");
+    body.append("ades", f.ades || "");
+    body.append("file", file);
+    setCharterManifestStatus("Uploading manifest...");
+    const resp = await fetch(charterManifestUploadUrl, { method: "POST", body });
+    const data = await resp.json();
+    if (!resp.ok || data.ok === false) throw new Error(data.error || `Upload failed (${resp.status})`);
+    const passengers = Array.isArray(data.passengers) ? data.passengers : [];
+    charterManifestRows = passengers.map((p) => editableCharterRowFromPax(p, f));
+    setSelectedFlightCharterRows(passengers);
+    setCharterManifestStatus(`${passengers.length} passenger rows uploaded. You can edit them below.`);
+    renderCharterManifestRows();
+    await loadData({ showSpinner: false, force: true });
+  }
+
+  async function saveCharterManifest() {
+    const f = charterManifestFlight || selectedFlight;
+    if (!f || !charterManifestUrl) return;
+    const passengers = collectCharterManifestRows();
+    setCharterManifestStatus("Saving manifest...");
+    const resp = await fetch(charterManifestUrl, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        flight_id: f.envision_flight_id || "",
+        flight_number: flightCode(f),
+        dep: f.dep || "",
+        ades: f.ades || "",
+        passengers,
+      }),
+    });
+    const data = await resp.json();
+    if (!resp.ok || data.ok === false) throw new Error(data.error || `Save failed (${resp.status})`);
+    const saved = Array.isArray(data.passengers) ? data.passengers : [];
+    charterManifestRows = saved.map((p) => editableCharterRowFromPax(p, f));
+    setSelectedFlightCharterRows(saved);
+    setCharterManifestStatus(`${saved.length} passenger rows saved.`);
+    renderCharterManifestRows();
+    await loadData({ showSpinner: false, force: true });
+  }
+
   function buildManifestPayload(f) {
-    const rawNo = String(f.flight_number || "").toUpperCase().replace(/\s+/g, "");
-    const numberOnly = (rawNo.match(/(\d+)$/) || [null, rawNo])[1] || rawNo;
+    const numberOnly = flightNumberOnly(f);
     return {
       dep: (f.dep || "").toUpperCase(),
       ades: (f.ades || "").toUpperCase(),
@@ -3298,7 +3586,7 @@
       reg: (f.reg || "").toUpperCase(),
       envision_flight_id: f.envision_flight_id || null,
       pax_list: f.pax_list || [],
-      status_mode: "exclude_booked",
+      status_mode: "boarded_flown",
     };
   }
 
@@ -3347,8 +3635,7 @@
       );
       if (!proceed) return;
     }
-    const rawNo = String(f.flight_number || "").toUpperCase().replace(/\s+/g, "");
-    const numberOnly = (rawNo.match(/(\d+)$/) || [null, rawNo])[1] || rawNo;
+    const numberOnly = flightNumberOnly(f);
     const payload = {
       apg_plan_id: getApgPlanId(f.apg_plan_id),
       dep: (f.dep || "").toUpperCase(),
@@ -3499,10 +3786,33 @@
     const reg = String(f.reg || "").toUpperCase();
     const type = String(f.aircraft_type || "").toUpperCase();
     if (type.includes("ATR") || reg.startsWith("ZK-MC")) {
-      return { rows: Array.from({ length: 17 }, (_, i) => i + 1), left: ["A", "B"], right: ["C", "D"], name: `ATR 72 (${reg || "Unknown"})` };
+      return {
+        rows: Array.from({ length: 17 }, (_, i) => i + 1),
+        left: ["A", "B"],
+        right: ["C", "D"],
+        name: `ATR 72 (${reg || "Unknown"})`,
+        jumpSeat: true,
+      };
     }
     if (type.includes("SAAB") || type.includes("SF3") || type.includes("SF340") || reg.startsWith("ZK-CI") || reg.startsWith("ZK-KR")) {
-      return { rows: Array.from({ length: 11 }, (_, i) => i + 1), left: ["A"], right: ["B", "C"], name: `Saab 340 (${reg || "Unknown"})` };
+      const cfg = {
+        rows: Array.from({ length: 11 }, (_, i) => i + 1),
+        left: ["A"],
+        right: ["B", "C"],
+        name: `Saab 340 (${reg || "Unknown"})`,
+        jumpSeat: true,
+        hasRow0C: false,
+        lastRowMode: null,
+      };
+      if (reg === "ZK-CIT" || reg === "ZKCIT") {
+        cfg.rows = [0].concat(cfg.rows);
+        cfg.hasRow0C = true;
+      }
+      if (reg === "ZK-CIZ" || reg === "ZKCIZ") {
+        cfg.name = `Saab 340B (${reg || "Unknown"})`;
+        cfg.lastRowMode = "4-inline";
+      }
+      return cfg;
     }
     return null;
   }
@@ -3526,12 +3836,30 @@
       if (seat) paxBySeat[seat] = p;
     });
 
-    function renderSeatCell(rowNum, col) {
-      const code = `${rowNum}${col}`;
+    function seatLookupCodes(rowNum, col, explicitCode = null) {
+      const code = explicitCode || `${rowNum}${col}`;
+      if (explicitCode) {
+        return [code, "JUMP", "JUMPSEAT", "JUMP SEAT", "JS", "J/S", "0J", "0JS"];
+      }
+      return [code];
+    }
+
+    function findPaxForSeat(rowNum, col, explicitCode = null) {
+      for (const code of seatLookupCodes(rowNum, col, explicitCode)) {
+        if (paxBySeat[code]) return { code, pax: paxBySeat[code] };
+      }
+      return { code: explicitCode || `${rowNum}${col}`, pax: null };
+    }
+
+    function renderSeatCell(rowNum, col, opts = {}) {
+      const lookup = findPaxForSeat(rowNum, col, opts.code || null);
+      const code = lookup.code;
       const el = document.createElement("div");
       el.className = "seat";
-      const pax = paxBySeat[code];
-      el.textContent = col;
+      if (opts.className) el.classList.add(opts.className);
+      const pax = lookup.pax;
+      el.textContent = opts.label || col;
+      el.dataset.seat = code;
       if (!pax) {
         el.classList.add("seat-empty");
       } else {
@@ -3602,10 +3930,72 @@
       return el;
     }
 
+    function makeSeatPlaceholder() {
+      const ghost = document.createElement("div");
+      ghost.className = "seat seat-placeholder";
+      ghost.setAttribute("aria-hidden", "true");
+      return ghost;
+    }
+
+    function renderJumpSeatRow() {
+      const row = document.createElement("div");
+      row.className = "seat-row jump-seat-row";
+      row.innerHTML = '<div class="seat-label"></div>';
+
+      const left = document.createElement("div");
+      left.className = "seat-block";
+      left.appendChild(makeSeatPlaceholder());
+      row.appendChild(left);
+
+      const aisle = document.createElement("div");
+      aisle.className = "seat-aisle seat-aisle-jump";
+      aisle.appendChild(renderSeatCell(0, "J", { code: "JUMP", label: "JS", className: "seat-jump" }));
+      row.appendChild(aisle);
+
+      const right = document.createElement("div");
+      right.className = "seat-block";
+      right.appendChild(makeSeatPlaceholder());
+      row.appendChild(right);
+
+      seatmapGrid.appendChild(row);
+    }
+
+    if (cfg.jumpSeat) renderJumpSeatRow();
+
     cfg.rows.forEach((rowNum) => {
       const row = document.createElement("div");
       row.className = "seat-row";
       row.innerHTML = `<div class="seat-label">${rowNum}</div>`;
+
+      if (cfg.hasRow0C && rowNum === 0) {
+        const left = document.createElement("div");
+        left.className = "seat-block";
+        left.appendChild(makeSeatPlaceholder());
+        left.appendChild(makeSeatPlaceholder());
+        row.appendChild(left);
+
+        const aisle = document.createElement("div");
+        aisle.className = "seat-aisle";
+        row.appendChild(aisle);
+
+        const right = document.createElement("div");
+        right.className = "seat-block";
+        right.appendChild(renderSeatCell(rowNum, "C"));
+        row.appendChild(right);
+        seatmapGrid.appendChild(row);
+        return;
+      }
+
+      const isLastRow4Inline = cfg.lastRowMode === "4-inline" && rowNum === cfg.rows[cfg.rows.length - 1];
+      if (isLastRow4Inline) {
+        const block = document.createElement("div");
+        block.className = "seat-block seat-block-inline-4";
+        ["A", "B", "C", "D"].forEach((c) => block.appendChild(renderSeatCell(rowNum, c)));
+        row.appendChild(block);
+        seatmapGrid.appendChild(row);
+        return;
+      }
+
       const left = document.createElement("div");
       left.className = "seat-block";
       cfg.left.forEach((c) => left.appendChild(renderSeatCell(rowNum, c)));
@@ -3721,7 +4111,7 @@
   rowsEl.addEventListener("mouseleave", hideCrosshairs);
   if (boardEl) boardEl.addEventListener("mouseleave", hideCrosshairs);
 
-  refreshBtn.addEventListener("click", () => loadData({ showSpinner: true }));
+  refreshBtn.addEventListener("click", () => loadData({ showSpinner: true, force: true }));
   if (locationFilter) {
     selectedLocationFilter = normalizeStationCode(localStorage.getItem(LOCATION_FILTER_STORAGE_KEY) || "");
     locationFilter.addEventListener("change", () => {
@@ -3760,7 +4150,7 @@
   }
   dayInput.addEventListener("change", () => {
     hasUserZoom = false;
-    loadData({ showSpinner: true });
+    loadData({ showSpinner: true, force: true });
   });
   if (tzSelect) {
     tzSelect.addEventListener("change", () => {
@@ -3809,6 +4199,29 @@
   if (btnResetApg) btnResetApg.addEventListener("click", withBusy(btnResetApg, "Resetting...", resetApgPassengers));
   if (btnSeatmap) btnSeatmap.addEventListener("click", openSeatmap);
   if (btnMovementMsg) btnMovementMsg.addEventListener("click", openMovementDialog);
+  if (btnCharterManifest) btnCharterManifest.addEventListener("click", openCharterManifestDialog);
+  if (btnAddCharterPax) btnAddCharterPax.addEventListener("click", () => {
+    charterManifestRows.push(newEmptyCharterRow(charterManifestFlight || selectedFlight));
+    renderCharterManifestRows();
+  });
+  if (btnUploadCharterManifest) {
+    btnUploadCharterManifest.addEventListener("click", withBusy(btnUploadCharterManifest, "Uploading...", async () => {
+      try {
+        await uploadCharterManifest();
+      } catch (err) {
+        setCharterManifestStatus(err.message || "Manifest upload failed.", true);
+      }
+    }));
+  }
+  if (btnSaveCharterManifest) {
+    btnSaveCharterManifest.addEventListener("click", withBusy(btnSaveCharterManifest, "Saving...", async () => {
+      try {
+        await saveCharterManifest();
+      } catch (err) {
+        setCharterManifestStatus(err.message || "Manifest save failed.", true);
+      }
+    }));
+  }
   if (mvModeDep) mvModeDep.addEventListener("click", () => setMovementMode("dep"));
   if (mvModeArr) mvModeArr.addEventListener("click", () => setMovementMode("arr"));
   if (mvAddDelay) mvAddDelay.addEventListener("click", () => addMovementDelayRow());
@@ -3852,7 +4265,7 @@
     setActionsEnabled(false);
     updateLiveNowBar();
     await ensureEnvisionEnvironment();
-    await loadData({ showSpinner: true });
+    await loadData({ showSpinner: true, force: true });
   }
 
   initializeGanttPage().catch((err) => {

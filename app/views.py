@@ -1,7 +1,7 @@
 ﻿from flask import Blueprint, render_template, request, redirect, jsonify, flash, current_app,send_file, abort, url_for, make_response
 from datetime import date, datetime, time, timezone, timedelta
 from flask import session
-from .models import SyncRun, SyncFlightLog, AppConfig
+from .models import SyncRun, SyncFlightLog, AppConfig, CharterManifest
 from . import db
 from .kmh_auth import create_kmh_session, clear_kmh_session, get_kmh_session
 from .zenith_client import fetch_dcs_for_flight
@@ -45,6 +45,11 @@ _ENVISION_DEFECT_CACHE: dict[int, dict] = {}
 # Simple in-memory cache for Envision scheduled maintenance by registration id
 _ENVISION_MAINT_CACHE: dict[int, dict] = {}
 
+
+def clear_gantt_flight_cache() -> None:
+    """Clear cached Envision flight rows used by the live Gantt endpoint."""
+    _ENVISION_FLIGHT_CACHE.clear()
+
 # ✅ use your DCS single-flight call
 from .zenith_client import fetch_dcs_for_flight
 
@@ -65,6 +70,10 @@ def _runtime_envision_base() -> str:
     env = get_envision_environment()
     return str(env.get("base") or "").rstrip("/")
 
+
+def _kmh_cookie_path() -> str:
+    return request.script_root or "/"
+
 @ui_bp.route("/ops/modify-leg")
 def ops_modify_leg():
     return render_template("flight_details.html")
@@ -81,7 +90,10 @@ def ops_kmh_login():
         next_url = url_for("ui.ops_kmh_calendar")
 
     error = None
+    info = ""
     username = ""
+    if str(request.args.get("reason") or "").strip().lower() == "expired":
+        info = "Your Envision session expired. Sign in again to continue."
     if request.method == "POST":
         username = str(request.form.get("username") or "").strip()
         password = str(request.form.get("password") or "")
@@ -103,7 +115,7 @@ def ops_kmh_login():
                 "kmh_session_id",
                 session_id,
                 max_age=8 * 60 * 60,
-                path="/APG",
+                path=_kmh_cookie_path(),
                 httponly=True,
                 samesite="Lax",
             )
@@ -115,6 +127,7 @@ def ops_kmh_login():
         "kmh_login.html",
         next_url=next_url,
         error=error,
+        info=info,
         username=username,
         kmh_session_id=session.get("kmh_session_id") or "",
     )
@@ -130,7 +143,7 @@ def ops_kmh_logout():
             clear_kmh_session(session.get(key))
         session.pop(key, None)
     response = make_response(redirect(url_for("ui.ops_kmh_login")))
-    response.delete_cookie("kmh_session_id", path="/APG")
+    response.delete_cookie("kmh_session_id", path=_kmh_cookie_path())
     return response
 
 
@@ -458,7 +471,8 @@ def _enrich_rows_with_dcs(rows: list[dict], nz_day: date) -> None:
 def _propagate_through_pax(rows: list[dict]) -> None:
     """
     For through-services split into multiple legs under the same flight number/reg,
-    copy pax from the richest leg to connected onward legs that have zero pax.
+    share the DCS pax set across connected sectors, then keep only passengers
+    whose origin/destination means they are onboard each sector.
     """
     if not rows:
         return
@@ -496,6 +510,12 @@ def _propagate_through_pax(rows: list[dict]) -> None:
             out.append(p)
         return out
 
+    def _merge_many_pax(groups: list[list[dict]]) -> list[dict]:
+        merged: list[dict] = []
+        for group in groups:
+            merged = _merge_pax(merged, group)
+        return merged
+
     def _apply_pax(rr: dict, pax_list: list[dict]) -> None:
         counts = _count_pax_types(pax_list)
         bag_kg = 0.0
@@ -513,6 +533,41 @@ def _propagate_through_pax(rows: list[dict]) -> None:
         rr["dcs_linked"] = True
         rr["error"] = None
 
+    def _chain_station_indexes(items: list[dict]) -> dict[str, int]:
+        stations: list[str] = []
+        for rr in items:
+            dep = str(rr.get("dep") or "").strip().upper()
+            arr = str(rr.get("ades") or rr.get("dest") or "").strip().upper()
+            if dep and (not stations or stations[-1] != dep):
+                stations.append(dep)
+            if arr and (not stations or stations[-1] != arr):
+                stations.append(arr)
+        return {station: idx for idx, station in enumerate(stations)}
+
+    def _pax_flies_sector(p: dict, rr: dict, station_idx: dict[str, int]) -> bool:
+        dep = str(rr.get("dep") or "").strip().upper()
+        arr = str(rr.get("ades") or rr.get("dest") or "").strip().upper()
+        origin = str(p.get("__manifest_origin") or "").strip().upper()
+        dest = str(p.get("__manifest_dest") or "").strip().upper()
+
+        # If DCS did not provide/derive route metadata, preserve the passenger.
+        if not origin and not dest:
+            return True
+
+        if origin == dep and dest == arr:
+            return True
+
+        dep_i = station_idx.get(dep)
+        arr_i = station_idx.get(arr)
+        origin_i = station_idx.get(origin)
+        dest_i = station_idx.get(dest)
+        if None in (dep_i, arr_i, origin_i, dest_i):
+            return False
+
+        # Passenger is onboard this sector if they boarded at/before the sector
+        # origin and their destination is at/after this sector destination.
+        return origin_i <= dep_i < arr_i <= dest_i
+
     groups: dict[tuple[str, str], list[dict]] = {}
     for r in rows:
         groups.setdefault(_key(r), []).append(r)
@@ -524,20 +579,32 @@ def _propagate_through_pax(rows: list[dict]) -> None:
         def _apply_chain(items: list[dict]) -> None:
             if not items:
                 return
-            richest = max(items, key=lambda rr: int(rr.get("pax_count") or 0))
-            carry = list((richest.get("pax_list") or []))
+            pax_groups = [list((rr.get("pax_list") or [])) for rr in items]
+            carry = _merge_many_pax(pax_groups)
             if not carry:
                 return
 
+            has_route_metadata = any(
+                isinstance(p, dict) and (p.get("__manifest_origin") or p.get("__manifest_dest"))
+                for p in carry
+            )
+            station_idx = _chain_station_indexes(items)
+
             for rr in items:
-                current = list((rr.get("pax_list") or []))
-                if not current:
-                    _apply_pax(rr, carry)
-                    continue
-                merged = _merge_pax(current, carry)
-                if len(merged) != len(current):
-                    _apply_pax(rr, merged)
-                carry = merged
+                if len(items) > 1 and has_route_metadata:
+                    sector_pax = [
+                        p for p in carry
+                        if isinstance(p, dict) and _pax_flies_sector(p, rr, station_idx)
+                    ]
+                    _apply_pax(rr, sector_pax)
+                else:
+                    current = list((rr.get("pax_list") or []))
+                    if not current:
+                        _apply_pax(rr, carry)
+                    else:
+                        merged = _merge_pax(current, carry)
+                        if len(merged) != len(current):
+                            _apply_pax(rr, merged)
 
         for r in group:
             if not chain:
@@ -560,6 +627,53 @@ def _propagate_through_pax(rows: list[dict]) -> None:
                 _apply_chain(chain)
                 chain = [r]
         _apply_chain(chain)
+
+
+def _is_charter_service(row: dict) -> bool:
+    service = str(row.get("service_type") or row.get("flight_type") or "").strip().lower()
+    return "charter" in service
+
+
+def _apply_charter_manifests(rows: list[dict]) -> None:
+    ids = [str(r.get("envision_flight_id")) for r in rows if r.get("envision_flight_id")]
+    if not ids:
+        return
+    manifests = {
+        str(m.envision_flight_id): m
+        for m in CharterManifest.query.filter(CharterManifest.envision_flight_id.in_(ids)).all()
+    }
+    for r in rows:
+        fid = str(r.get("envision_flight_id") or "")
+        manifest = manifests.get(fid)
+        if not manifest:
+            r["charter_manifest_uploaded"] = False
+            continue
+        try:
+            pax = json.loads(manifest.pax_json or "[]")
+        except Exception:
+            pax = []
+        if not isinstance(pax, list):
+            pax = []
+
+        r["charter_manifest_uploaded"] = True
+        r["charter_manifest_filename"] = manifest.uploaded_filename or ""
+        r["charter_manifest_updated_at"] = manifest.updated_at.isoformat() if manifest.updated_at else None
+        if _is_charter_service(r):
+            counts = _count_pax_types(pax)
+            r["pax_list"] = pax
+            r["adt"] = counts["ad"]
+            r["chd"] = counts["chd"]
+            r["inf"] = counts["inf"]
+            r["pax_count"] = counts["total"]
+            bags_kg = 0.0
+            for p in pax:
+                try:
+                    bags_kg += float(p.get("BaggageWeight") or 0)
+                except (TypeError, ValueError):
+                    pass
+            r["bags_kg"] = bags_kg
+            r["dcs_linked"] = True
+            r["error"] = None
 
 @ui_bp.route("/sync/runs/<int:rid>")
 def sync_run_detail(rid):
@@ -976,7 +1090,13 @@ def dcs_from_envision_page_old():
                 or ""
             ),
             "aircraft_type": f.get("aircraftType") or f.get("aircraftTypeId") or "",
-            "service_type": f.get("serviceTypeDescription") or "",
+            "service_type": (
+                f.get("flightTypeDescription")
+                or f.get("flightType")
+                or f.get("serviceTypeDescription")
+                or ""
+            ),
+            "flight_type": f.get("flightTypeDescription") or f.get("flightType") or "",
             "flight_status": f.get("flightStatusDescription") or f.get("flightStatusId") or "",
             "crew": f.get("crewComposition") or "",
             "route": f.get("routeDescription") or "",
@@ -1112,12 +1232,13 @@ def api_dcs_gantt_data():
     # 1) Envision auth + fetch (with short TTL cache)
     cache_ttl = int(current_app.config.get("ENVISION_CACHE_TTL", 60))
     cache_key = (start_utc.isoformat(), end_utc.isoformat())
+    force_refresh = request.args.get("force") == "1"
     cache_hit = False
     token = None
     env_flights = []
 
     cached = _ENVISION_FLIGHT_CACHE.get(cache_key)
-    if cached:
+    if cached and not force_refresh:
         age = _time.time() - cached.get("ts", 0)
         if age <= cache_ttl:
             env_flights = cached.get("data") or []
@@ -1221,7 +1342,13 @@ def api_dcs_gantt_data():
             ),
             "registration_id": _extract_registration_id(f),
             "aircraft_type": f.get("aircraftType") or f.get("aircraftTypeId") or "",
-            "service_type": f.get("serviceTypeDescription") or "",
+            "service_type": (
+                f.get("flightTypeDescription")
+                or f.get("flightType")
+                or f.get("serviceTypeDescription")
+                or ""
+            ),
+            "flight_type": f.get("flightTypeDescription") or f.get("flightType") or "",
             "flight_status": f.get("flightStatusDescription") or f.get("flightStatusId") or "",
             "crew": f.get("crewComposition") or "",
             "route": f.get("routeDescription") or "",
@@ -1330,6 +1457,10 @@ def api_dcs_gantt_data():
         _propagate_through_pax(rows)
     except Exception as e:
         current_app.logger.warning(f"api_dcs_gantt_data: _propagate_through_pax failed: {e}")
+    try:
+        _apply_charter_manifests(rows)
+    except Exception as e:
+        current_app.logger.warning(f"api_dcs_gantt_data: _apply_charter_manifests failed: {e}")
 
     # 6) APG plan presence
     try:
@@ -1399,6 +1530,8 @@ def api_dcs_gantt_data():
             "defect_total": r.get("defect_total"),
             "block_mins": r.get("block_mins") or 0,
             "aircraft_type": r.get("aircraft_type"),
+            "service_type": r.get("service_type"),
+            "flight_type": r.get("flight_type"),
             "flight_status": r.get("flight_status"),
             "adt": r.get("adt") or 0,
             "chd": r.get("chd") or 0,
@@ -1406,6 +1539,9 @@ def api_dcs_gantt_data():
             "pax_count": r.get("pax_count") or 0,
             "bags_kg": float(r.get("bags_kg") or 0),
             "pax_list": r.get("pax_list") or [],
+            "charter_manifest_uploaded": bool(r.get("charter_manifest_uploaded")),
+            "charter_manifest_filename": r.get("charter_manifest_filename") or "",
+            "charter_manifest_updated_at": r.get("charter_manifest_updated_at"),
             "dcs_linked": bool(r.get("dcs_linked")),
             "envision_flight_id": r.get("envision_flight_id"),
             "delays": r.get("delays") or [],   # <-- NEW: ship delays to JS
