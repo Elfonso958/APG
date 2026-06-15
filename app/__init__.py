@@ -60,6 +60,64 @@ def _should_start_scheduler(app: Flask) -> bool:
         return True
     return os.environ.get("WERKZEUG_RUN_MAIN") == "true"
 
+
+def _normalise_sync_result(res: dict | None) -> dict:
+    res = res or {}
+
+    created = int(res.get("created") or 0)
+    skipped = int(res.get("skipped") or 0)
+    warnings = int(res.get("warnings") or 0)
+    flights = res.get("flights") or []
+    successful_events = sum(
+        1 for f in flights
+        if f.get("result") in {"created", "updated", "deleted", "skipped"}
+    )
+    failed_events = sum(1 for f in flights if f.get("result") == "failed")
+
+    if created == 0 and skipped == 0 and flights:
+        created = sum(1 for f in flights if f.get("result") in {"created", "updated"})
+        skipped = sum(1 for f in flights if f.get("result") == "skipped")
+
+    error_msg = (res.get("error") or "").strip()
+    log_tail = (res.get("log_tail") or "").strip()
+
+    if error_msg:
+        ok_flag = False
+    elif res.get("ok") is False:
+        ok_flag = False
+    elif failed_events and not successful_events:
+        ok_flag = False
+    else:
+        ok_flag = True
+
+    if not log_tail:
+        if error_msg:
+            log_tail = error_msg
+        elif failed_events and not successful_events:
+            log_tail = f"Sync finished with {failed_events} failed flight event(s)."
+        elif created == 0 and skipped == 0 and warnings == 0:
+            if successful_events:
+                log_tail = (
+                    f"Sync completed - {successful_events} flight event(s) recorded, "
+                    "but summary counters were missing."
+                )
+            else:
+                log_tail = "Sync completed - no flights found in this window."
+        else:
+            log_tail = (
+                f"Sync completed - created={created}, skipped={skipped}, "
+                f"warnings={warnings}."
+            )
+
+    return {
+        "ok": ok_flag,
+        "created": created,
+        "skipped": skipped,
+        "warnings": warnings,
+        "error": error_msg or None,
+        "log_tail": log_tail,
+    }
+
 def create_app():
     app = Flask(__name__, static_folder="static", template_folder="templates")
     app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1, x_prefix=1)
@@ -180,20 +238,8 @@ def create_app():
                     run = SyncRun(started_at=datetime.utcnow(), run_type="auto", initiated_by="scheduler")
                     _db.session.add(run); _db.session.commit()
 
-                    res = run_sync_once_return_summary()
-
-                    run.finished_at = datetime.utcnow()
-                    run.ok = bool(res.get("ok"))
-                    run.created = res.get("created")
-                    run.skipped = res.get("skipped")
-                    run.warnings = res.get("warnings")
-                    run.log_tail = res.get("log_tail")
-                    run.error = res.get("error")
-                    run.window_from_local = res.get("window_from_local")
-                    run.window_to_local   = res.get("window_to_local")
-                    run.window_from_utc   = res.get("window_from_utc")
-                    run.window_to_utc     = res.get("window_to_utc")
-                    _db.session.add(run); _db.session.commit()
+                    res = run_sync_once_return_summary() or {}
+                    outcome = _normalise_sync_result(res)
 
                     for ev in (res.get("flights") or []):
                         row = SyncFlightLog(
@@ -227,6 +273,18 @@ def create_app():
                         )
                         _db.session.add(row)
 
+                    run.finished_at = datetime.utcnow()
+                    run.ok = outcome["ok"]
+                    run.created = outcome["created"]
+                    run.skipped = outcome["skipped"]
+                    run.warnings = outcome["warnings"]
+                    run.log_tail = outcome["log_tail"]
+                    run.error = outcome["error"]
+                    run.window_from_local = res.get("window_from_local")
+                    run.window_to_local   = res.get("window_to_local")
+                    run.window_from_utc   = res.get("window_from_utc")
+                    run.window_to_utc     = res.get("window_to_utc")
+                    _db.session.add(run)
                     _db.session.commit()
 
                     cfg.last_auto_finished = datetime.utcnow()

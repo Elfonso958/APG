@@ -4,7 +4,7 @@ import io
 import json
 from flask import Blueprint, request, abort, send_file, make_response, current_app, jsonify, Response, render_template, session
 from datetime import datetime, timezone, timedelta, date
-from . import db
+from . import db, _normalise_sync_result
 import requests
 from sqlalchemy import func
 from zoneinfo import ZoneInfo
@@ -20,6 +20,7 @@ from .sync.envision_apg_sync import (
     update_apg_plan_from_dcs_row,
     apg_plan_get,
     apg_plan_ofp,
+    apg_plan_runway_analysis,
     apg_aircraft_get,
     envision_update_flight_times,
     envision_get_flight_times,
@@ -1028,41 +1029,15 @@ def api_sync_run_once():
     # --------------------------------------------------
 
     # --- Normalise counters and text fields ---
-    created  = int(res.get("created")  or 0)
-    skipped  = int(res.get("skipped")  or 0)
-    warnings = int(res.get("warnings") or 0)
-
-    error_msg = (res.get("error")    or "").strip()
-    log_tail  = (res.get("log_tail") or "").strip()
-
-    ok_flag = None
-    if error_msg:
-        ok_flag = False
-    elif res.get("ok") is True:
-        ok_flag = True
-    elif res.get("ok") is False:
-        ok_flag = False
-    else:
-        ok_flag = True
-
-    if not log_tail:
-        if error_msg:
-            log_tail = error_msg
-        elif created == 0 and skipped == 0 and warnings == 0:
-            log_tail = "Sync completed – no flights found in this window."
-        else:
-            log_tail = (
-                f"Sync completed – created={created}, skipped={skipped}, "
-                f"warnings={warnings}."
-            )
+    outcome = _normalise_sync_result(res)
 
     run.finished_at = datetime.utcnow()
-    run.ok          = ok_flag
-    run.created     = created
-    run.skipped     = skipped
-    run.warnings    = warnings
-    run.error       = error_msg or None
-    run.log_tail    = log_tail
+    run.ok          = outcome["ok"]
+    run.created     = outcome["created"]
+    run.skipped     = outcome["skipped"]
+    run.warnings    = outcome["warnings"]
+    run.error       = outcome["error"]
+    run.log_tail    = outcome["log_tail"]
 
     run.window_from_local = res.get("window_from_local")
     run.window_to_local   = res.get("window_to_local")
@@ -1821,6 +1796,16 @@ def api_dcs_push_to_apg():
     # Basic validation (same as before)
     if not plan_id:
         return jsonify({"ok": False, "error": "Missing apg_plan_id"}), 400
+    try:
+        plan_id_int = int(plan_id)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Bad apg_plan_id"}), 400
+
+    env_id_raw = data.get("envision_flight_id")
+    try:
+        envision_flight_id = int(env_id_raw) if env_id_raw not in (None, "") else None
+    except (TypeError, ValueError):
+        envision_flight_id = None
 
     if not (dep and flight_date and designator and flight_no):
         return jsonify({
@@ -1840,6 +1825,7 @@ def api_dcs_push_to_apg():
     dcs_flight = {
         "Origin": dep,
         "FlightDate": nz_day.isoformat(),
+        "reg": reg,
         "OperatingAirline": {
             "AirlineDesignator": designator,
             "FlightNumber": flight_no,
@@ -1869,7 +1855,7 @@ def api_dcs_push_to_apg():
     try:
         result = update_apg_plan_from_dcs_row(
             bearer=bearer,
-            plan_id=int(plan_id),
+            plan_id=plan_id_int,
             dcs_flight=dcs_flight,
             cargo_loads=cargo_loads,
             cargo_station_label=cargo_station_label or None,
@@ -1879,6 +1865,29 @@ def api_dcs_push_to_apg():
     except Exception as e:
         logger.exception("update_apg_plan_from_dcs_row crashed")
         return jsonify({"ok": False, "error": f"APG update failed: {e}"}), 500
+
+    if not preview_only and envision_flight_id is not None:
+        try:
+            state = SyncFlightState.query.filter_by(
+                envision_flight_id=str(envision_flight_id)
+            ).first()
+            now = datetime.utcnow()
+            if state is None:
+                state = SyncFlightState(
+                    envision_flight_id=str(envision_flight_id),
+                    created_at=now,
+                )
+            state.apg_id = plan_id_int
+            state.updated_at = now
+            db.session.add(state)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            current_app.logger.warning(
+                "Failed to persist APG plan link for Envision flight %s",
+                envision_flight_id,
+                exc_info=True,
+            )
 
     # --- Only generate + upload manifest in LIVE mode (not preview) ---
     # --- Only generate + upload manifest in LIVE mode (not preview) ---
@@ -1900,12 +1909,6 @@ def api_dcs_push_to_apg():
             plan_version = 1
 
         # --- Build the SAME HTML as preview (includes crew + nice layout) ---
-        env_id_raw = data.get("envision_flight_id")
-        try:
-            envision_flight_id = int(env_id_raw) if env_id_raw is not None else None
-        except (TypeError, ValueError):
-            envision_flight_id = None
-
         try:
             html, _flight_ctx = _build_manifest_html_and_ctx(
                 dep=dep,
@@ -1944,18 +1947,18 @@ def api_dcs_push_to_apg():
             flight_code = f"{designator}{flight_no}".upper()
             route_str   = f"{dep}-{ades or 'UNK'}"
             date_local  = nz_day.isoformat()
-            manifest_version = _peek_manifest_upload_version(int(plan_id))
+            manifest_version = _peek_manifest_upload_version(plan_id_int)
             filename    = f"{flight_code} - {route_str} - {date_local} v{manifest_version}.pdf"
 
             try:
                 manifest_resp = apg_upload_manifest_pdf(
                     bearer=bearer,
-                    plan_id=int(plan_id),
+                    plan_id=plan_id_int,
                     pdf_bytes=manifest_pdf,
                     filename=filename,
                 )
                 manifest_version = _record_manifest_upload_success(
-                    int(plan_id),
+                    plan_id_int,
                     _manifest_upload_doc_id(manifest_resp),
                 )
             except Exception as e:
@@ -1980,6 +1983,9 @@ def api_dcs_push_to_apg():
     return jsonify({
         "ok": True,
         "mode": "live",
+        "apg_plan_id": plan_id_int,
+        "plan_id": plan_id_int,
+        "envision_flight_id": envision_flight_id,
         "apg_response": result,
         "manifest_uploaded": manifest_uploaded,
         "manifest_doc_id": doc_id,
@@ -2018,6 +2024,185 @@ def api_apg_plan_cargo_summary(plan_id: int):
         except (TypeError, ValueError):
             return default
 
+    def first_value(d, *keys):
+        if not isinstance(d, dict):
+            return None
+        lower = {str(k).lower(): v for k, v in d.items()}
+        for key in keys:
+            if key in d and d[key] not in (None, ""):
+                return d[key]
+            val = lower.get(str(key).lower())
+            if val not in (None, ""):
+                return val
+        return None
+
+    def walk_dicts(obj):
+        if isinstance(obj, dict):
+            yield obj
+            for value in obj.values():
+                yield from walk_dicts(value)
+        elif isinstance(obj, list):
+            for item in obj:
+                yield from walk_dicts(item)
+
+    def clean_text(value):
+        if value in (None, ""):
+            return ""
+        return str(value).strip()
+
+    def runway_info_from_dict(d):
+        runway = first_value(
+            d,
+            "runway", "rwy", "runwayIdent", "runwayIdentifier", "runwayName",
+            "departureRunway", "arrivalRunway",
+        )
+        airport = first_value(
+            d,
+            "airport", "aerodrome", "icao", "icaoCode", "airportIcao",
+            "adep", "ades", "departure", "destination",
+        )
+        max_weight = first_value(
+            d,
+            "maxToWeight", "maxTakeoffWeight", "max_takeoff_weight",
+            "maxTOW", "maxTow", "mtow", "towLimit", "takeoffLimit",
+            "maxLdgWeight", "maxLandingWeight", "max_landing_weight",
+            "maxLDW", "maxLdw", "mldw", "landingLimit",
+            "limitWeight",
+        )
+        if not (runway or max_weight):
+            return None
+        return {
+            "airport": clean_text(airport),
+            "runway": clean_text(runway),
+            "eop": clean_text(first_value(d, "eop", "endOfPath", "engineOutProcedure")),
+            "procedure": clean_text(first_value(d, "sid", "star", "procedure", "departureProcedure", "arrivalProcedure")),
+            "flaps": clean_text(first_value(d, "flaps", "flap", "configuration")),
+            "limit_code": clean_text(first_value(d, "limit", "limitCode", "limit_code", "limitedBy")),
+            "max_weight": to_float(max_weight, default=None),
+            "plan_weight": to_float(first_value(
+                d,
+                "planToWeight", "planTakeoffWeight", "plannedTakeoffWeight",
+                "actualLdgWeight", "actualLandingWeight", "plannedLandingWeight",
+            ), default=None),
+            "raw_keys": sorted(str(k) for k in d.keys())[:40],
+        }
+
+    def extract_runway_analysis(plan_obj, ofp_obj, runway_obj=None):
+        found = {"departure": None, "arrival": None}
+        rwa = (((plan_obj or {}).get("options") or {}).get("rwa_options") or {})
+        adep_rwy = rwa.get("adep") if isinstance(rwa.get("adep"), dict) else {}
+        ades_rwy = rwa.get("ades") if isinstance(rwa.get("ades"), dict) else {}
+        emergency_rwy = rwa.get("emergency") if isinstance(rwa.get("emergency"), dict) else {}
+
+        def selected_runway_info(section_key, selected):
+            if not selected:
+                return None
+            runway_name = clean_text(selected.get("runway"))
+            sections = ((runway_obj or {}).get("sections") or {})
+            section = sections.get(section_key) or {}
+            rows = section.get("runways") or []
+            match = None
+            for row in rows:
+                if clean_text(row.get("name")).upper() == runway_name.upper():
+                    match = row
+                    break
+            if match is None and runway_name:
+                for row in rows:
+                    analysis_runway = (((row.get("runwayInfo") or {}).get("Analysis") or {}).get("Runway") or {})
+                    if clean_text(analysis_runway.get("Runway")).upper() == runway_name.upper():
+                        match = row
+                        break
+            if match is None:
+                return None
+
+            analysis = ((match.get("runwayInfo") or {}).get("Analysis") or {})
+            runway_data = analysis.get("Runway") or {}
+            vspeeds = (match.get("runwayInfo") or {}).get("VSpeeds") or {}
+            ld_distance = (match.get("runwayInfo") or {}).get("LDDistance") or {}
+            emergency = analysis.get("EmergencyReturnResult") or vspeeds.get("EmergencyReturnResult") or {}
+            max_weight = to_float(analysis.get("WeightLimit"), default=None)
+            if section_key == "emergency":
+                max_weight = to_float(emergency.get("MaxWeight"), default=max_weight)
+            plan_weight = to_float(
+                vspeeds.get("WeightUsed"),
+                default=to_float(ld_distance.get("WeightUsed"), default=None),
+            )
+            return {
+                "airport": clean_text(selected.get("icao") or match.get("airport_code")),
+                "runway": clean_text(runway_data.get("Runway") or match.get("name") or runway_name),
+                "eop": clean_text(runway_data.get("RunwayType") if section_key == "adep" else ""),
+                "procedure": "",
+                "flaps": clean_text(", ".join((selected.get("options") or {}).get("flaps") or [])),
+                "limit_code": clean_text(
+                    analysis.get("WeightLimitCode")
+                    or emergency.get("PerfLimitCode")
+                    or emergency.get("MaxWeightErrorCode")
+                ),
+                "limit_reason": clean_text(
+                    analysis.get("WeightLimitReason")
+                    or emergency.get("PerfLimitDescription")
+                    or emergency.get("MaxWeightErrorMessage")
+                ),
+                "max_weight": max_weight if max_weight and max_weight > 0 else None,
+                "plan_weight": plan_weight if plan_weight and plan_weight > 0 else None,
+                "tora": to_float(runway_data.get("TORA"), default=to_float(match.get("tora"), default=None)),
+                "lda": to_float(runway_data.get("LDA"), default=to_float(match.get("lda"), default=None)),
+                "source": "apg_runway_analysis",
+                "raw_keys": sorted(str(k) for k in match.keys())[:40],
+            }
+
+        if adep_rwy:
+            found["departure"] = {
+                "airport": clean_text(adep_rwy.get("icao")),
+                "runway": clean_text(adep_rwy.get("runway")),
+                "eop": "",
+                "procedure": "",
+                "flaps": clean_text(", ".join((adep_rwy.get("options") or {}).get("flaps") or [])),
+                "limit_code": "",
+                "max_weight": None,
+                "plan_weight": None,
+                "source": "selected_runway",
+                "raw_keys": sorted(str(k) for k in adep_rwy.keys())[:40],
+            }
+        if ades_rwy:
+            found["arrival"] = {
+                "airport": clean_text(ades_rwy.get("icao")),
+                "runway": clean_text(ades_rwy.get("runway")),
+                "eop": "",
+                "procedure": "",
+                "flaps": clean_text(", ".join((ades_rwy.get("options") or {}).get("flaps") or [])),
+                "limit_code": "",
+                "max_weight": None,
+                "plan_weight": None,
+                "source": "selected_runway",
+                "raw_keys": sorted(str(k) for k in ades_rwy.keys())[:40],
+            }
+        selected_departure = selected_runway_info("adep", adep_rwy)
+        selected_arrival = selected_runway_info("ades", ades_rwy)
+        selected_emergency = selected_runway_info("emergency", emergency_rwy)
+        if selected_departure:
+            found["departure"] = {**(found["departure"] or {}), **selected_departure}
+        if selected_arrival:
+            found["arrival"] = {**(found["arrival"] or {}), **selected_arrival}
+        if selected_emergency:
+            found["emergency_return"] = selected_emergency
+        for source in (plan_obj, ofp_obj):
+            for d in walk_dicts(source):
+                info = runway_info_from_dict(d)
+                if not info or not info.get("max_weight"):
+                    continue
+                text = " ".join(str(v).lower() for v in d.values() if isinstance(v, (str, int, float)))
+                keys = " ".join(str(k).lower() for k in d.keys())
+                is_arrival = any(token in text or token in keys for token in ("landing", "ldg", "arrival", "ades", "star"))
+                is_departure = any(token in text or token in keys for token in ("takeoff", "take-off", "departure", "adep", "sid", "eop"))
+                if is_arrival and not (found["arrival"] and found["arrival"].get("max_weight")):
+                    found["arrival"] = info
+                elif is_departure and not (found["departure"] and found["departure"].get("max_weight")):
+                    found["departure"] = info
+                elif not found["departure"]:
+                    found["departure"] = info
+        return found
+
     try:
         auth = apg_login(APG_EMAIL, APG_PASSWORD)
         bearer = auth["authorization"]
@@ -2038,6 +2223,14 @@ def api_apg_plan_cargo_summary(plan_id: int):
     except Exception as e:
         current_app.logger.warning("APG plan/ofp failed for cargo summary: %s", e)
         ofp_error = str(e)
+
+    runway_data = {}
+    runway_error = None
+    try:
+        runway_data = apg_plan_runway_analysis(plan_id)
+    except Exception as e:
+        current_app.logger.warning("APG runway analysis failed for cargo summary: %s", e)
+        runway_error = str(e)
 
     mb = plan.get("massAndBalance") or {}
     loading = mb.get("loading") or []
@@ -2087,6 +2280,7 @@ def api_apg_plan_cargo_summary(plan_id: int):
     fuel_legal = fuel_summary.get("legal") or {}
     route_main = ((ofp.get("routes") or {}).get("main") or {})
     route_waypoints = route_main.get("waypoints") or []
+    runway_analysis = extract_runway_analysis(plan, ofp, runway_data)
 
     current_zfw = 0.0
     dow_mass = 0.0
@@ -2138,15 +2332,26 @@ def api_apg_plan_cargo_summary(plan_id: int):
     mzfw = to_float(limits.get("mzfm"))
     mtom = to_float(limits.get("mtom"))
     mldgm = to_float(limits.get("mldgm"))
+    runway_tow_limit = to_float((runway_analysis.get("departure") or {}).get("max_weight"), default=None)
+    runway_ldw_limit = to_float((runway_analysis.get("arrival") or {}).get("max_weight"), default=None)
 
-    def build_metric(current, limit, code, label):
-        remaining = limit - current if limit > 0 else None
-        percent = ((current / limit) * 100.0) if limit > 0 else None
+    def build_metric(current, structural_limit, code, label, runway_limit=None):
+        effective_limit = structural_limit
+        source = "structural"
+        if runway_limit and runway_limit > 0:
+            if not effective_limit or runway_limit < effective_limit:
+                effective_limit = runway_limit
+                source = "runway"
+        remaining = effective_limit - current if effective_limit and effective_limit > 0 else None
+        percent = ((current / effective_limit) * 100.0) if effective_limit and effective_limit > 0 else None
         return {
             "code": code,
             "label": label,
             "current": current,
-            "limit": limit if limit > 0 else None,
+            "limit": effective_limit if effective_limit and effective_limit > 0 else None,
+            "limit_source": source,
+            "structural_limit": structural_limit if structural_limit and structural_limit > 0 else None,
+            "runway_limit": runway_limit if runway_limit and runway_limit > 0 else None,
             "remaining": remaining,
             "percent_of_limit": percent,
         }
@@ -2177,9 +2382,10 @@ def api_apg_plan_cargo_summary(plan_id: int):
                 "percent_of_limit": None,
             },
             "zfw": build_metric(current_zfw, mzfw, "ZFW", "Zero Fuel Weight"),
-            "tow": build_metric(current_tow, mtom, "TOW", "Takeoff Weight"),
-            "ldw": build_metric(current_ldw, mldgm, "LDW", "Landing Weight"),
+            "tow": build_metric(current_tow, mtom, "TOW", "Takeoff Weight", runway_tow_limit),
+            "ldw": build_metric(current_ldw, mldgm, "LDW", "Landing Weight", runway_ldw_limit),
         },
+        "runway_analysis": runway_analysis,
         "fuel": {
             "block": fuel_mass,
             "taxi": taxi_fuel,
@@ -2187,6 +2393,7 @@ def api_apg_plan_cargo_summary(plan_id: int):
         },
         "fixed_operational_mass": fixed_operational_mass,
         "ofp_error": ofp_error,
+        "runway_analysis_error": runway_error,
         "aircraft_error": aircraft_error,
         "aircraft_id": aircraft_id,
     })

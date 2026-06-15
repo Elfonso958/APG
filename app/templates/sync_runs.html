@@ -70,7 +70,7 @@
           {% set dot_class = "dot-err" %}
         {% endif %}
         {% set warn = (r.warnings or 0) > 0 %}
-        <tr class="run-row" data-href="/sync/runs/{{ r.id }}">
+        <tr class="run-row" data-href="{{ url_for('ui.sync_run_detail', rid=r.id) }}">
           <td>
             <span class="status-pill {{ status_class }}">
               <span class="status-dot {{ dot_class }}"></span>
@@ -106,7 +106,7 @@
           </td>
           <td>{{ r.initiated_by or '-' }}</td>
           <td class="right">
-            <a class="btn secondary btn-sm" href="/sync/runs/{{ r.id }}">View</a>
+            <a class="btn secondary btn-sm" href="{{ url_for('ui.sync_run_detail', rid=r.id) }}">View</a>
           </td>
         </tr>
         {% endfor %}

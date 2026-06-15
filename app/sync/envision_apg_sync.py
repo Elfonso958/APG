@@ -21,6 +21,7 @@ import argparse
 import hashlib
 import base64
 import threading
+from html.parser import HTMLParser
 from urllib.parse import urlparse
 CACHE_FILE = os.getenv("SYNC_CACHE_FILE", ".apg_sync_cache.json")
 
@@ -1259,22 +1260,32 @@ def is_freight_flight(envision_flight: dict) -> bool:
     return any(k in desc for k in FREIGHT_KEYWORDS)
 
 def _plan_id_from_row(row: dict) -> Optional[int]:
-    for k in ("id", "plan_id", "planId"):
-        if k in row and row[k] is not None:
+    for k in ("id", "plan_id", "planId", "route_id", "routeId", "routeID"):
+        value = _first_any(row, k)
+        if value is not None:
             try:
-                return int(row[k])
+                return int(value)
             except Exception:
                 pass
     return None
 
 def _plan_key_from_apg_row(row: dict) -> Optional[tuple[str, str, str, Optional[str]]]:
-    flight_no = normalize_flight_no((row.get("flight_no") or row.get("flightNo") or row.get("callsign") or "").strip())
-    adep = (row.get("adep") or row.get("dep") or row.get("from") or row.get("origin") or "").strip().upper()
-    ades = (row.get("ades") or row.get("dest") or row.get("to") or row.get("destination") or "").strip().upper()
-    # Try multiple EOBT-ish fields
-    eobt_raw = (row.get("eobt") or row.get("off_block_time") or row.get("off_block_time_utc")
-                or row.get("etd") or row.get("std"))
-    eobt_key = _canon_eobt_to_utc_min_str(eobt_raw)
+    flight_no = normalize_flight_no(str(_first_any(
+        row,
+        "flight_no", "flightNo", "flight_number", "flightNumber",
+        "flight", "callsign", "callSign",
+    ) or "").strip())
+    adep = (to_icao(_first_any(
+        row,
+        "adep", "dep", "from", "origin", "departure",
+        "departure_aerodrome", "departureAerodrome",
+    )) or "").strip().upper()
+    ades = (to_icao(_first_any(
+        row,
+        "ades", "dest", "to", "destination", "arrival",
+        "arrival_aerodrome", "arrivalAerodrome",
+    )) or "").strip().upper()
+    eobt_key = _apg_plan_eobt_key_from_row(row)
     if not (flight_no and adep and ades and eobt_key):
         return None
     return (flight_no, adep, ades, eobt_key)
@@ -1304,7 +1315,7 @@ def build_existing_plan_index(
                 dt = datetime.strptime(key[3], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc) if key[3] else None
             except Exception:
                 dt = None
-            if not dt or not (window_from_utc <= dt <= window_to_utc):
+            if not _dt_in_apg_link_window(dt, window_from_utc, window_to_utc):
                 continue
             pid = _plan_id_from_row(p)
             index[key] = pid
@@ -2638,6 +2649,30 @@ def _first(d: dict, *keys: str):
     for k in keys:
         if k in d and d[k] not in (None, ""):
             return d[k]
+    lower_map = {str(k).lower(): v for k, v in d.items()}
+    for k in keys:
+        val = lower_map.get(str(k).lower())
+        if val not in (None, ""):
+            return val
+    return None
+
+
+def _plan_row_dicts(row: dict):
+    yield row
+    by_lower = {str(k).lower(): v for k, v in row.items()}
+    for key in ("route", "plan", "flight", "data"):
+        nested = row.get(key)
+        if nested is None:
+            nested = by_lower.get(key)
+        if isinstance(nested, dict):
+            yield nested
+
+
+def _first_any(row: dict, *keys: str):
+    for source in _plan_row_dicts(row):
+        val = _first(source, *keys)
+        if val not in (None, ""):
+            return val
     return None
 
 
@@ -2671,17 +2706,103 @@ def _canon_eobt_to_utc_min_str(dt_or_str: Optional[Union[str, int, float, dateti
         return None
 
 
+def _parse_apg_date_value(value) -> Optional[date]:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    s = str(value).strip()
+    if not s:
+        return None
+    if "T" in s:
+        key = _canon_eobt_to_utc_min_str(s)
+        dt = _utc_min_dt_from_key(key)
+        return dt.date() if dt else None
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%b %d, %Y", "%B %d, %Y", "%d %b %Y", "%d %B %Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_apg_time_value(value) -> Optional[tuple[int, int, bool]]:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return (value.hour, value.minute, value.tzinfo is not None)
+    if not isinstance(value, str) and hasattr(value, "hour") and hasattr(value, "minute"):
+        return (value.hour, value.minute, value.tzinfo is not None)
+    s = str(value).strip().upper()
+    if not s:
+        return None
+    is_local = s.endswith("L") or "LOCAL" in s
+    s = s.replace("UTC", "").replace("(Z)", "").replace("Z", "").replace("LOCAL", "").rstrip("L").strip()
+    m = re.search(r"(\d{1,2})(?::?(\d{2}))?", s)
+    if not m:
+        return None
+    hour = int(m.group(1))
+    minute = int(m.group(2) or 0)
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return (hour, minute, is_local)
+
+
+def _apg_plan_eobt_key_from_row(row: dict) -> Optional[str]:
+    eobt_raw = _first_any(
+        row,
+        "eobt", "eobt_utc", "eobtUtc", "eobt_local", "eobtLocal",
+        "off_block_time", "off_block_time_utc", "offBlockTime", "offBlockTimeUtc",
+        "etd", "etd_utc", "std", "std_utc", "departure_time", "departureTime",
+    )
+    eobt_key = _canon_eobt_to_utc_min_str(eobt_raw)
+    if eobt_key:
+        return eobt_key
+
+    date_raw = _first_any(
+        row,
+        "date_of_flight", "dateOfFlight", "flight_date", "flightDate",
+        "dof", "date", "utc_date", "utcDate",
+    )
+    time_raw = _first_any(
+        row,
+        "eobt_time_utc", "eobtTimeUtc", "time_utc", "timeUtc",
+        "eobt_time", "eobtTime", "time", "utc_time", "utcTime",
+    )
+    day = _parse_apg_date_value(date_raw)
+    parsed_time = _parse_apg_time_value(time_raw)
+    if not day or not parsed_time:
+        return None
+    hour, minute, is_local = parsed_time
+    tz = _get_local_tz() if is_local else timezone.utc
+    dt = datetime(day.year, day.month, day.day, hour, minute, tzinfo=tz)
+    return _canon_eobt_to_utc_min_str(dt)
+
+
 
 def _plan_key_from_apg_row(row: dict) -> Optional[tuple[str, str, str, Optional[str]]]:
     """
     Extracts the matching key tuple from an APG plan row:
       (flight_no_norm, ADEP, ADES, EOBT_key)
     """
-    flight_no = normalize_flight_no(_first(row, "flight_no", "flightNo", "callsign") or "")
-    adep = (_first(row, "adep", "dep", "from", "origin") or "").strip().upper()
-    ades = (_first(row, "ades", "dest", "to", "destination") or "").strip().upper()
-    eobt_raw = _first(row, "eobt", "off_block_time", "etd", "std")
-    eobt_key = _canon_eobt_to_utc_min_str(eobt_raw if isinstance(eobt_raw, (str, datetime)) else None)
+    flight_no = normalize_flight_no(_first_any(
+        row,
+        "flight_no", "flightNo", "flight_number", "flightNumber",
+        "flight", "callsign", "callSign",
+    ) or "")
+    adep = (to_icao(_first_any(
+        row,
+        "adep", "dep", "from", "origin", "departure",
+        "departure_aerodrome", "departureAerodrome",
+    )) or "").strip().upper()
+    ades = (to_icao(_first_any(
+        row,
+        "ades", "dest", "to", "destination", "arrival",
+        "arrival_aerodrome", "arrivalAerodrome",
+    )) or "").strip().upper()
+    eobt_key = _apg_plan_eobt_key_from_row(row)
 
     if not flight_no or not adep or not ades or not eobt_key:
         return None
@@ -2853,6 +2974,156 @@ def apg_plan_ofp(bearer: str, plan_id: int) -> dict:
         raise RuntimeError(f"APG plan/ofp error: {status.get('message', 'unknown')}")
     return data.get("data") or {}
 
+
+class _APGRouteFormParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.in_route_form = False
+        self.form_depth = 0
+        self.pairs: list[tuple[str, str]] = []
+        self._textarea_name: Optional[str] = None
+        self._textarea_text: list[str] = []
+        self._select_name: Optional[str] = None
+        self._select_options: list[tuple[str, bool, str]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+        tag = tag.lower()
+        attr = {k: (v if v is not None else "") for k, v in attrs}
+        if tag == "form" and attr.get("id") == "route-form":
+            self.in_route_form = True
+            self.form_depth = 1
+        elif self.in_route_form and tag == "form":
+            self.form_depth += 1
+
+        if not self.in_route_form:
+            return
+
+        if tag == "input":
+            name = attr.get("name")
+            if not name:
+                return
+            input_type = (attr.get("type") or "").lower()
+            if input_type in {"checkbox", "radio"} and "checked" not in attr:
+                return
+            self.pairs.append((name, attr.get("value", "")))
+        elif tag == "textarea":
+            self._textarea_name = attr.get("name") or None
+            self._textarea_text = []
+        elif tag == "select":
+            self._select_name = attr.get("name") or None
+            self._select_options = []
+        elif tag == "option" and self._select_name:
+            self._select_options.append((attr.get("value", ""), "selected" in attr, ""))
+
+    def handle_data(self, data: str) -> None:
+        if self._textarea_name:
+            self._textarea_text.append(data)
+        if self._select_name and self._select_options:
+            value, selected, text = self._select_options[-1]
+            self._select_options[-1] = (value, selected, text + data)
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if not self.in_route_form:
+            return
+        if tag == "textarea" and self._textarea_name:
+            self.pairs.append((self._textarea_name, "".join(self._textarea_text)))
+            self._textarea_name = None
+            self._textarea_text = []
+        elif tag == "select" and self._select_name:
+            selected = [opt for opt in self._select_options if opt[1]]
+            if not selected and self._select_options:
+                selected = [self._select_options[0]]
+            for value, _is_selected, text in selected:
+                self.pairs.append((self._select_name, value if value != "" else text.strip()))
+            self._select_name = None
+            self._select_options = []
+        elif tag == "form":
+            self.form_depth -= 1
+            if self.form_depth <= 0:
+                self.in_route_form = False
+
+
+def _apg_web_base_url() -> str:
+    parsed = urlparse(APG_BASE)
+    if not parsed.scheme or not parsed.netloc:
+        return "https://fly.rocketroute.com"
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def apg_plan_runway_analysis(plan_id: int) -> dict:
+    """
+    Pull the same APG Runway Analysis JSON used by the APG route page.
+    /plan/get exposes selected runways, but the calculated limits are loaded
+    by APG's web route page via /route/ajaxrunwayanalysis.
+    """
+    if not APG_EMAIL or not APG_PASSWORD:
+        raise RuntimeError("APG_EMAIL/APG_PASSWORD are required for runway analysis")
+
+    base = _apg_web_base_url()
+    session = requests.Session()
+    route_id = int(plan_id)
+    login_resp = session.post(
+        f"{base}/login",
+        data={
+            "then": f"/route/{route_id}",
+            "formData[login]": APG_EMAIL,
+            "formData[pwd]": APG_PASSWORD,
+            "formData[keep_logged]": "1",
+        },
+        timeout=60,
+        allow_redirects=True,
+    )
+    login_resp.raise_for_status()
+    if "sign-in-form" in (login_resp.text or ""):
+        raise RuntimeError("APG web login failed for runway analysis")
+
+    route_resp = login_resp
+    if f"/route/{route_id}" not in (route_resp.url or ""):
+        route_resp = session.get(f"{base}/route/{route_id}", timeout=60)
+        route_resp.raise_for_status()
+
+    parser = _APGRouteFormParser()
+    parser.feed(route_resp.text or "")
+    form_pairs = parser.pairs
+    if not form_pairs:
+        raise RuntimeError("APG route form not found for runway analysis")
+
+    form_values = dict(form_pairs)
+    rwa_json = form_values.get("formData[rwaData]")
+    if not rwa_json:
+        raise RuntimeError("APG route form did not include runway-analysis options")
+
+    perf_resp = session.post(
+        f"{base}/route/ajaxrunwayanalysis/action/getPerformanceTail",
+        data=form_pairs,
+        timeout=60,
+    )
+    perf_resp.raise_for_status()
+    perf = perf_resp.json() or {}
+    if not perf.get("success"):
+        raise RuntimeError(f"APG runway-analysis performance error: {perf.get('message') or perf.get('error') or 'unknown'}")
+
+    perf_data = perf.get("data") or {}
+    ra_payload = {
+        "rwaOptions": json.loads(rwa_json),
+        "performance": {
+            "default": perf_data.get("defaultPerformance"),
+            "units": ((perf_data.get("performance") or {}).get("units") or {}),
+        },
+    }
+    runways_resp = session.post(
+        f"{base}/route/ajaxrunwayanalysis/action/getRunwaysInfo",
+        data=form_pairs + [("ra_data", json.dumps(ra_payload))],
+        timeout=90,
+    )
+    runways_resp.raise_for_status()
+    runways = runways_resp.json() or {}
+    if not runways.get("success"):
+        raise RuntimeError(f"APG runway-analysis error: {runways.get('message') or runways.get('error') or 'unknown'}")
+    return runways.get("data") or {}
+
+
 def apg_aircraft_get(bearer: str, aircraft_id: int) -> dict:
     """
     Fetch APG aircraft details, including massAndBalance limits, for a customer aircraft.
@@ -2970,7 +3241,8 @@ def update_apg_plan_from_dcs_row(
     loading = [dict(st) for st in loading]
 
     # --- 2) Apply DCS passengers onto APG passenger rows ---
-    apply_dcs_passengers_to_apg_rows(loading, dcs_flight)
+    aircraft_reg = _extract_aircraft_reg(dcs_flight, plan)
+    apply_dcs_passengers_to_apg_rows(loading, dcs_flight, aircraft_reg=aircraft_reg)
 
     # --- 3) Optional baggage update from DCS ---
     total_bags_kg = 0.0
@@ -3005,11 +3277,18 @@ def update_apg_plan_from_dcs_row(
             }
         ]
 
+    is_atr_row_layout = _is_atr_row_loading_layout(loading, aircraft_reg=aircraft_reg)
+
+    def _is_atr_row_station_label(label: str) -> bool:
+        return bool(re.match(r"^Row\s+\d+$", str(label or "").strip(), re.IGNORECASE))
+
     def _is_cargo_station_label(label: str) -> bool:
         txt = (label or "").strip().lower()
         if not txt:
             return False
-        return any(key in txt for key in ("cargo", "hold", "baggage"))
+        if any(key in txt for key in ("cargo", "hold", "baggage")):
+            return True
+        return is_atr_row_layout and _is_atr_row_station_label(label)
 
     cargo_load_map: dict[str, dict[str, float | str]] = {}
     for entry in manual_cargo_loads:
@@ -3050,11 +3329,17 @@ def update_apg_plan_from_dcs_row(
 
             mapped = cargo_load_map.get(label_raw.lower())
             if mapped:
-                cl["mass"] = float(mapped["total_kg"])
+                if is_atr_row_layout and _is_atr_row_station_label(label_raw):
+                    # ATR row stations already contain passenger weight from DCS.
+                    # Manual row freight is additional weight, not a replacement.
+                    cl["mass"] = float(cl.get("mass") or 0.0) + float(mapped["total_kg"])
+                else:
+                    cl["mass"] = float(mapped["total_kg"])
                 applied_cargo_labels.add(label_raw.lower())
             else:
                 # Clear omitted cargo stations so APG reflects the current manual split.
-                cl["mass"] = 0.0
+                if not (is_atr_row_layout and _is_atr_row_station_label(label_raw)):
+                    cl["mass"] = 0.0
 
         missing = sorted(set(cargo_load_map.keys()) - applied_cargo_labels)
         if missing:
@@ -3117,15 +3402,15 @@ def update_apg_plan_from_dcs_row(
     apg_pax_rows: list[dict] = []
     for st in loading:
         label = (st.get("label") or "").strip()
-        if not label.startswith("Passenger "):
+        if not (label.startswith("Passenger ") or re.match(r"^Row\s+\d+$", label, re.IGNORECASE)):
             continue
 
         cl = st.get("customLoad") or {}
 
-        try:
+        if label.startswith("Passenger "):
             seat_code = label.split(" ", 1)[1].strip().upper()
-        except IndexError:
-            seat_code = ""
+        else:
+            seat_code = label.strip()
 
         apg_pax_rows.append(
             {
@@ -3241,15 +3526,86 @@ def apg_get_plan_list(bearer: str, status: Optional[str] = None, page_size: int 
 
     return out
 
+def _utc_min_dt_from_key(key: Optional[str]) -> Optional[datetime]:
+    if not key:
+        return None
+    try:
+        return datetime.strptime(key, "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def _dt_in_apg_link_window(
+    dt: Optional[datetime],
+    window_from_utc: datetime,
+    window_to_utc: datetime,
+) -> bool:
+    if dt is None:
+        return False
+    pad_hours = int(os.getenv("APG_GANTT_LINK_WINDOW_PAD_HOURS", "36") or "36")
+    return (window_from_utc - timedelta(hours=pad_hours)) <= dt <= (window_to_utc + timedelta(hours=pad_hours))
+
+
+def _row_apg_utc_candidates(row: dict) -> list[datetime]:
+    """
+    Return likely UTC departure times for APG matching.
+
+    Envision/Gantt rows can move when a flight is delayed, while APG may still
+    list the original EOBT. Try estimated/effective time first, then scheduled.
+    """
+    out: list[datetime] = []
+    seen: set[str] = set()
+    for field in ("std_utc", "std_dt", "std", "std_nz", "std_sched_nz"):
+        raw = row.get(field)
+        if not raw:
+            continue
+        if isinstance(raw, datetime):
+            dt = raw
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=_get_local_tz())
+            dt = dt.astimezone(timezone.utc).replace(second=0, microsecond=0)
+        else:
+            key = _canon_eobt_to_utc_min_str(raw)
+            dt = _utc_min_dt_from_key(key)
+        if not dt:
+            continue
+        marker = dt.strftime("%Y-%m-%dT%H:%MZ")
+        if marker in seen:
+            continue
+        seen.add(marker)
+        out.append(dt)
+    return out
+
+
+def _row_apg_local_clock_candidates(row: dict) -> list[tuple[int, date]]:
+    out: list[tuple[int, date]] = []
+    seen: set[tuple[int, date]] = set()
+    for dt in _row_apg_utc_candidates(row):
+        local_dt = dt.astimezone(_get_local_tz())
+        item = (local_dt.hour * 60 + local_dt.minute, local_dt.date())
+        if item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
+
+
+def _local_clock_delta_min(a: int, b: int) -> int:
+    raw = abs(a - b)
+    return min(raw, (24 * 60) - raw)
+
+
 def _find_apg_plan_id_for_row(
     row: dict,
     existing_index: dict[tuple[str, str, str, Optional[str]], Optional[int]],
-    existing_index_by3: dict[tuple[str, str, str], Optional[int]],
+    existing_candidates_by3: dict[tuple[str, str, str], list[tuple[datetime, Optional[int]]]],
 ) -> Optional[int]:
     """
     Given one DCS row and the APG presence indexes, return the matching plan_id (or None).
 
-    Key is (flight_no_norm, ADEP, ADES, EOBT_key).
+    Primary key is (flight_no_norm, ADEP, ADES, EOBT_key). If the EOBT has
+    drifted due to a delay, fall back to the closest APG plan on the same
+    flight/route inside APG_GANTT_LINK_TIME_TOLERANCE_MIN.
     """
     # Flight number -> APG-normalised
     raw_flight = (row.get("flight") or row.get("Flight") or "").strip()
@@ -3286,9 +3642,83 @@ def _find_apg_plan_id_for_row(
     if pid is not None:
         return pid
 
-    # Fallback: ignore EOBT, match only on (flight_no, ADEP, ADES)
-    pid = existing_index_by3.get((key[0], key[1], key[2]))
-    return pid
+    candidates = existing_candidates_by3.get((key[0], key[1], key[2])) or []
+    if not candidates:
+        return None
+
+    row_times = _row_apg_utc_candidates(row)
+    if not row_times:
+        return candidates[0][1] if len(candidates) == 1 else None
+
+    tolerance_min = int(os.getenv("APG_GANTT_LINK_TIME_TOLERANCE_MIN", "360") or "360")
+    scored: list[tuple[float, Optional[int]]] = []
+    for plan_dt, candidate_pid in candidates:
+        if candidate_pid is None:
+            continue
+        closest = min(abs((plan_dt - row_dt).total_seconds()) / 60 for row_dt in row_times)
+        scored.append((closest, candidate_pid))
+    if not scored:
+        return None
+
+    scored.sort(key=lambda item: item[0])
+    best_delta, best_pid = scored[0]
+    if best_delta > tolerance_min:
+        return None
+
+    # If two different APG plans are equally close, avoid linking the wrong one.
+    if len(scored) > 1 and scored[1][0] == best_delta and scored[1][1] != best_pid:
+        return None
+
+    return best_pid
+
+
+def _find_apg_plan_id_by_local_clock(
+    row: dict,
+    candidates: list[tuple[datetime, Optional[int]]],
+) -> Optional[int]:
+    row_local_candidates = _row_apg_local_clock_candidates(row)
+    if not row_local_candidates:
+        return None
+
+    tolerance_min = int(os.getenv("APG_GANTT_LINK_LOCAL_CLOCK_TOLERANCE_MIN", "75") or "75")
+    max_date_diff_days = int(os.getenv("APG_GANTT_LINK_LOCAL_DATE_DIFF_DAYS", "1") or "1")
+    scored: list[tuple[int, int, Optional[int]]] = []
+    local_tz = _get_local_tz()
+    for plan_dt, candidate_pid in candidates:
+        if candidate_pid is None:
+            continue
+        plan_local = plan_dt.astimezone(local_tz)
+        plan_minute = plan_local.hour * 60 + plan_local.minute
+        best_for_plan: Optional[tuple[int, int]] = None
+        for row_minute, row_date in row_local_candidates:
+            clock_delta = _local_clock_delta_min(plan_minute, row_minute)
+            date_delta = abs((plan_local.date() - row_date).days)
+            if date_delta > max_date_diff_days:
+                continue
+            score = (clock_delta, date_delta)
+            if best_for_plan is None or score < best_for_plan:
+                best_for_plan = score
+        if best_for_plan is None:
+            continue
+        clock_delta, date_delta = best_for_plan
+        if clock_delta <= tolerance_min:
+            scored.append((clock_delta, date_delta, candidate_pid))
+
+    if not scored:
+        return None
+
+    scored.sort(key=lambda item: (item[0], item[1]))
+    best_clock_delta, best_date_delta, best_pid = scored[0]
+    if len(scored) > 1:
+        second_clock_delta, second_date_delta, second_pid = scored[1]
+        if (
+            second_clock_delta == best_clock_delta
+            and second_date_delta == best_date_delta
+            and second_pid != best_pid
+        ):
+            return None
+
+    return best_pid
 
 def attach_apg_presence_to_rows(
     rows: list[dict],
@@ -3313,15 +3743,59 @@ def attach_apg_presence_to_rows(
         window_to_utc=window_to_utc,
     )
 
-    # Extra index ignoring EOBT for slight timing mismatches
-    existing_index_by3: dict[tuple[str, str, str], Optional[int]] = {}
+    try:
+        if os.getenv("APG_RECON_WIDEN", "1").lower() in ("1", "true", "yes"):
+            plans_all = apg_get_plan_list(apg_bearer, page_size=200, after=None)
+            for p in plans_all:
+                key = _plan_key_from_apg_row(p)
+                pid = _plan_id_from_row(p)
+                if not (key and pid):
+                    continue
+                try:
+                    dt = datetime.strptime(key[3], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc) if key[3] else None
+                except Exception:
+                    dt = None
+                if not _dt_in_apg_link_window(dt, window_from_utc, window_to_utc):
+                    continue
+                if existing_index.get(key) is None:
+                    existing_index[key] = pid
+    except Exception as e:
+        logging.warning("APG presence widen failed: %s", e)
+
+    # Extra index for delayed flights: same flight/route, scored by time distance.
+    existing_candidates_by3: dict[tuple[str, str, str], list[tuple[datetime, Optional[int]]]] = {}
     for k, v in existing_index.items():
-        if k:
-            existing_index_by3[(k[0], k[1], k[2])] = v
+        plan_dt = _utc_min_dt_from_key(k[3]) if k else None
+        if k and plan_dt:
+            existing_candidates_by3.setdefault((k[0], k[1], k[2]), []).append((plan_dt, v))
+    for candidates in existing_candidates_by3.values():
+        candidates.sort(key=lambda item: item[0])
+
+    state_plan_by_fid: dict[str, int] = {}
+    try:
+        from app.models import SyncFlightState
+        for state in SyncFlightState.query.filter(SyncFlightState.apg_id.isnot(None)).all():
+            if state.envision_flight_id and state.apg_id:
+                state_plan_by_fid[str(state.envision_flight_id)] = int(state.apg_id)
+    except Exception:
+        state_plan_by_fid = {}
 
     # 3) Attach APG plan ids
     for r in rows:
-        plan_id = _find_apg_plan_id_for_row(r, existing_index, existing_index_by3)
+        plan_id = _find_apg_plan_id_for_row(r, existing_index, existing_candidates_by3)
+        if plan_id is None:
+            raw_flight = (r.get("flight") or r.get("Flight") or "").strip()
+            flight_no = normalize_flight_no(raw_flight)
+            adep_icao = to_icao(r.get("dep") or r.get("Dep"))
+            dest_raw = r.get("dest") or r.get("Dest") or r.get("ades") or r.get("arr") or r.get("Arr")
+            ades_icao = to_icao(dest_raw)
+            if flight_no and adep_icao and ades_icao:
+                candidates = existing_candidates_by3.get((flight_no, adep_icao, ades_icao)) or []
+                plan_id = _find_apg_plan_id_by_local_clock(r, candidates)
+        if plan_id is None:
+            fid = r.get("envision_flight_id")
+            if fid not in (None, ""):
+                plan_id = state_plan_by_fid.get(str(fid))
         r["apg_plan_id"] = plan_id
         r["apg_has_plan"] = bool(plan_id)
 
@@ -3462,6 +3936,75 @@ def _get_pax_seat_from_dcs(p: dict) -> str | None:
     return _normalise_seat_code(raw)
 
 
+def _seat_row_label(seat_code: str | None) -> str | None:
+    if not seat_code:
+        return None
+    m = re.match(r"^(\d+)[A-Z]+$", str(seat_code).strip().upper())
+    if not m:
+        return None
+    return f"Row {int(m.group(1))}"
+
+
+def _normalise_aircraft_reg(value: Any) -> str:
+    return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+
+
+def _extract_aircraft_reg(*sources: Any) -> str:
+    keys = (
+        "flightRegistrationDescription",
+        "aircraftRegistration",
+        "registration",
+        "reg",
+        "tail",
+        "aircraft",
+        "aircraftRego",
+        "aircraftReg",
+    )
+
+    def walk(obj: Any, depth: int = 0) -> str:
+        if depth > 3:
+            return ""
+        if isinstance(obj, dict):
+            for key in keys:
+                value = obj.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+                if isinstance(value, dict):
+                    nested = walk(value, depth + 1)
+                    if nested:
+                        return nested
+            for key, value in obj.items():
+                key_l = str(key).lower()
+                if any(token in key_l for token in ("registration", "tail", "rego")) or key_l in {"aircraft", "aircraftdescription"}:
+                    if isinstance(value, str) and value.strip():
+                        return value.strip()
+                if isinstance(value, dict):
+                    nested = walk(value, depth + 1)
+                    if nested:
+                        return nested
+        return ""
+
+    for source in sources:
+        found = walk(source)
+        if found:
+            return found
+    return ""
+
+
+def _is_atr_row_loading_layout(loading: list[dict], aircraft_reg: str | None = None) -> bool:
+    reg = _normalise_aircraft_reg(aircraft_reg)
+    is_mco_or_mcu = reg.endswith("MCO") or reg.endswith("MCU") or reg in {"MCO", "MCU"}
+    has_row_stations = any(
+        re.match(r"^Row\s+\d+$", str(st.get("label") or "").strip(), re.IGNORECASE)
+        for st in loading
+    )
+    has_passenger_seat_stations = any(
+        str(st.get("label") or "").strip().startswith("Passenger ")
+        for st in loading
+    )
+    return has_row_stations and (is_mco_or_mcu or not has_passenger_seat_stations)
+
+
 def is_dcs_passenger_boarded_or_flown(p: dict) -> bool:
     """
     Include all passengers except those in Booked status.
@@ -3529,6 +4072,7 @@ INFANT_MASS_KG = 15.0  # standard infant weight; lap infants get added to adult
 def apply_dcs_passengers_to_apg_rows(
     loading: list[dict],
     dcs_flight: dict,
+    aircraft_reg: str | None = None,
 ) -> None:
     """
     Take a Zenith DCS flight (with .Passengers list) and overwrite the APG
@@ -3651,6 +4195,45 @@ def apply_dcs_passengers_to_apg_rows(
             seat, m, pob, total_lap_infants,
         )
 
+    if _is_atr_row_loading_layout(loading, aircraft_reg):
+        row_to_load: dict[str, dict[str, float]] = {}
+        for seat, load in seat_to_load.items():
+            row_label = _seat_row_label(seat)
+            if not row_label:
+                continue
+            row_load = row_to_load.setdefault(row_label, {"mass": 0.0, "pob_count": 0.0})
+            row_load["mass"] += float(load.get("mass", 0.0))
+            row_load["pob_count"] += float(load.get("pob_count", 0.0))
+
+        for row_label in sorted(row_to_load.keys(), key=lambda value: int(value.split(" ", 1)[1])):
+            load = row_to_load[row_label]
+            logger.info(
+                "[APG] ATR row load for %s -> mass=%.1f kg, pob=%.1f",
+                row_label,
+                float(load.get("mass", 0.0)),
+                float(load.get("pob_count", 0.0)),
+            )
+
+        for st in loading:
+            label = (st.get("label") or "").strip()
+            if not re.match(r"^Row\s+\d+$", label, re.IGNORECASE):
+                continue
+
+            row_match = re.search(r"\d+", label)
+            if not row_match:
+                continue
+            canonical_label = f"Row {int(row_match.group(0))}"
+            cl = st.setdefault("customLoad", {})
+            info = row_to_load.get(canonical_label)
+            if info:
+                cl["mass"] = float(info["mass"])
+                cl["pob_count"] = float(info["pob_count"])
+            else:
+                cl["mass"] = 0.0
+                cl["pob_count"] = 0.0
+            cl.setdefault("volume", 0.0)
+        return
+
     # --- Push seat loads onto APG passenger rows ---
     for st in loading:
         label = (st.get("label") or "").strip()
@@ -3708,7 +4291,8 @@ def update_apg_plan_from_dcs_flight(
     loading = [dict(st) for st in loading]
 
     # 2) Apply DCS passengers â†’ passenger seat rows
-    apply_dcs_passengers_to_apg_rows(loading, dcs_flight)
+    aircraft_reg = _extract_aircraft_reg(dcs_flight, plan)
+    apply_dcs_passengers_to_apg_rows(loading, dcs_flight, aircraft_reg=aircraft_reg)
 
     # 3) Optional: update baggage mass from DCS
     total_bags_kg = 0.0

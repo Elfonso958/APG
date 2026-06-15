@@ -226,6 +226,7 @@
   const regMaintenanceCache = new Map();
   const apgCargoStationsCache = new Map();
   const apgCargoAllocationsCache = new Map();
+  const apgAtrRowFreightCache = new Map();
   const apgCargoWeightSummaryCache = new Map();
   let showMaintenance = true;
   let liveNowTimer = null;
@@ -1876,6 +1877,39 @@
     return txt.includes("cargo") || txt.includes("hold") || txt.includes("baggage");
   }
 
+  function isApgRowStationLabel(label) {
+    return /^row\s+\d+$/i.test(String(label || "").trim());
+  }
+
+  function isAtrRowFreightFlight(f) {
+    const reg = String(f?.reg || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const type = String(f?.aircraft_type || "").toUpperCase();
+    const hasRows = Array.isArray(f?.apgAtrRowFreightAllocations) && f.apgAtrRowFreightAllocations.length > 0;
+    return hasRows || reg.endsWith("MCO") || reg.endsWith("MCU") || type.includes("ATR");
+  }
+
+  function normalizeSeatCode(value) {
+    const s = String(value || "").trim().toUpperCase().replace(/[-/\s]+/g, "");
+    const m = s.match(/^0*(\d+)([A-Z]+)$/);
+    return m ? `${Number(m[1])}${m[2]}` : "";
+  }
+
+  function seatCodeForPax(p) {
+    return normalizeSeatCode(p?.Seat || p?.SeatNumber || p?.SeatNo || "");
+  }
+
+  function isOperationalCargoPax(p) {
+    return ["CHECKED", "BOARDED", "FLOWN"].includes(classifyPaxStatus(p));
+  }
+
+  function atrRowSideOccupants(f, rowNumber, side) {
+    const cols = side === "left" ? ["A", "B"] : ["C", "D"];
+    const wanted = new Set(cols.map((col) => `${rowNumber}${col}`));
+    return (Array.isArray(f?.pax_list) ? f.pax_list : [])
+      .filter((p) => isOperationalCargoPax(p) && wanted.has(seatCodeForPax(p)))
+      .map((p) => seatCodeForPax(p));
+  }
+
   function getApgPlanId(value) {
     const id = Number(value || 0);
     return Number.isFinite(id) && id > 0 ? id : 0;
@@ -1901,13 +1935,15 @@
         const currentMass = Number(st?.customLoad?.mass || 0);
         return { label, current_mass: Number.isFinite(currentMass) ? currentMass : 0 };
       })
-      .filter((st) => isApgCargoStationLabel(st.label));
-    const specificStations = stations.filter((st) => {
+      .filter((st) => isApgCargoStationLabel(st.label) || isApgRowStationLabel(st.label));
+    const cargoStations = stations.filter((st) => isApgCargoStationLabel(st.label));
+    const rowStations = stations.filter((st) => isApgRowStationLabel(st.label));
+    const specificStations = cargoStations.filter((st) => {
       const txt = st.label.toLowerCase();
       return txt.includes("hold") || txt.includes("cargo");
     });
-    if (specificStations.length) return specificStations;
-    return stations;
+    const preferredCargo = specificStations.length ? specificStations : cargoStations;
+    return preferredCargo.concat(rowStations);
   }
 
   function cacheCargoAllocationsForFlight(f) {
@@ -1925,6 +1961,15 @@
         label: String(row.label || ""),
         baggage_kg: Number(row.baggage_kg || 0),
         freight_kg: Number(row.freight_kg || 0),
+        current_mass: Number(row.current_mass || 0),
+      })));
+    }
+    if (Array.isArray(f.apgAtrRowFreightAllocations) && f.apgAtrRowFreightAllocations.length) {
+      apgAtrRowFreightCache.set(planKey, f.apgAtrRowFreightAllocations.map((row) => ({
+        label: String(row.label || ""),
+        row_number: Number(row.row_number || 0),
+        left_freight_kg: Number(row.left_freight_kg || 0),
+        right_freight_kg: Number(row.right_freight_kg || 0),
         current_mass: Number(row.current_mass || 0),
       })));
     }
@@ -1954,6 +1999,16 @@
         current_mass: Number(row.current_mass || 0),
       }));
     }
+    const cachedRowFreight = apgAtrRowFreightCache.get(planKey);
+    if (Array.isArray(cachedRowFreight) && cachedRowFreight.length) {
+      f.apgAtrRowFreightAllocations = cachedRowFreight.map((row) => ({
+        label: String(row.label || ""),
+        row_number: Number(row.row_number || 0),
+        left_freight_kg: Number(row.left_freight_kg || 0),
+        right_freight_kg: Number(row.right_freight_kg || 0),
+        current_mass: Number(row.current_mass || 0),
+      }));
+    }
     const cachedSummary = apgCargoWeightSummaryCache.get(planKey);
     if (cachedSummary) {
       f.apgCargoWeightSummary = JSON.parse(JSON.stringify(cachedSummary));
@@ -1971,6 +2026,8 @@
   }
 
   function ensureCargoAllocations(f, stations) {
+    const cargoStations = (Array.isArray(stations) ? stations : []).filter((st) => isApgCargoStationLabel(st.label));
+    ensureAtrRowFreightAllocations(f, stations);
     const priorRows = (
       Array.isArray(f.apgCargoAllocations) && f.apgCargoAllocations.length
         ? f.apgCargoAllocations
@@ -1980,7 +2037,7 @@
     const hasManualSplit = priorRows.some((row) => (
       Number(row?.baggage_kg || 0) > 0 || Number(row?.freight_kg || 0) > 0
     ));
-    f.apgCargoAllocations = stations.map((st) => {
+    f.apgCargoAllocations = cargoStations.map((st) => {
       const existing = prev.get(st.label) || {};
       const currentMass = Number.isFinite(Number(st.current_mass)) ? Number(st.current_mass) : 0;
       const existingBaggage = Number(existing.baggage_kg || 0);
@@ -1996,15 +2053,70 @@
     cacheCargoAllocationsForFlight(f);
   }
 
+  function ensureAtrRowFreightAllocations(f, stations) {
+    const rowStations = (Array.isArray(stations) ? stations : [])
+      .filter((st) => isApgRowStationLabel(st.label))
+      .map((st) => {
+        const m = String(st.label || "").match(/\d+/);
+        return {
+          label: st.label,
+          row_number: m ? Number(m[0]) : 0,
+          current_mass: Number(st.current_mass || 0),
+        };
+      })
+      .filter((st) => st.row_number > 0)
+      .sort((a, b) => a.row_number - b.row_number);
+    if (!rowStations.length) return;
+    const priorRows = (
+      Array.isArray(f.apgAtrRowFreightAllocations) && f.apgAtrRowFreightAllocations.length
+        ? f.apgAtrRowFreightAllocations
+        : (apgAtrRowFreightCache.get(String(getApgPlanId(f?.apg_plan_id))) || [])
+    );
+    const prev = new Map(priorRows.map((row) => [String(row.label || ""), row]));
+    f.apgAtrRowFreightAllocations = rowStations.map((st) => {
+      const existing = prev.get(st.label) || {};
+      return {
+        label: st.label,
+        row_number: st.row_number,
+        left_freight_kg: Number(existing.left_freight_kg || 0),
+        right_freight_kg: Number(existing.right_freight_kg || 0),
+        current_mass: st.current_mass,
+      };
+    });
+  }
+
+  function normalizeAtrRowFreightForOccupancy(f) {
+    const rows = Array.isArray(f?.apgAtrRowFreightAllocations) ? f.apgAtrRowFreightAllocations : [];
+    rows.forEach((row) => {
+      if (atrRowSideOccupants(f, row.row_number, "left").length) row.left_freight_kg = 0;
+      if (atrRowSideOccupants(f, row.row_number, "right").length) row.right_freight_kg = 0;
+    });
+  }
+
+  function atrRowFreightRowsForSubmit(f) {
+    normalizeAtrRowFreightForOccupancy(f);
+    const rows = Array.isArray(f?.apgAtrRowFreightAllocations) ? f.apgAtrRowFreightAllocations : [];
+    return rows.map((row) => ({
+      label: row.label,
+      baggage_kg: 0,
+      freight_kg: Math.max(0, Number(row.left_freight_kg || 0)) + Math.max(0, Number(row.right_freight_kg || 0)),
+    }));
+  }
+
   function cargoTotalsForFlight(f) {
     const rows = Array.isArray(f?.apgCargoAllocations) ? f.apgCargoAllocations : [];
+    const atrRows = Array.isArray(f?.apgAtrRowFreightAllocations) ? f.apgAtrRowFreightAllocations : [];
     const baggageTotal = rows.reduce((sum, row) => sum + (Number(row.baggage_kg) || 0), 0);
-    const freightTotal = rows.reduce((sum, row) => sum + (Number(row.freight_kg) || 0), 0);
-    const plannedCargoTotal = rows.reduce((sum, row) => sum + (Number(row.baggage_kg) || 0) + (Number(row.freight_kg) || 0), 0);
+    const holdFreightTotal = rows.reduce((sum, row) => sum + (Number(row.freight_kg) || 0), 0);
+    const rowFreightTotal = atrRows.reduce((sum, row) => (
+      sum + (Number(row.left_freight_kg) || 0) + (Number(row.right_freight_kg) || 0)
+    ), 0);
+    const freightTotal = holdFreightTotal + rowFreightTotal;
+    const plannedCargoTotal = rows.reduce((sum, row) => sum + (Number(row.baggage_kg) || 0) + (Number(row.freight_kg) || 0), 0) + rowFreightTotal;
     const currentCargoTotal = rows.reduce((sum, row) => sum + (Number(row.current_mass) || 0), 0);
     const dcsBaggage = Number(f?.bags_kg || 0);
     const remaining = dcsBaggage - baggageTotal;
-    return { baggageTotal, freightTotal, plannedCargoTotal, currentCargoTotal, dcsBaggage, remaining };
+    return { baggageTotal, freightTotal, holdFreightTotal, rowFreightTotal, plannedCargoTotal, currentCargoTotal, dcsBaggage, remaining };
   }
 
   function estimateDcsPassengerMass(f) {
@@ -2087,7 +2199,20 @@
             statusText = "Close to max";
           }
         }
-        return { code, title: meta.title, help: meta.help, current, limit, remaining, pct, statusClass, statusText };
+        return {
+          code,
+          title: meta.title,
+          help: meta.help,
+          current,
+          limit,
+          remaining,
+          pct,
+          statusClass,
+          statusText,
+          limitSource: m.limit_source || "structural",
+          structuralLimit: Number(m.structural_limit || 0),
+          runwayLimit: Number(m.runway_limit || 0),
+        };
       });
     return { estimates, metrics };
   }
@@ -2137,6 +2262,12 @@
       const total = (Number(row?.baggage_kg) || 0) + (Number(row?.freight_kg) || 0);
       node.textContent = `${total.toFixed(1)} kg`;
     });
+    host.querySelectorAll("[data-atr-row-total]").forEach((node) => {
+      const label = node.getAttribute("data-atr-row-total") || "";
+      const row = (f.apgAtrRowFreightAllocations || []).find((item) => item.label === label);
+      const total = (Number(row?.left_freight_kg) || 0) + (Number(row?.right_freight_kg) || 0);
+      node.textContent = `${total.toFixed(1)} kg`;
+    });
     const allocatedEl = host.querySelector("#cargoAllocatedKg");
     const freightEl = host.querySelector("#cargoFreightKg");
     const remainingEl = host.querySelector("#cargoRemainingKg");
@@ -2184,11 +2315,72 @@
       return;
     }
     const rows = Array.isArray(f.apgCargoAllocations) ? f.apgCargoAllocations : [];
-    if (!rows.length) {
+    const atrRows = Array.isArray(f.apgAtrRowFreightAllocations) ? f.apgAtrRowFreightAllocations : [];
+    normalizeAtrRowFreightForOccupancy(f);
+    const showAtrRows = isAtrRowFreightFlight(f) && atrRows.length > 0;
+    if (!rows.length && !showAtrRows) {
       host.innerHTML = '<div class="muted">No APG cargo/hold stations found on this plan.</div>';
       return;
     }
+    if (!f.apgCargoEditorTab || (f.apgCargoEditorTab === "rowFreight" && !showAtrRows)) {
+      f.apgCargoEditorTab = rows.length ? "holds" : "rowFreight";
+    }
+    const activeTab = f.apgCargoEditorTab;
     const totals = cargoTotalsForFlight(f);
+    const renderHoldPanel = () => rows.length ? `
+      <div class="cargo-hold-grid">
+        ${rows.map((row) => `
+          <section class="cargo-hold-card" data-cargo-row="${escapeHtml(row.label)}">
+            <div class="cargo-hold-top">
+              <div class="cargo-hold-name">${escapeHtml(row.label)}</div>
+              <div class="cargo-hold-total" data-cargo-total="${escapeHtml(row.label)}">${(Number(row.baggage_kg || 0) + Number(row.freight_kg || 0)).toFixed(1)} kg</div>
+            </div>
+            <div class="cargo-hold-fields">
+              <label class="cargo-field">
+                <span>Baggage Kg</span>
+                <input type="number" min="0" step="0.1" class="form-control cargo-baggage-input" data-label="${escapeHtml(row.label)}" value="${Number(row.baggage_kg || 0).toFixed(1)}">
+              </label>
+              <label class="cargo-field">
+                <span>Cargo Kg</span>
+                <input type="number" min="0" step="0.1" class="form-control cargo-freight-input" data-label="${escapeHtml(row.label)}" value="${Number(row.freight_kg || 0).toFixed(1)}">
+              </label>
+            </div>
+          </section>
+        `).join("")}
+      </div>
+    ` : '<div class="muted">No APG hold stations found on this plan.</div>';
+    const sideInput = (row, side) => {
+      const rowNumber = Number(row.row_number || 0);
+      const seats = side === "left" ? [`${rowNumber}A`, `${rowNumber}B`] : [`${rowNumber}C`, `${rowNumber}D`];
+      const occupied = atrRowSideOccupants(f, rowNumber, side);
+      const locked = occupied.length > 0;
+      const value = side === "left" ? row.left_freight_kg : row.right_freight_kg;
+      const label = side === "left" ? "A/B" : "C/D";
+      const detail = locked ? `Occupied ${occupied.join(", ")}` : seats.join(" ");
+      return `
+        <label class="cargo-field cargo-row-side ${locked ? "is-locked" : ""}">
+          <span>${label}</span>
+          <input type="number" min="0" step="0.1" class="form-control atr-row-freight-input" data-label="${escapeHtml(row.label)}" data-side="${side}" value="${Number(value || 0).toFixed(1)}" ${locked ? "disabled" : ""}>
+          <small>${escapeHtml(detail)}</small>
+        </label>
+      `;
+    };
+    const renderRowFreightPanel = () => showAtrRows ? `
+      <div class="cargo-row-freight-grid">
+        ${atrRows.map((row) => `
+          <section class="cargo-row-freight-card" data-atr-row="${escapeHtml(row.label)}">
+            <div class="cargo-hold-top">
+              <div class="cargo-hold-name">${escapeHtml(row.label)}</div>
+              <div class="cargo-hold-total" data-atr-row-total="${escapeHtml(row.label)}">${((Number(row.left_freight_kg) || 0) + (Number(row.right_freight_kg) || 0)).toFixed(1)} kg</div>
+            </div>
+            <div class="cargo-row-side-grid">
+              ${sideInput(row, "left")}
+              ${sideInput(row, "right")}
+            </div>
+          </section>
+        `).join("")}
+      </div>
+    ` : '<div class="muted">Row freight is only available when APG exposes row loading stations.</div>';
     host.innerHTML = `
       <div class="cargo-editor-shell">
         <div class="cargo-editor-head">
@@ -2200,25 +2392,17 @@
             ${Math.abs(totals.remaining) < 0.05 ? "Baggage complete" : totals.remaining > 0 ? "Baggage remaining" : "Over allocated"}
           </div>
         </div>
-        <div class="cargo-hold-grid">
-          ${rows.map((row) => `
-            <section class="cargo-hold-card" data-cargo-row="${escapeHtml(row.label)}">
-              <div class="cargo-hold-top">
-                <div class="cargo-hold-name">${escapeHtml(row.label)}</div>
-                <div class="cargo-hold-total" data-cargo-total="${escapeHtml(row.label)}">${(Number(row.baggage_kg || 0) + Number(row.freight_kg || 0)).toFixed(1)} kg</div>
-              </div>
-              <div class="cargo-hold-fields">
-                <label class="cargo-field">
-                  <span>Baggage Kg</span>
-                  <input type="number" min="0" step="0.1" class="form-control cargo-baggage-input" data-label="${escapeHtml(row.label)}" value="${Number(row.baggage_kg || 0).toFixed(1)}">
-                </label>
-                <label class="cargo-field">
-                  <span>Cargo Kg</span>
-                  <input type="number" min="0" step="0.1" class="form-control cargo-freight-input" data-label="${escapeHtml(row.label)}" value="${Number(row.freight_kg || 0).toFixed(1)}">
-                </label>
-              </div>
-            </section>
-          `).join("")}
+        ${showAtrRows ? `
+          <div class="cargo-editor-tabs" role="tablist" aria-label="Cargo allocation mode">
+            <button type="button" class="cargo-editor-tab ${activeTab === "holds" ? "is-active" : ""}" data-cargo-tab="holds">Holds</button>
+            <button type="button" class="cargo-editor-tab ${activeTab === "rowFreight" ? "is-active" : ""}" data-cargo-tab="rowFreight">Row Freight</button>
+          </div>
+        ` : ""}
+        <div class="cargo-editor-panel" data-cargo-panel="holds" ${activeTab === "holds" ? "" : "hidden"}>
+          ${renderHoldPanel()}
+        </div>
+        <div class="cargo-editor-panel" data-cargo-panel="rowFreight" ${activeTab === "rowFreight" ? "" : "hidden"}>
+          ${renderRowFreightPanel()}
         </div>
         <div class="cargo-summary-strip">
           <div class="cargo-summary-item">
@@ -2240,6 +2424,12 @@
         </div>
       </div>
     `;
+    host.querySelectorAll("[data-cargo-tab]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        f.apgCargoEditorTab = btn.getAttribute("data-cargo-tab") || "holds";
+        renderCargoEditor(f);
+      });
+    });
     host.querySelectorAll(".cargo-baggage-input, .cargo-freight-input").forEach((input) => {
       input.addEventListener("input", () => {
         const label = input.getAttribute("data-label") || "";
@@ -2249,6 +2439,20 @@
         const freightInput = host.querySelector(`.cargo-freight-input[data-label="${CSS.escape(label)}"]`);
         row.baggage_kg = Math.max(0, Number(baggageInput?.value || 0));
         row.freight_kg = Math.max(0, Number(freightInput?.value || 0));
+        cacheCargoAllocationsForFlight(f);
+        updateCargoEditorSummary(f);
+        renderCargoWeightsSummary(f);
+      });
+    });
+    host.querySelectorAll(".atr-row-freight-input").forEach((input) => {
+      input.addEventListener("input", () => {
+        const label = input.getAttribute("data-label") || "";
+        const side = input.getAttribute("data-side") || "";
+        const row = (f.apgAtrRowFreightAllocations || []).find((item) => item.label === label);
+        if (!row) return;
+        if (side === "left") row.left_freight_kg = Math.max(0, Number(input.value || 0));
+        if (side === "right") row.right_freight_kg = Math.max(0, Number(input.value || 0));
+        normalizeAtrRowFreightForOccupancy(f);
         cacheCargoAllocationsForFlight(f);
         updateCargoEditorSummary(f);
         renderCargoWeightsSummary(f);
@@ -2305,6 +2509,24 @@
     const massUnit = summary.units?.mass || "kg";
     const { estimates, metrics: computed } = buildWeightMetrics(f, summary);
     const dow = summary.weights?.dow || null;
+    const runway = summary.runway_analysis || {};
+    const depRunway = runway.departure || null;
+    const arrRunway = runway.arrival || null;
+    const runwayCard = (item, label) => item ? `
+      <div class="cargo-reference-card">
+        <span>${escapeHtml(label)}</span>
+        <strong>${escapeHtml([item.airport, item.runway].filter(Boolean).join(" ") || "Selected")}</strong>
+        <small>${[
+          item.max_weight ? `Max ${Number(item.max_weight).toFixed(0)} ${massUnit}` : "",
+          item.plan_weight ? `Plan ${Number(item.plan_weight).toFixed(0)} ${massUnit}` : "",
+          item.limit_code ? `Limit ${item.limit_code}` : "",
+          item.limit_reason ? item.limit_reason : "",
+          item.procedure ? item.procedure : "",
+          item.eop ? `EOP ${item.eop}` : "",
+          item.flaps ? item.flaps : "",
+        ].filter(Boolean).map(escapeHtml).join(" / ") || "Runway analysis"}</small>
+      </div>
+    ` : "";
     const overallState = summarizeWeightBalance(computed);
     cargoWeightsSummary.innerHTML = `
       <div class="cargo-safety-banner ${overallState.cls}">
@@ -2327,10 +2549,12 @@
               <div class="cargo-weight-bar-fill ${m.statusClass}" style="width:${Math.max(0, Math.min(100, m.pct || 0)).toFixed(1)}%"></div>
             </div>
             <div class="cargo-weight-meta">
-              <div><span>Max</span><strong>${m.limit.toFixed(0)} ${massUnit}</strong></div>
+              <div><span>${m.limitSource === "runway" ? "Runway max" : "Max"}</span><strong>${m.limit.toFixed(0)} ${massUnit}</strong></div>
               <div><span>Remaining</span><strong>${m.remaining.toFixed(0)} ${massUnit}</strong></div>
               <div><span>Used</span><strong>${m.pct.toFixed(0)}%</strong></div>
             </div>
+            ${m.limitSource === "runway" && m.structuralLimit ? `<div class="cargo-weight-note">Structural max ${m.structuralLimit.toFixed(0)} ${massUnit}</div>` : ""}
+            ${m.runwayLimit && m.limitSource !== "runway" ? `<div class="cargo-weight-note">Runway max ${m.runwayLimit.toFixed(0)} ${massUnit}</div>` : ""}
           </div>
         `).join("")}
       </div>
@@ -2364,10 +2588,13 @@
             <strong>Block ${Number(summary.fuel?.block || 0).toFixed(0)} / Taxi ${Number(summary.fuel?.taxi || 0).toFixed(0)} / Landing ${Number(summary.fuel?.landing || 0).toFixed(0)} ${massUnit}</strong>
             <small>APG planning values</small>
           </div>
+          ${runwayCard(depRunway, "Departure runway")}
+          ${runwayCard(arrRunway, "Arrival runway")}
         </div>
       </div>
       ${summary.aircraft_error ? `<div class="muted">Aircraft limits fallback warning: ${escapeHtml(summary.aircraft_error)}</div>` : ""}
       ${summary.ofp_error ? `<div class="muted">OFP warning: ${escapeHtml(summary.ofp_error)}</div>` : ""}
+      ${summary.runway_analysis_error ? `<div class="muted">Runway analysis warning: ${escapeHtml(summary.runway_analysis_error)}</div>` : ""}
     `;
   }
 
@@ -2875,8 +3102,9 @@
     const defectCount = Number.isFinite(Number(f.defect_count)) ? Number(f.defect_count) : 0;
     const defectTotal = Number.isFinite(Number(f.defect_total)) ? Number(f.defect_total) : defectCount;
 
-    const apgLinkedHtml = getApgPlanId(f.apg_plan_id)
-      ? `<a class="apg-route-link" href="https://fly.rocketroute.com/route/${f.apg_plan_id}" target="_blank" rel="noopener noreferrer" title="Open APG route ${f.apg_plan_id}">APG Linked</a>`
+    const apgPlanId = getApgPlanId(f.apg_plan_id);
+    const apgLinkedHtml = apgPlanId
+      ? `<a class="apg-route-link" href="https://fly.rocketroute.com/route/${apgPlanId}" target="_blank" rel="noopener noreferrer" title="Open APG route ${apgPlanId}">APG Linked</a>`
       : `<span title="No APG plan">No APG</span>`;
     const dcsLinked = Boolean(f.dcs_linked);
 
@@ -2955,6 +3183,16 @@
     group.style.left = `${groupLeft}px`;
     group.style.width = `${groupWidth}px`;
     group.style.top = `${laneTop}px`;
+    group.addEventListener("click", () => {
+      selectedId = f.envision_flight_id;
+      setDetail(f);
+      renderRows();
+    });
+    group.addEventListener("dblclick", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      openModifyLegDialog(f);
+    });
 
     const routeLayer = document.createElement("div");
     routeLayer.className = "flight-route-layer";
@@ -2993,16 +3231,6 @@
     bar.title = isCancelled
       ? `Cancelled | ${fmtTime(f.std_nz)} ${f.dep || ""}-${f.ades || ""}`
       : `${fmtTime(mainStartIso)}-${fmtTime(mainEndIso)} ${f.dep || ""}-${f.ades || ""} | ${f.flight_status || "Unknown"} | Pax ${f.pax_count || 0}`;
-    bar.addEventListener("click", () => {
-      selectedId = f.envision_flight_id;
-      setDetail(f);
-      renderRows();
-    });
-    bar.addEventListener("dblclick", (ev) => {
-      ev.preventDefault();
-      ev.stopPropagation();
-      openModifyLegDialog(f);
-    });
     group.appendChild(bar);
 
     track.appendChild(group);
@@ -3618,6 +3846,8 @@
       throw new Error("APG cargo stations are still loading. Please wait a moment and try again.");
     }
     const cargoRows = Array.isArray(f.apgCargoAllocations) ? f.apgCargoAllocations : [];
+    const atrRowCargoRows = atrRowFreightRowsForSubmit(f);
+    const cargoLoadRows = cargoRows.concat(atrRowCargoRows);
     const { dcsBaggage, remaining } = cargoTotalsForFlight(f);
     if (cargoRows.length && Math.abs(remaining) >= 0.05) {
       const warningText = remaining > 0
@@ -3647,7 +3877,7 @@
       envision_flight_id: f.envision_flight_id || null,
       preview_only: false,
       pax_list: f.pax_list || [],
-      cargo_loads: cargoRows.map((row) => ({
+      cargo_loads: cargoLoadRows.map((row) => ({
         label: row.label,
         baggage_kg: Math.max(0, Number(row.baggage_kg || 0)),
         freight_kg: Math.max(0, Number(row.freight_kg || 0)),
@@ -3655,14 +3885,14 @@
     };
     const submitSteps = [
       { label: "Passenger figures sent", detail: `${Array.isArray(payload.pax_list) ? payload.pax_list.length : 0} records prepared`, state: "active" },
-      { label: "Cargo figures sent", detail: `${cargoRows.length} hold entries prepared`, state: "pending" },
+      { label: "Cargo figures sent", detail: `${cargoLoadRows.length} load entries prepared`, state: "pending" },
       { label: "APG plan updated", detail: `Route ${payload.apg_plan_id}`, state: "pending" },
     ];
     openApgSubmitModal("Submitting to APG", submitSteps);
     try {
       updateApgSubmitModal("Submitting to APG", [
         { ...submitSteps[0], state: "done", detail: `${Array.isArray(payload.pax_list) ? payload.pax_list.length : 0} passenger records included` },
-        { ...submitSteps[1], state: "active", detail: `${cargoRows.length} hold entries being sent` },
+        { ...submitSteps[1], state: "active", detail: `${cargoLoadRows.length} load entries being sent` },
         submitSteps[2],
       ]);
       const resp = await fetch(apgPushUrl, {
@@ -3674,7 +3904,7 @@
       if (!resp.ok || !data.ok) throw new Error(data.error || `Submit failed (${resp.status})`);
       updateApgSubmitModal("Submitting to APG", [
         { ...submitSteps[0], state: "done", detail: `${Array.isArray(payload.pax_list) ? payload.pax_list.length : 0} passenger records included` },
-        { ...submitSteps[1], state: "done", detail: `${cargoRows.length} hold entries sent` },
+        { ...submitSteps[1], state: "done", detail: `${cargoLoadRows.length} load entries sent` },
         { ...submitSteps[2], state: "done", detail: `APG route ${payload.apg_plan_id} updated successfully` },
       ], true);
       cacheCargoAllocationsForFlight(f);
@@ -3697,7 +3927,7 @@
     } catch (err) {
       updateApgSubmitModal("Submitting to APG", [
         { ...submitSteps[0], state: "done", detail: `${Array.isArray(payload.pax_list) ? payload.pax_list.length : 0} passenger records included` },
-        { ...submitSteps[1], state: "done", detail: `${cargoRows.length} hold entries prepared` },
+        { ...submitSteps[1], state: "done", detail: `${cargoLoadRows.length} load entries prepared` },
         { ...submitSteps[2], state: "error", detail: err.message || "Submit failed" },
       ], true);
       throw err;
