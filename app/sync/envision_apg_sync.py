@@ -972,6 +972,53 @@ def format_employee_name(emp: dict) -> Optional[str]:
         return (first + " " + last).strip()
     return (emp.get("shortDisplayName") or emp.get("employeeUsername") or "").strip() or None
 
+
+def safe_employee_name_and_no(
+    token: str,
+    employee_id: int,
+    *,
+    flight_id: object = None,
+    role: str = "crew",
+) -> tuple[Optional[str], Optional[str]]:
+    try:
+        emp_id = int(employee_id)
+    except (TypeError, ValueError):
+        return None, None
+
+    if emp_id in _MISSING_EMPLOYEE_IDS:
+        return None, None
+
+    try:
+        emp = envision_get_employee(token, emp_id)
+    except HTTPError as e:
+        if e.response is not None and e.response.status_code == 400:
+            _MISSING_EMPLOYEE_IDS.add(emp_id)
+            logging.warning(
+                "Envision employee %s for %s on flight %s was not found (400). "
+                "Continuing without that crew link.",
+                emp_id,
+                role,
+                flight_id or "-",
+            )
+            return None, None
+        logging.exception(
+            "Envision employee lookup failed for %s on flight %s employee %s",
+            role,
+            flight_id or "-",
+            emp_id,
+        )
+        return None, None
+    except Exception:
+        logging.exception(
+            "Envision employee lookup failed for %s on flight %s employee %s",
+            role,
+            flight_id or "-",
+            emp_id,
+        )
+        return None, None
+
+    return format_employee_name(emp), (emp.get("employeeNo") or "").strip().upper() or None
+
 def resolve_pic_for_flight(token: str, flight: dict, crew: Optional[list[dict]] = None) -> tuple[Optional[str], Optional[str]]:
     """
     Returns (pic_name, pic_employee_no).
@@ -992,25 +1039,26 @@ def resolve_pic_for_flight(token: str, flight: dict, crew: Optional[list[dict]] 
         logging.warning(f"Could not resolve PIC for flight {fid}: {e}")
         return None, None
 
-    def emp_name_and_no(emp_id: int) -> tuple[Optional[str], Optional[str]]:
-        emp = envision_get_employee(token, int(emp_id))
-        return format_employee_name(emp), (emp.get("employeeNo") or "").strip().upper() or None
-
     # 1) Explicit Captain role
     for c in crew:
         if c.get("crewPositionId") in pic_pos and c.get("employeeId"):
-            return emp_name_and_no(c["employeeId"])
+            name, emp_no = safe_employee_name_and_no(token, c["employeeId"], flight_id=fid, role="PIC")
+            if name or emp_no:
+                return name, emp_no
 
     # 2) Pilot Flying among pilots
     for c in crew:
         if c.get("isPilotFlying") and c.get("crewPositionId") in pilot_pos and c.get("employeeId"):
-            return emp_name_and_no(c["employeeId"])
+            name, emp_no = safe_employee_name_and_no(token, c["employeeId"], flight_id=fid, role="pilot flying")
+            if name or emp_no:
+                return name, emp_no
 
     # 3) First pilot by displayOrder
     pilots = [c for c in crew if c.get("crewPositionId") in pilot_pos and c.get("employeeId")]
-    if pilots:
-        pilots.sort(key=lambda x: (x.get("displayOrder") or 0))
-        return emp_name_and_no(pilots[0]["employeeId"])
+    for c in sorted(pilots, key=lambda x: (x.get("displayOrder") or 0)):
+        name, emp_no = safe_employee_name_and_no(token, c["employeeId"], flight_id=fid, role="pilot")
+        if name or emp_no:
+            return name, emp_no
 
     return None, None
 
@@ -1033,21 +1081,20 @@ def resolve_fo_for_flight(token: str, flight: dict, crew: Optional[list[dict]] =
         logging.warning(f"Could not resolve FO for flight {fid}: {e}")
         return None, None
 
-    def emp_name_and_no(emp_id: int) -> tuple[Optional[str], Optional[str]]:
-        emp = envision_get_employee(token, int(emp_id))
-        return format_employee_name(emp), (emp.get("employeeNo") or "").strip().upper() or None
-
     # 1) Explicit FO roles: positions that are pilot but not captain
     for c in crew:
         pid = c.get("crewPositionId")
         if pid in pilot_pos and pid not in (pic_pos or set()) and c.get("employeeId"):
-            return emp_name_and_no(c["employeeId"])
+            name, emp_no = safe_employee_name_and_no(token, c["employeeId"], flight_id=fid, role="FO")
+            if name or emp_no:
+                return name, emp_no
 
     # 2) Fallback: any pilot not in captain set, lowest displayOrder
     fo_candidates = [c for c in crew if c.get("crewPositionId") in pilot_pos and c.get("crewPositionId") not in (pic_pos or set()) and c.get("employeeId")]
-    if fo_candidates:
-        fo_candidates.sort(key=lambda x: (x.get("displayOrder") or 0))
-        return emp_name_and_no(fo_candidates[0]["employeeId"])
+    for c in sorted(fo_candidates, key=lambda x: (x.get("displayOrder") or 0)):
+        name, emp_no = safe_employee_name_and_no(token, c["employeeId"], flight_id=fid, role="FO")
+        if name or emp_no:
+            return name, emp_no
 
     return None, None
 
