@@ -112,6 +112,7 @@ def set_envision_environment(env_name: str | None) -> dict:
     _EMPLOYEE_SKILL_CACHE.update({"ts": 0.0, "items": []})
     _NOTE_TYPES_CACHE.update({"ts": 0.0, "items": []})
     _CANCEL_CODES_CACHE.update({"ts": 0.0, "items": []})
+    _REGISTRATIONS_CACHE.update({"ts": 0.0, "items": []})
     return get_envision_environment()
 
 
@@ -167,6 +168,7 @@ _EMPLOYEE_QUAL_CACHE: dict[str, Any] = {"ts": 0.0, "items": []}
 _EMPLOYEE_SKILL_CACHE: dict[str, Any] = {"ts": 0.0, "items": []}
 _NOTE_TYPES_CACHE: dict[str, Any] = {"ts": 0.0, "items": []}
 _CANCEL_CODES_CACHE: dict[str, Any] = {"ts": 0.0, "items": []}
+_REGISTRATIONS_CACHE: dict[str, Any] = {"ts": 0.0, "items": []}
 
 # IATA -> ICAO mapping (extend as needed)
 IATA_TO_ICAO = {
@@ -756,10 +758,66 @@ def envision_get_defects(
     return _fetch_envision_list(token, "Defects", params=params)
 
 
+def envision_get_registrations(
+    token: str,
+    registration: str | None = None,
+    ttl_seconds: int = 900,
+) -> list[dict]:
+    """GET /v1/Registrations."""
+    params = {"registration": registration} if registration else None
+    ttl_cache = None if registration else _REGISTRATIONS_CACHE
+    return _fetch_envision_list(
+        token,
+        "Registrations",
+        ttl_cache=ttl_cache,
+        ttl_seconds=ttl_seconds,
+        params=params,
+    )
+
+
+def _normalise_aircraft_registration(value: Any) -> str:
+    return re.sub(r"\s+", "", str(value or "").strip().upper())
+
+
+def _is_active_envision_registration(row: dict) -> bool:
+    status = _normalise_aircraft_registration(row.get("status"))
+    status_id = str(row.get("statusId") or "").strip()
+    return status == "ACTIVE" or status_id == "1"
+
+
+def _filter_defects_to_active_registrations(token: str, defects: list[dict]) -> list[dict]:
+    registrations = envision_get_registrations(token)
+    active_reg_ids = {
+        str(row.get("id")).strip()
+        for row in registrations
+        if _is_active_envision_registration(row) and row.get("id") not in (None, "")
+    }
+    active_regs = {
+        _normalise_aircraft_registration(row.get("registration"))
+        for row in registrations
+        if _is_active_envision_registration(row) and row.get("registration")
+    }
+
+    def is_active_defect(defect: dict) -> bool:
+        reg_id = str(defect.get("regId") or defect.get("registrationId") or "").strip()
+        if reg_id and reg_id in active_reg_ids:
+            return True
+        reg = _normalise_aircraft_registration(
+            defect.get("reg")
+            or defect.get("registration")
+            or defect.get("flightRegistrationDescription")
+            or defect.get("aircraftRegistration")
+        )
+        return bool(reg and reg in active_regs)
+
+    return [defect for defect in defects if is_active_defect(defect)]
+
+
 def envision_get_defects_for_powerbi(
     token: str,
     defect_status_id: int | str | None = None,
     delta_datetime_utc: str | None = None,
+    active_aircraft_only: bool = False,
 ) -> tuple[list[dict], list[dict]]:
     """
     Fetch Envision defect rows as a flat list suitable for PowerBI import.
@@ -769,7 +827,10 @@ def envision_get_defects_for_powerbi(
     """
     statuses = envision_get_defect_statuses(token)
     if defect_status_id not in (None, ""):
-        return envision_get_defects(token, defect_status_id, delta_datetime_utc), statuses
+        defects = envision_get_defects(token, defect_status_id, delta_datetime_utc)
+        if active_aircraft_only:
+            defects = _filter_defects_to_active_registrations(token, defects)
+        return defects, statuses
 
     status_ids = [
         row.get("id")
@@ -789,7 +850,11 @@ def envision_get_defects_for_powerbi(
                 continue
             defects_by_id[defect_id] = defect
 
-    return list(defects_by_id.values()) + defects_without_id, statuses
+    defects = list(defects_by_id.values()) + defects_without_id
+    if active_aircraft_only:
+        defects = _filter_defects_to_active_registrations(token, defects)
+    return defects, statuses
+
 
 
 def envision_get_flight_note_types(token: str, ttl_seconds: int = 3600) -> list[dict]:

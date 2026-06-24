@@ -4329,10 +4329,14 @@ def api_envision_defects_powerbi():
     Query params:
       defectStatusId / defect_status_id: optional; if omitted all statuses are fetched.
       deltaDateTimeUtc / delta_datetime_utc: optional Envision delta filter.
+      activeAircraftOnly / active_aircraft_only: optional; when true filters to ACTIVE registrations.
       wrapped=1: return metadata plus rows instead of the default flat array.
     """
     defect_status_id = request.args.get("defectStatusId") or request.args.get("defect_status_id")
     delta_datetime_utc = request.args.get("deltaDateTimeUtc") or request.args.get("delta_datetime_utc")
+    active_aircraft_only = str(
+        request.args.get("activeAircraftOnly") or request.args.get("active_aircraft_only") or ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
     wrapped = str(request.args.get("wrapped") or "").strip().lower() in {"1", "true", "yes", "on"}
     if defect_status_id not in (None, ""):
         try:
@@ -4347,6 +4351,7 @@ def api_envision_defects_powerbi():
             token,
             defect_status_id=defect_status_id,
             delta_datetime_utc=delta_datetime_utc,
+            active_aircraft_only=active_aircraft_only,
         )
         if wrapped:
             return jsonify(
@@ -4354,6 +4359,7 @@ def api_envision_defects_powerbi():
                 count=len(defects),
                 defectStatusId=defect_status_id,
                 deltaDateTimeUtc=delta_datetime_utc,
+                activeAircraftOnly=active_aircraft_only,
                 statuses=statuses,
                 defects=defects,
             )
