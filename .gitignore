@@ -26,6 +26,8 @@ env/
 # ----------------------------
 # Databases
 # ----------------------------
+instance/
+*.db
 *.sqlite
 *.sqlite3
 apg_importer.db
