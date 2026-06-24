@@ -62,6 +62,7 @@ from .sync.envision_apg_sync import (
     envision_change_type,
     envision_get_flight_passengers,
     envision_put_flight_passengers,
+    envision_get_defects_for_powerbi,
     normalise_pax_type,
     get_envision_environment,
     set_envision_environment,
@@ -4317,6 +4318,49 @@ def api_envision_flights_raw():
             "flights_raw failed for Envision dateFrom=%s dateTo=%s", date_from, date_to
         )
         return jsonify(ok=False, error=str(e)), 500
+
+
+@api_bp.get("/envision/defects_powerbi")
+@api_bp.get("/api/envision/defects_powerbi")  # legacy path
+def api_envision_defects_powerbi():
+    """
+    Return Envision defects as a JSON array for PowerBI.
+
+    Query params:
+      defectStatusId / defect_status_id: optional; if omitted all statuses are fetched.
+      deltaDateTimeUtc / delta_datetime_utc: optional Envision delta filter.
+      wrapped=1: return metadata plus rows instead of the default flat array.
+    """
+    defect_status_id = request.args.get("defectStatusId") or request.args.get("defect_status_id")
+    delta_datetime_utc = request.args.get("deltaDateTimeUtc") or request.args.get("delta_datetime_utc")
+    wrapped = str(request.args.get("wrapped") or "").strip().lower() in {"1", "true", "yes", "on"}
+    if defect_status_id not in (None, ""):
+        try:
+            defect_status_id = str(int(defect_status_id))
+        except (TypeError, ValueError):
+            return jsonify(ok=False, error="defectStatusId must be an integer"), 400
+
+    try:
+        auth = envision_authenticate()
+        token = auth["token"]
+        defects, statuses = envision_get_defects_for_powerbi(
+            token,
+            defect_status_id=defect_status_id,
+            delta_datetime_utc=delta_datetime_utc,
+        )
+        if wrapped:
+            return jsonify(
+                ok=True,
+                count=len(defects),
+                defectStatusId=defect_status_id,
+                deltaDateTimeUtc=delta_datetime_utc,
+                statuses=statuses,
+                defects=defects,
+            )
+        return jsonify(defects)
+    except Exception as e:
+        current_app.logger.exception("defects_powerbi failed")
+        return jsonify(ok=False, error=str(e)), 502
 
 
 def _get_manifest_crew(

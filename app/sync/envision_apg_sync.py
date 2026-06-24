@@ -739,6 +739,59 @@ def envision_get_employee_skills(token: str, ttl_seconds: int = 900) -> list[dic
     return _fetch_envision_list(token, "Employees/Skills", ttl_cache=_EMPLOYEE_SKILL_CACHE, ttl_seconds=ttl_seconds)
 
 
+def envision_get_defect_statuses(token: str) -> list[dict]:
+    """GET /v1/Defects/Statuses."""
+    return _fetch_envision_list(token, "Defects/Statuses")
+
+
+def envision_get_defects(
+    token: str,
+    defect_status_id: int | str,
+    delta_datetime_utc: str | None = None,
+) -> list[dict]:
+    """GET /v1/Defects for one required defectStatusId."""
+    params: dict[str, Any] = {"defectStatusId": int(defect_status_id)}
+    if delta_datetime_utc:
+        params["deltaDateTimeUtc"] = str(delta_datetime_utc)
+    return _fetch_envision_list(token, "Defects", params=params)
+
+
+def envision_get_defects_for_powerbi(
+    token: str,
+    defect_status_id: int | str | None = None,
+    delta_datetime_utc: str | None = None,
+) -> tuple[list[dict], list[dict]]:
+    """
+    Fetch Envision defect rows as a flat list suitable for PowerBI import.
+
+    Envision requires a defectStatusId on /Defects, so when no status is
+    requested we query every configured status and de-duplicate by defect id.
+    """
+    statuses = envision_get_defect_statuses(token)
+    if defect_status_id not in (None, ""):
+        return envision_get_defects(token, defect_status_id, delta_datetime_utc), statuses
+
+    status_ids = [
+        row.get("id")
+        for row in statuses
+        if row.get("id") not in (None, "")
+    ]
+    if not status_ids:
+        raise RuntimeError("Envision returned no defect statuses to query.")
+
+    defects_by_id: dict[Any, dict] = {}
+    defects_without_id: list[dict] = []
+    for status_id in status_ids:
+        for defect in envision_get_defects(token, status_id, delta_datetime_utc):
+            defect_id = defect.get("id")
+            if defect_id in (None, ""):
+                defects_without_id.append(defect)
+                continue
+            defects_by_id[defect_id] = defect
+
+    return list(defects_by_id.values()) + defects_without_id, statuses
+
+
 def envision_get_flight_note_types(token: str, ttl_seconds: int = 3600) -> list[dict]:
     cached = _cached_lookup(_NOTE_TYPES_CACHE, ttl_seconds)
     if cached is not None:
