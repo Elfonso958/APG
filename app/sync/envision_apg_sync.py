@@ -367,14 +367,14 @@ def fetch_envision_crew_for_apg(envision_flight_id: int, include_available_emplo
             or ""
         ).strip()
 
-        # Derive a clean position label if we don't already have one
-        if not pos_desc:
-            if pos_id_int in pic_pos_ids:
-                pos_desc = "PIC"
-            elif pos_id_int in pilot_pos_ids:
+        # Derive a clean position label from the position id first. Envision can
+        # return labels like CPT, but the rest of this app treats captain as PIC.
+        if pos_id_int in pic_pos_ids:
+            pos_desc = "PIC"
+        elif not pos_desc:
+            if pos_id_int in pilot_pos_ids:
                 pos_desc = "FO"
             else:
-                # Anything not a pilot -> treat as cabin crew
                 pos_desc = "FA"
 
         if not is_operating:
@@ -845,10 +845,25 @@ def build_pic_pilot_position_sets(token: str) -> tuple[set[int], set[int]]:
 
     positions = envision_get_crew_positions(token)
 
+    def _position_text(row: dict) -> str:
+        return " ".join(
+            str(row.get(key) or "").strip().upper()
+            for key in ("crewPosition", "description")
+            if str(row.get(key) or "").strip()
+        )
+
+    def _looks_like_captain(row: dict) -> bool:
+        text = _position_text(row)
+        return bool(row.get("isCaptain")) or "CPT" in text or "CAPTAIN" in text or "PIC" in text
+
+    def _looks_like_fo(row: dict) -> bool:
+        text = _position_text(row)
+        return bool(row.get("isFirstOfficer")) or re.search(r"\bFO\b|FIRST\s+OFFICER", text) is not None
+
     if not _PIC_POS_IDS:
-        _PIC_POS_IDS = {p["id"] for p in positions if p.get("isCaptain")}
+        _PIC_POS_IDS = {p["id"] for p in positions if p.get("id") not in (None, "") and _looks_like_captain(p)}
     if not _PILOT_POS_IDS:
-        _PILOT_POS_IDS = {p["id"] for p in positions if p.get("isCaptain") or p.get("isFirstOfficer")}
+        _PILOT_POS_IDS = {p["id"] for p in positions if p.get("id") not in (None, "") and (_looks_like_captain(p) or _looks_like_fo(p))}
 
     # Safety fallback if API empty
     if not _PIC_POS_IDS:
@@ -4491,6 +4506,8 @@ def _envision_request(
         message = f"{exc}"
         if body:
             message = f"{message} | body={body[:2000]}"
+        if payload:
+            message = f"{message} | payload={json.dumps(payload, default=str)[:2000]}"
         raise RuntimeError(message) from exc
 
     if not resp.content:

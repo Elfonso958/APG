@@ -644,6 +644,14 @@
     grid-template-columns: minmax(0, 1fr) auto;
   }
 
+  .kmh-detail-editor-grid.details-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .kmh-detail-editor-grid.details-grid .wide {
+    grid-column: 1 / -1;
+  }
+
   .kmh-note-empty {
     color: #8aa0ae;
   }
@@ -737,7 +745,8 @@
     .kmh-week-board,
     .kmh-month-board,
     .kmh-detail-grid,
-    .kmh-detail-editor-grid {
+    .kmh-detail-editor-grid,
+    .kmh-detail-editor-grid.details-grid {
       grid-template-columns: 1fr;
     }
 
@@ -927,6 +936,32 @@
       <div id="detailNote" class="kmh-note-body"></div>
     </div>
 
+    <div class="kmh-detail-editor">
+      <div class="kmh-detail-label">Flight Details</div>
+      <div class="kmh-detail-editor-grid details-grid">
+        <div class="kmh-field wide">
+          <label for="detailFlightTypeSelect">Flight Type</label>
+          <select id="detailFlightTypeSelect"></select>
+        </div>
+        <div class="kmh-field">
+          <label for="detailExpectedPassengers">Expected PAX</label>
+          <input id="detailExpectedPassengers" type="number" min="0" step="1" placeholder="0">
+        </div>
+        <div class="kmh-field">
+          <label for="detailExpectedCargoKg">Expected Cargo (kg)</label>
+          <input id="detailExpectedCargoKg" type="number" min="0" step="0.1" placeholder="0.0">
+        </div>
+        <div class="kmh-field wide">
+          <label for="detailNoteText">Who Is This Flight For</label>
+          <textarea id="detailNoteText" placeholder="Enter details about who this flight is for..."></textarea>
+        </div>
+      </div>
+      <div class="kmh-detail-actions">
+        <button class="kmh-btn secondary" type="button" id="saveFlightTypeBtn">Save Flight Type</button>
+        <button class="kmh-btn" type="button" id="saveDetailsBtn">Save Details</button>
+      </div>
+    </div>
+
     <div class="kmh-detail-crew">
       <div class="kmh-detail-label">Crew</div>
       <div id="detailCrew"></div>
@@ -1060,11 +1095,17 @@
     const detailGrid = document.getElementById("detailGrid");
     const detailNote = document.getElementById("detailNote");
     const detailCrew = document.getElementById("detailCrew");
+    const detailFlightTypeSelect = document.getElementById("detailFlightTypeSelect");
+    const detailExpectedPassengers = document.getElementById("detailExpectedPassengers");
+    const detailExpectedCargoKg = document.getElementById("detailExpectedCargoKg");
+    const detailNoteText = document.getElementById("detailNoteText");
     const detailFlightDate = document.getElementById("detailFlightDate");
     const detailEtd = document.getElementById("detailEtd");
     const detailEta = document.getElementById("detailEta");
     const detailPilotSelect = document.getElementById("detailPilotSelect");
     const detailStatus = document.getElementById("detailStatus");
+    const saveFlightTypeBtn = document.getElementById("saveFlightTypeBtn");
+    const saveDetailsBtn = document.getElementById("saveDetailsBtn");
     const saveRescheduleBtn = document.getElementById("saveRescheduleBtn");
     const cancelFlightBtn = document.getElementById("cancelFlightBtn");
     const savePilotBtn = document.getElementById("savePilotBtn");
@@ -1091,6 +1132,7 @@
       view: "day",
       flights: [],
       pilots: [],
+      flightTypes: [],
       activeFlight: null,
     };
 
@@ -1244,6 +1286,12 @@
     }
 
     function setDetailEditMode(enabled) {
+      detailFlightTypeSelect.disabled = !enabled;
+      saveFlightTypeBtn.disabled = !enabled;
+      detailExpectedPassengers.disabled = !enabled;
+      detailExpectedCargoKg.disabled = !enabled;
+      detailNoteText.disabled = !enabled;
+      saveDetailsBtn.disabled = !enabled;
       detailFlightDate.disabled = !enabled;
       detailEtd.disabled = !enabled;
       detailEta.disabled = !enabled;
@@ -1258,6 +1306,14 @@
       detailPilotSelect.appendChild(option("Select pilot", ""));
       for (const pilot of (state.pilots || [])) {
         detailPilotSelect.appendChild(option(`${pilot.name || ""}`.trim(), pilot.employee_id));
+      }
+    }
+
+    function renderFlightTypeOptions() {
+      detailFlightTypeSelect.innerHTML = "";
+      detailFlightTypeSelect.appendChild(option("Select flight type", ""));
+      for (const type of (state.flightTypes || [])) {
+        detailFlightTypeSelect.appendChild(option(`${type.description}${type.code ? ` (${type.code})` : ""}`, type.id));
       }
     }
 
@@ -1451,6 +1507,7 @@
         ["Crew Code", flight.crew_code || "-"],
         ["Expected PAX", flight.expected_passengers ?? "-"],
         ["Expected Cargo", flight.expected_cargo_kg != null ? `${flight.expected_cargo_kg} kg` : "-"],
+        ["Flight Type", flight.flight_type || "-"],
         ["Registration", flight.registration || "ZK-KMH"],
         ["Status", flight.status || "-"],
         ["Envision Flight ID", flight.envision_flight_id || "-"],
@@ -1471,6 +1528,11 @@
       }
 
       formatCrewList(flight.crew || []);
+      renderFlightTypeOptions();
+      detailFlightTypeSelect.value = String(flight.flight_type_id || "");
+      detailExpectedPassengers.value = flight.expected_passengers ?? "";
+      detailExpectedCargoKg.value = flight.expected_cargo_kg ?? "";
+      detailNoteText.value = flight.note_body || flight.note_display || "";
       detailFlightDate.value = flight.flight_date || "";
       detailEtd.value = flight.etd || "";
       detailEta.value = flight.eta || "";
@@ -1498,7 +1560,9 @@
         pilotSelect.appendChild(option(`${pilot.name || ""}`.trim(), pilot.employee_id));
       }
       state.pilots = Array.isArray(data.pilots) ? data.pilots : [];
+      state.flightTypes = Array.isArray(data.flight_types) ? data.flight_types : [];
       renderPilotOptions();
+      renderFlightTypeOptions();
       for (const type of (data.flight_types || [])) {
         const opt = option(`${type.description}${type.code ? ` (${type.code})` : ""}`, type.id);
         if (type.new_journey_default) opt.selected = true;
@@ -1576,6 +1640,52 @@
       });
       setStatus(detailStatus, "Flight rescheduled.");
       state.anchorDate = parseYmd(detailFlightDate.value);
+      await loadFlights();
+    }
+
+    async function saveFlightDetails() {
+      if (!state.activeFlight) return;
+      const expectedPax = String(detailExpectedPassengers.value || "").trim();
+      const expectedCargo = String(detailExpectedCargoKg.value || "").trim();
+      if (expectedPax && Number(expectedPax) < 0) {
+        throw new Error("Expected PAX cannot be negative.");
+      }
+      if (expectedCargo && Number(expectedCargo) < 0) {
+        throw new Error("Expected cargo cannot be negative.");
+      }
+      setStatus(detailStatus, "Saving flight details...");
+      const url = flightActionBaseUrl.replace(/0$/, String(state.activeFlight.envision_flight_id));
+      await fetchKmhJson(url, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          action: "update_details",
+          note: detailNoteText.value.trim(),
+          expected_passengers: expectedPax,
+          expected_cargo_kg: expectedCargo,
+        }),
+      });
+      setStatus(detailStatus, "Flight details saved.");
+      await loadFlights();
+    }
+
+    async function changeFlightType() {
+      if (!state.activeFlight) return;
+      const flightTypeId = detailFlightTypeSelect.value;
+      if (!flightTypeId) {
+        throw new Error("Select a flight type first.");
+      }
+      setStatus(detailStatus, "Updating flight type...");
+      const url = flightActionBaseUrl.replace(/0$/, String(state.activeFlight.envision_flight_id));
+      const data = await fetchKmhJson(url, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          action: "change_type",
+          flight_type_id: flightTypeId,
+        }),
+      });
+      setStatus(detailStatus, `Flight type updated to ${data.flight_type || "selected type"}.`);
       await loadFlights();
     }
 
@@ -1679,7 +1789,10 @@
           pilot_employee_id: pilotEmployeeId,
         }),
       });
-      setStatus(detailStatus, `Pilot updated to ${data.pilot || "selected pilot"}.`);
+      const repairText = data.repair && data.repair.to_type
+        ? ` Flight type changed to ${data.repair.to_type} first.`
+        : "";
+      setStatus(detailStatus, `Pilot updated to ${data.pilot || "selected pilot"}.${repairText}`);
       await loadFlights();
     }
 
@@ -1762,6 +1875,12 @@
     document.getElementById("detailClose").addEventListener("click", () => flightDetailDialog.close());
     document.getElementById("saveRescheduleBtn").addEventListener("click", () => {
       rescheduleFlight().catch((err) => setStatus(detailStatus, err.message || String(err), true));
+    });
+    document.getElementById("saveFlightTypeBtn").addEventListener("click", () => {
+      changeFlightType().catch((err) => setStatus(detailStatus, err.message || String(err), true));
+    });
+    document.getElementById("saveDetailsBtn").addEventListener("click", () => {
+      saveFlightDetails().catch((err) => setStatus(detailStatus, err.message || String(err), true));
     });
     document.getElementById("cancelFlightBtn").addEventListener("click", () => {
       cancelFlight().catch((err) => setStatus(detailStatus, err.message || String(err), true));
