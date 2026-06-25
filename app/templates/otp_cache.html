@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+
+{% block head_extra %}
+<style>
+  .page-header { margin: 24px 0 18px; }
+  .panel { background: #fff; border: 1px solid #d9e2ec; border-radius: 8px; padding: 18px; margin-bottom: 18px; }
+  .grid.two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+  .checkbox-row { display: flex; align-items: center; gap: 10px; padding-top: 26px; }
+  .checkbox-row input { width: auto; }
+  .actions-row { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+  .section-title { font-size: 18px; margin: 0 0 12px; }
+  .status-grid { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 8px 12px; margin: 0; }
+  .status-grid dt { font-weight: 700; color: #455a64; }
+  .status-grid dd { margin: 0; overflow-wrap: anywhere; }
+  @media (max-width: 720px) {
+    .grid.two { grid-template-columns: 1fr; }
+    .status-grid { grid-template-columns: 1fr; }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<section class="page-header">
+  <div class="page-kicker">Power BI</div>
+  <h1 class="page-title">OTP Flight Cache</h1>
+  <p class="page-subtitle">Run the Envision OTP cache backfill outside Power BI so reports can read the fast cached endpoint.</p>
+</section>
+
+<section class="panel">
+  <div class="grid two">
+    <label class="form-field">
+      <span>Date From</span>
+      <input id="dateFrom" type="date" value="2022-01-01">
+    </label>
+    <label class="form-field">
+      <span>Date To</span>
+      <input id="dateTo" type="date" value="2035-12-31">
+    </label>
+    <label class="form-field">
+      <span>Window Days</span>
+      <input id="windowDays" type="number" min="1" value="7">
+    </label>
+    <label class="form-field">
+      <span>Chunk Days</span>
+      <input id="chunkDays" type="number" min="1" value="1">
+    </label>
+    <label class="form-field">
+      <span>Page Size</span>
+      <input id="pageSize" type="number" min="1" value="100">
+    </label>
+    <label class="form-field checkbox-row">
+      <input id="includeDetails" type="checkbox">
+      <span>Include passenger/freight/baggage/fuel details</span>
+    </label>
+  </div>
+
+  <div class="actions-row">
+    <button id="startBtn" class="btn" type="button">Start Cache</button>
+    <a class="btn secondary" href="{{ url_for('api.api_envision_otp_flights_cached') }}" target="_blank" rel="noopener">Open Cached API</a>
+  </div>
+</section>
+
+<section class="panel">
+  <h2 class="section-title">Status</h2>
+  <dl class="status-grid">
+    <dt>Running</dt><dd id="running">-</dd>
+    <dt>Started</dt><dd id="startedAt">-</dd>
+    <dt>Finished</dt><dd id="finishedAt">-</dd>
+    <dt>Window</dt><dd id="currentWindow">-</dd>
+    <dt>Progress</dt><dd id="progress">-</dd>
+    <dt>Rows</dt><dd id="rows">0</dd>
+    <dt>Created</dt><dd id="created">0</dd>
+    <dt>Updated</dt><dd id="updated">0</dd>
+    <dt>Skipped</dt><dd id="skipped">0</dd>
+    <dt>Error</dt><dd id="error">-</dd>
+  </dl>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  (function () {
+    const startBtn = document.getElementById("startBtn");
+    const fields = ["running", "startedAt", "finishedAt", "currentWindow", "rows", "created", "updated", "skipped", "error"];
+
+    function val(id) {
+      const el = document.getElementById(id);
+      return el ? el.value : "";
+    }
+
+    function setText(id, value) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = value === null || value === undefined || value === "" ? "-" : String(value);
+    }
+
+    function render(status) {
+      fields.forEach((key) => setText(key, status[key]));
+      setText("running", status.running ? "Yes" : "No");
+      setText("progress", `${status.windowsDone || 0} / ${status.windowsTotal || 0}`);
+      startBtn.disabled = !!status.running;
+      startBtn.textContent = status.running ? "Cache Running" : "Start Cache";
+    }
+
+    async function poll() {
+      const res = await fetch("{{ url_for('ui.ops_otp_cache_status') }}", { headers: { Accept: "application/json" } });
+      render(await res.json());
+    }
+
+    startBtn.addEventListener("click", async () => {
+      const payload = {
+        dateFrom: val("dateFrom"),
+        dateTo: val("dateTo"),
+        windowDays: Number(val("windowDays") || 7),
+        chunkDays: Number(val("chunkDays") || 1),
+        pageSize: Number(val("pageSize") || 100),
+        includeDetails: document.getElementById("includeDetails").checked
+      };
+
+      const res = await fetch("{{ url_for('ui.ops_otp_cache_start') }}", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      render(data.status || data);
+    });
+
+    poll().catch(console.error);
+    setInterval(() => poll().catch(console.error), 5000);
+  })();
+</script>
+{% endblock %}

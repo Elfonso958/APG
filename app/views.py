@@ -5,6 +5,7 @@ from .models import SyncRun, SyncFlightLog, AppConfig, CharterManifest
 from . import db
 from .kmh_auth import create_kmh_session, clear_kmh_session, get_kmh_session
 from .zenith_client import fetch_dcs_for_flight
+from .otp_cache_job import get_otp_cache_job_status, start_otp_cache_job
 from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime as _dt
@@ -73,6 +74,43 @@ def _runtime_envision_base() -> str:
 
 def _kmh_cookie_path() -> str:
     return request.script_root or "/"
+
+@ui_bp.get("/ops/otp-cache")
+def ops_otp_cache():
+    return render_template("otp_cache.html")
+
+
+@ui_bp.get("/ops/otp-cache/status")
+def ops_otp_cache_status():
+    return jsonify(get_otp_cache_job_status())
+
+
+@ui_bp.post("/ops/otp-cache/start")
+def ops_otp_cache_start():
+    payload = request.get_json(silent=True) or {}
+
+    def as_int(name: str, default: int) -> int:
+        try:
+            value = int(payload.get(name) or default)
+        except (TypeError, ValueError):
+            value = default
+        return max(1, value)
+
+    date_from = str(payload.get("dateFrom") or "2022-01-01").strip()
+    date_to = str(payload.get("dateTo") or "2035-12-31").strip()
+    include_details = str(payload.get("includeDetails") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+    started, status = start_otp_cache_job(
+        current_app._get_current_object(),
+        date_from=date_from,
+        date_to=date_to,
+        window_days=as_int("windowDays", 7),
+        chunk_days=as_int("chunkDays", 1),
+        page_size=as_int("pageSize", 100),
+        include_details=include_details,
+    )
+    return jsonify(ok=started, status=status), (202 if started else 409)
+
 
 @ui_bp.route("/ops/modify-leg")
 def ops_modify_leg():
