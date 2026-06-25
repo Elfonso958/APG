@@ -785,32 +785,78 @@ def _is_active_envision_registration(row: dict) -> bool:
     return status == "ACTIVE" or status_id == "1"
 
 
-def _filter_defects_to_active_registrations(token: str, defects: list[dict]) -> list[dict]:
+def _friendly_aircraft_type(model: Any) -> str | None:
+    raw = str(model or "").strip()
+    if not raw:
+        return None
+    compact = re.sub(r"[\s_-]+", "", raw.upper())
+    if compact.startswith("SF340") or "SAAB340" in compact:
+        return "Saab 340"
+    if compact.startswith("ATR72") or compact.startswith("ATR4272"):
+        return "ATR72"
+    if compact in {"DC3", "DOUGLASDC3"}:
+        return "DC-3"
+    if compact in {"CV580", "CONVAIRCV580"}:
+        return "Convair 580"
+    return raw
+
+
+def _build_registration_lookups(registrations: list[dict]) -> tuple[dict[str, dict], dict[str, dict]]:
+    by_id: dict[str, dict] = {}
+    by_reg: dict[str, dict] = {}
+    for row in registrations:
+        reg_id = str(row.get("id") or "").strip()
+        reg = _normalise_aircraft_registration(row.get("registration"))
+        if reg_id:
+            by_id[reg_id] = row
+        if reg:
+            by_reg[reg] = row
+    return by_id, by_reg
+
+
+def _find_defect_registration(defect: dict, by_id: dict[str, dict], by_reg: dict[str, dict]) -> dict | None:
+    reg_id = str(defect.get("regId") or defect.get("registrationId") or "").strip()
+    if reg_id and reg_id in by_id:
+        return by_id[reg_id]
+    reg = _normalise_aircraft_registration(
+        defect.get("reg")
+        or defect.get("registration")
+        or defect.get("flightRegistrationDescription")
+        or defect.get("aircraftRegistration")
+    )
+    if reg and reg in by_reg:
+        return by_reg[reg]
+    return None
+
+
+def _enrich_defect_with_registration(defect: dict, registration: dict | None) -> dict:
+    enriched = dict(defect)
+    model = registration.get("model") if registration else None
+    enriched["aircraftType"] = _friendly_aircraft_type(model)
+    enriched["aircraftModel"] = model
+    enriched["aircraftModelId"] = registration.get("modelId") if registration else None
+    enriched["aircraftStatus"] = registration.get("status") if registration else None
+    enriched["aircraftStatusId"] = registration.get("statusId") if registration else None
+    enriched["aircraftSerialNo"] = registration.get("serialNo") if registration else None
+    enriched["aircraftOperator"] = registration.get("operator") if registration else None
+    enriched["aircraftAssetId"] = registration.get("assetId") if registration else None
+    return enriched
+
+
+def _enrich_defects_with_registration_details(
+    token: str,
+    defects: list[dict],
+    active_aircraft_only: bool = False,
+) -> list[dict]:
     registrations = envision_get_registrations(token)
-    active_reg_ids = {
-        str(row.get("id")).strip()
-        for row in registrations
-        if _is_active_envision_registration(row) and row.get("id") not in (None, "")
-    }
-    active_regs = {
-        _normalise_aircraft_registration(row.get("registration"))
-        for row in registrations
-        if _is_active_envision_registration(row) and row.get("registration")
-    }
-
-    def is_active_defect(defect: dict) -> bool:
-        reg_id = str(defect.get("regId") or defect.get("registrationId") or "").strip()
-        if reg_id and reg_id in active_reg_ids:
-            return True
-        reg = _normalise_aircraft_registration(
-            defect.get("reg")
-            or defect.get("registration")
-            or defect.get("flightRegistrationDescription")
-            or defect.get("aircraftRegistration")
-        )
-        return bool(reg and reg in active_regs)
-
-    return [defect for defect in defects if is_active_defect(defect)]
+    by_id, by_reg = _build_registration_lookups(registrations)
+    enriched: list[dict] = []
+    for defect in defects:
+        registration = _find_defect_registration(defect, by_id, by_reg)
+        if active_aircraft_only and not (registration and _is_active_envision_registration(registration)):
+            continue
+        enriched.append(_enrich_defect_with_registration(defect, registration))
+    return enriched
 
 
 def envision_get_defects_for_powerbi(
@@ -828,8 +874,11 @@ def envision_get_defects_for_powerbi(
     statuses = envision_get_defect_statuses(token)
     if defect_status_id not in (None, ""):
         defects = envision_get_defects(token, defect_status_id, delta_datetime_utc)
-        if active_aircraft_only:
-            defects = _filter_defects_to_active_registrations(token, defects)
+        defects = _enrich_defects_with_registration_details(
+            token,
+            defects,
+            active_aircraft_only=active_aircraft_only,
+        )
         return defects, statuses
 
     status_ids = [
@@ -851,8 +900,11 @@ def envision_get_defects_for_powerbi(
             defects_by_id[defect_id] = defect
 
     defects = list(defects_by_id.values()) + defects_without_id
-    if active_aircraft_only:
-        defects = _filter_defects_to_active_registrations(token, defects)
+    defects = _enrich_defects_with_registration_details(
+        token,
+        defects,
+        active_aircraft_only=active_aircraft_only,
+    )
     return defects, statuses
 
 
