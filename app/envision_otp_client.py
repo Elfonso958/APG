@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, time
 from typing import Any
 
@@ -205,7 +206,8 @@ class EnvisionOtpClient:
         password: str | None,
         *,
         nonce: str = "api",
-        timeout: int = 30,
+        timeout: int = 12,
+        max_workers: int = 12,
         session: requests.Session | None = None,
         logger: logging.Logger | None = None,
         tenant: str | None = None,
@@ -215,6 +217,7 @@ class EnvisionOtpClient:
         self.password = str(password or "").strip()
         self.nonce = nonce
         self.timeout = timeout
+        self.max_workers = max(1, int(max_workers or 1))
         self.session = session or requests.Session()
         self.logger = logger or logging.getLogger(__name__)
         self.tenant = str(tenant or "").strip()
@@ -297,7 +300,23 @@ class EnvisionOtpClient:
     def fetch_otp_flights(self, date_from: str, date_to: str, page_size: int = 500) -> list[dict[str, Any]]:
         token = self.authenticate()
         flights = self.fetch_flights(token, date_from, date_to, page_size)
-        return [self.enrich_flight(token, flight) for flight in flights]
+        if not flights:
+            return []
+
+        worker_count = min(self.max_workers, len(flights))
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            return list(executor.map(lambda flight: self.safe_enrich_flight(token, flight), flights))
+
+    def safe_enrich_flight(self, token: str, flight: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return self.enrich_flight(token, flight)
+        except Exception as exc:
+            self.logger.warning(
+                "Envision flight enrichment failed: flight_id=%s error=%s",
+                flight.get("id"),
+                exc,
+            )
+            return flatten_otp_flight(flight, {})
 
     def enrich_flight(self, token: str, flight: dict[str, Any]) -> dict[str, Any]:
         flight_id = flight.get("id")
@@ -390,7 +409,8 @@ def build_envision_otp_client(config: dict[str, Any], logger: logging.Logger | N
         config.get("ENVISION_BASE") or os.getenv("ENVISION_BASE"),
         username,
         password,
-        timeout=int(config.get("ENVISION_OTP_TIMEOUT") or os.getenv("ENVISION_OTP_TIMEOUT") or 30),
+        timeout=int(config.get("ENVISION_OTP_TIMEOUT") or os.getenv("ENVISION_OTP_TIMEOUT") or 12),
+        max_workers=int(config.get("ENVISION_OTP_MAX_WORKERS") or os.getenv("ENVISION_OTP_MAX_WORKERS") or 12),
         logger=logger,
         tenant=config.get("ENVISION_TENANT") or os.getenv("ENVISION_TENANT"),
     )
