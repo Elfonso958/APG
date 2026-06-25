@@ -464,13 +464,24 @@ class EnvisionOtpClient:
 
     def enrich_flight(self, token: str, flight: dict[str, Any]) -> dict[str, Any]:
         flight_id = flight.get("id")
-        sections = {
-            "passengers": self.fetch_optional_section(token, flight_id, "Passengers") if flight_id else None,
-            "freight": self.fetch_optional_section(token, flight_id, "Freight") if flight_id else None,
-            "baggage": self.fetch_optional_section(token, flight_id, "Baggage") if flight_id else None,
-            "oil_fuel": self.fetch_optional_section(token, flight_id, "OilAndFuel") if flight_id else None,
-            "additional_oil_fuel": self.fetch_optional_section(token, flight_id, "AdditionalOilAndFuel") if flight_id else None,
+        section_names = {
+            "passengers": "Passengers",
+            "freight": "Freight",
+            "baggage": "Baggage",
+            "oil_fuel": "OilAndFuel",
+            "additional_oil_fuel": "AdditionalOilAndFuel",
         }
+        if not flight_id:
+            return flatten_otp_flight(flight, {key: None for key in section_names})
+
+        sections: dict[str, Any] = {}
+        with ThreadPoolExecutor(max_workers=len(section_names)) as executor:
+            futures = {
+                key: executor.submit(self.fetch_optional_section, token, flight_id, section)
+                for key, section in section_names.items()
+            }
+            for key, future in futures.items():
+                sections[key] = future.result()
         return flatten_otp_flight(flight, sections)
 
 

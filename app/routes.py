@@ -4331,6 +4331,7 @@ def api_envision_flights_raw():
 
 
 @api_bp.get("/envision/otp-flights")
+@api_bp.get("/envision/otp-flights-live")
 def api_envision_otp_flights():
     """
     Power BI-ready Envision OTP flight export.
