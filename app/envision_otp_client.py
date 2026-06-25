@@ -3,6 +3,7 @@ import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, time, timedelta
+from threading import Lock
 from typing import Any
 
 import requests
@@ -214,6 +215,15 @@ def _sum_numbers(values: list[Any]) -> float | int | None:
     return int(total) if float(total).is_integer() else total
 
 
+def _to_int(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _coerce_list(payload: Any, label: str) -> list[dict[str, Any]]:
     if isinstance(payload, list):
         return [item for item in payload if isinstance(item, dict)]
@@ -239,6 +249,146 @@ def _items(payload: Any) -> list[dict[str, Any]]:
 
 def _text(value: Any) -> str:
     return str(value).strip() if value not in (None, "") else ""
+
+
+def _position_text(row: dict[str, Any]) -> str:
+    return " ".join(
+        str(row.get(key) or "").strip().upper()
+        for key in (
+            "crewPosition",
+            "description",
+            "crewPositionDescription",
+            "positionCode",
+            "positionDescription",
+        )
+        if str(row.get(key) or "").strip()
+    )
+
+
+def _looks_like_captain_position(row: dict[str, Any]) -> bool:
+    text = _position_text(row)
+    return bool(row.get("isCaptain")) or "CPT" in text or "CAPTAIN" in text or "PIC" in text
+
+
+def _looks_like_fo_position(row: dict[str, Any]) -> bool:
+    text = _position_text(row)
+    return bool(row.get("isFirstOfficer")) or re.search(r"\bFO\b|FIRST\s+OFFICER", text) is not None
+
+
+def _employee_display(employee: dict[str, Any], crew_row: dict[str, Any]) -> tuple[str | None, str | None, int | None]:
+    first = _text(employee.get("firstName") or employee.get("givenName") or crew_row.get("firstName") or crew_row.get("givenName"))
+    last = _text(
+        employee.get("surname")
+        or employee.get("lastName")
+        or employee.get("familyName")
+        or crew_row.get("surname")
+        or crew_row.get("lastName")
+        or crew_row.get("familyName")
+    )
+    name = f"{first} {last}".strip()
+    if not name:
+        name = _text(
+            employee.get("shortDisplayName")
+            or employee.get("employeeName")
+            or employee.get("displayName")
+            or employee.get("employeeUsername")
+            or crew_row.get("employeeName")
+            or crew_row.get("displayName")
+            or crew_row.get("crewMemberName")
+        )
+    employee_no = _text(employee.get("employeeNo") or crew_row.get("employeeNo") or crew_row.get("employeeCode")).upper() or None
+    employee_id = _to_int(crew_row.get("employeeId"))
+    return name or None, employee_no, employee_id
+
+
+def _crew_sort_key(row: dict[str, Any]) -> tuple[int, int]:
+    display_order = _to_int(row.get("displayOrder"))
+    crew_id = _to_int(row.get("id"))
+    return (display_order if display_order is not None else 9999, crew_id if crew_id is not None else 999999)
+
+
+def _crew_position_id(row: dict[str, Any]) -> int | None:
+    return _to_int(row.get("crewPositionId") or row.get("positionId"))
+
+
+def _crew_role_summary(
+    crew: Any,
+    crew_positions: Any,
+    employee_lookup,
+) -> dict[str, Any]:
+    crew_rows = [row for row in _items(crew) if row.get("employeeId")]
+    positions = [row for row in _items(crew_positions) if _to_int(row.get("id")) is not None]
+    position_by_id = {_to_int(row.get("id")): row for row in positions}
+
+    captain_position_ids = {
+        pos_id for pos_id, row in position_by_id.items()
+        if pos_id is not None and _looks_like_captain_position(row)
+    }
+    fo_position_ids = {
+        pos_id for pos_id, row in position_by_id.items()
+        if pos_id is not None and _looks_like_fo_position(row)
+    }
+    pilot_position_ids = captain_position_ids | fo_position_ids
+
+    def is_captain(row: dict[str, Any]) -> bool:
+        pos_id = _crew_position_id(row)
+        return (
+            (pos_id in captain_position_ids)
+            or _looks_like_captain_position(row)
+            or _looks_like_captain_position(position_by_id.get(pos_id) or {})
+        )
+
+    def is_fo(row: dict[str, Any]) -> bool:
+        pos_id = _crew_position_id(row)
+        return (
+            (pos_id in fo_position_ids)
+            or _looks_like_fo_position(row)
+            or _looks_like_fo_position(position_by_id.get(pos_id) or {})
+        )
+
+    def is_pilot(row: dict[str, Any]) -> bool:
+        pos_id = _crew_position_id(row)
+        return pos_id in pilot_position_ids or is_captain(row) or is_fo(row)
+
+    def resolve(row: dict[str, Any] | None) -> tuple[str | None, str | None, int | None]:
+        if not row:
+            return None, None, None
+        employee_id = row.get("employeeId")
+        employee = employee_lookup(employee_id) if employee_id not in (None, "") else {}
+        return _employee_display(employee or {}, row)
+
+    operating = [row for row in crew_rows if bool(row.get("isOperating", True))]
+    selectable = operating or crew_rows
+
+    captain_candidates = sorted([row for row in selectable if is_captain(row)], key=_crew_sort_key)
+    captain_row = captain_candidates[0] if captain_candidates else None
+    if captain_row is None:
+        pilot_flying = sorted([row for row in selectable if row.get("isPilotFlying") and is_pilot(row)], key=_crew_sort_key)
+        captain_row = pilot_flying[0] if pilot_flying else None
+    if captain_row is None:
+        pilots = sorted([row for row in selectable if is_pilot(row)], key=_crew_sort_key)
+        captain_row = pilots[0] if pilots else None
+
+    captain_name, captain_no, captain_id = resolve(captain_row)
+
+    fo_candidates = sorted(
+        [
+            row for row in selectable
+            if row is not captain_row and (is_fo(row) or (is_pilot(row) and not is_captain(row)))
+        ],
+        key=_crew_sort_key,
+    )
+    fo_row = fo_candidates[0] if fo_candidates else None
+    fo_name, fo_no, fo_id = resolve(fo_row)
+
+    return {
+        "Captain": captain_name,
+        "Captain Employee No": captain_no,
+        "Captain Employee Id": captain_id,
+        "First Officer": fo_name,
+        "First Officer Employee No": fo_no,
+        "First Officer Employee Id": fo_id,
+    }
 
 
 def _normalise_registration(value: Any) -> str:
@@ -392,6 +542,8 @@ class EnvisionOtpClient:
         self.session = session or requests.Session()
         self.logger = logger or logging.getLogger(__name__)
         self.tenant = str(tenant or "").strip()
+        self._employee_cache: dict[str, dict[str, Any]] = {}
+        self._employee_cache_lock = Lock()
 
     def _headers(self, token: str | None = None) -> dict[str, str]:
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
@@ -483,6 +635,57 @@ class EnvisionOtpClient:
         except requests.RequestException as exc:
             raise EnvisionFlightsFetchError(f"Envision registrations fetch failed: {exc}") from exc
 
+    def fetch_crew_positions(self, token: str) -> list[dict[str, Any]]:
+        try:
+            resp = self.session.get(
+                f"{self.base_url}/Crews/Positions",
+                headers=self._headers(token),
+                timeout=self.timeout,
+            )
+            resp.raise_for_status()
+            return _coerce_list(resp.json() or [], "Crews/Positions")
+        except requests.RequestException as exc:
+            raise EnvisionFlightsFetchError(f"Envision crew positions fetch failed: {exc}") from exc
+
+    def fetch_flight_crew(self, token: str, flight_id: Any) -> list[dict[str, Any]]:
+        try:
+            resp = self.session.get(
+                f"{self.base_url}/Flights/{flight_id}/Crew",
+                headers=self._headers(token),
+                timeout=self.timeout,
+            )
+            resp.raise_for_status()
+            return _coerce_list(resp.json() or [], "Flights/Crew")
+        except requests.RequestException as exc:
+            raise EnvisionFlightsFetchError(f"Envision flight crew fetch failed: {exc}") from exc
+
+    def fetch_employee(self, token: str, employee_id: Any) -> dict[str, Any]:
+        emp_id = str(employee_id or "").strip()
+        if not emp_id:
+            return {}
+        with self._employee_cache_lock:
+            cached = self._employee_cache.get(emp_id)
+        if cached is not None:
+            return cached
+
+        try:
+            resp = self.session.get(
+                f"{self.base_url}/Employees/{emp_id}",
+                headers=self._headers(token),
+                timeout=self.timeout,
+            )
+            resp.raise_for_status()
+            employee = resp.json() or {}
+            if not isinstance(employee, dict):
+                employee = {}
+        except requests.RequestException as exc:
+            self.logger.warning("Envision employee fetch failed: employee_id=%s error=%s", emp_id, exc)
+            employee = {}
+
+        with self._employee_cache_lock:
+            self._employee_cache[emp_id] = employee
+        return employee
+
     def filter_active_registration_flights(
         self,
         flights: list[dict[str, Any]],
@@ -528,16 +731,37 @@ class EnvisionOtpClient:
         flights = self.filter_active_registration_flights(flights, registrations)
         if not flights:
             return []
-        if not include_details:
-            return [flatten_otp_flight(flight, {}) for flight in flights]
+
+        try:
+            crew_positions = self.fetch_crew_positions(token)
+        except EnvisionFlightsFetchError as exc:
+            self.logger.warning("Envision crew position enrichment disabled: %s", exc)
+            crew_positions = []
 
         worker_count = min(self.max_workers, len(flights))
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            return list(executor.map(lambda flight: self.safe_enrich_flight(token, flight), flights))
+            return list(
+                executor.map(
+                    lambda flight: self.safe_enrich_flight(
+                        token,
+                        flight,
+                        crew_positions,
+                        include_details=include_details,
+                    ),
+                    flights,
+                )
+            )
 
-    def safe_enrich_flight(self, token: str, flight: dict[str, Any]) -> dict[str, Any]:
+    def safe_enrich_flight(
+        self,
+        token: str,
+        flight: dict[str, Any],
+        crew_positions: list[dict[str, Any]],
+        *,
+        include_details: bool,
+    ) -> dict[str, Any]:
         try:
-            return self.enrich_flight(token, flight)
+            return self.enrich_flight(token, flight, crew_positions, include_details=include_details)
         except Exception as exc:
             self.logger.warning(
                 "Envision flight enrichment failed: flight_id=%s error=%s",
@@ -546,7 +770,14 @@ class EnvisionOtpClient:
             )
             return flatten_otp_flight(flight, {})
 
-    def enrich_flight(self, token: str, flight: dict[str, Any]) -> dict[str, Any]:
+    def enrich_flight(
+        self,
+        token: str,
+        flight: dict[str, Any],
+        crew_positions: list[dict[str, Any]],
+        *,
+        include_details: bool,
+    ) -> dict[str, Any]:
         flight_id = flight.get("id")
         section_names = {
             "passengers": "Passengers",
@@ -560,13 +791,21 @@ class EnvisionOtpClient:
             return flatten_otp_flight(flight, {key: None for key in section_names})
 
         sections: dict[str, Any] = {}
-        with ThreadPoolExecutor(max_workers=len(section_names)) as executor:
-            futures = {
-                key: executor.submit(self.fetch_optional_section, token, flight_id, section)
-                for key, section in section_names.items()
-            }
-            for key, future in futures.items():
-                sections[key] = future.result()
+        if include_details:
+            with ThreadPoolExecutor(max_workers=len(section_names)) as executor:
+                futures = {
+                    key: executor.submit(self.fetch_optional_section, token, flight_id, section)
+                    for key, section in section_names.items()
+                }
+                for key, future in futures.items():
+                    sections[key] = future.result()
+        try:
+            sections["crew"] = self.fetch_flight_crew(token, flight_id)
+        except EnvisionFlightsFetchError as exc:
+            self.logger.warning("Envision crew enrichment failed: flight_id=%s error=%s", flight_id, exc)
+            sections["crew"] = []
+        sections["crew_positions"] = crew_positions
+        sections["employee_lookup"] = lambda employee_id: self.fetch_employee(token, employee_id)
         return flatten_otp_flight(flight, sections)
 
 
@@ -583,6 +822,25 @@ def flatten_otp_flight(flight: dict[str, Any], sections: dict[str, Any]) -> dict
     additional_oil_fuel = sections.get("additional_oil_fuel")
     additional_total, additional_details = _additional_oil_fuel_summary(additional_oil_fuel)
     delay_total, delay_codes, delay_details = _delay_summary(sections.get("delays"))
+    employee_lookup = sections.get("employee_lookup")
+    if not callable(employee_lookup):
+        employee_lookup = lambda employee_id: {}
+    crew_summary = {
+        "Captain": None,
+        "Captain Employee No": None,
+        "Captain Employee Id": None,
+        "First Officer": None,
+        "First Officer Employee No": None,
+        "First Officer Employee Id": None,
+    }
+    if "crew" in sections or "crew_positions" in sections:
+        crew_summary.update(
+            _crew_role_summary(
+                sections.get("crew"),
+                sections.get("crew_positions"),
+                employee_lookup,
+            )
+        )
 
     passenger_adult = _number(passengers, ["adult", "adults", "passengerAdult", "actualAdult"])
     passenger_child = _number(passengers, ["child", "children", "passengerChild", "actualChild"])
@@ -631,6 +889,7 @@ def flatten_otp_flight(flight: dict[str, Any], sections: dict[str, Any]) -> dict
             "Delay Codes": delay_codes,
             "Delay Minutes Total": delay_total,
             "Delay Details": delay_details,
+            **crew_summary,
         }
     )
     return row

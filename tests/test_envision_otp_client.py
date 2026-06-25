@@ -71,6 +71,24 @@ class FakeSession:
                     },
                 ]
             )
+        if url.endswith("/Crews/Positions"):
+            return FakeResponse(
+                [
+                    {"id": 71, "crewPosition": "CPT", "description": "Captain", "isCaptain": True},
+                    {"id": 75, "crewPosition": "FO", "description": "First Officer", "isFirstOfficer": True},
+                ]
+            )
+        if url.endswith("/Flights/10/Crew"):
+            return FakeResponse(
+                [
+                    {"id": 1, "crewPositionId": 71, "displayOrder": 1, "employeeId": 100, "isPilotFlying": True},
+                    {"id": 2, "crewPositionId": 75, "displayOrder": 2, "employeeId": 101, "isPilotFlying": False},
+                ]
+            )
+        if url.endswith("/Employees/100"):
+            return FakeResponse({"id": 100, "firstName": "Alex", "surname": "Captain", "employeeNo": "CAP100"})
+        if url.endswith("/Employees/101"):
+            return FakeResponse({"id": 101, "firstName": "Blair", "surname": "Officer", "employeeNo": "FO101"})
         if url.endswith("/Passengers"):
             return FakeResponse({"expected": 8, "adult": 5, "child": 2, "infant": 1, "male": 4, "female": 3})
         if url.endswith("/Freight"):
@@ -173,6 +191,12 @@ class EnvisionOtpClientTests(unittest.TestCase):
         self.assertEqual(row["Delay Minutes Total"], 20)
         self.assertIn("DEP 41 12m Aircraft defects LH bleed", row["Delay Details"])
         self.assertIn("ARR 64 8m Late passengers", row["Delay Details"])
+        self.assertEqual(row["Captain"], "Alex Captain")
+        self.assertEqual(row["Captain Employee No"], "CAP100")
+        self.assertEqual(row["Captain Employee Id"], 100)
+        self.assertEqual(row["First Officer"], "Blair Officer")
+        self.assertEqual(row["First Officer Employee No"], "FO101")
+        self.assertEqual(row["First Officer Employee Id"], 101)
         self.assertEqual(session.post_call["json"]["nonce"], "api")
 
     def test_flatten_marks_cancelled_and_diverted(self):
