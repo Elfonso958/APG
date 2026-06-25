@@ -79,6 +79,7 @@ from .envision_otp_client import (
     EnvisionDateError,
     EnvisionFlightsFetchError,
     build_envision_otp_client,
+    parse_chunk_days,
     parse_page_size,
     validate_date_range,
 )
@@ -4341,16 +4342,22 @@ def api_envision_otp_flights():
       /api/envision/otp-flights-live?dateFrom=2026-06-01&dateTo=2026-06-07
       Defaults to dateFrom=2022-01-01 and dateTo=2035-12-31.
       otp-flights-live defaults to includeDetails=0 for a faster live response.
+      otp-flights-live defaults to chunkDays=1 so Envision is queried one day at a time.
     """
     try:
+        is_live = request.path.rstrip("/").endswith("/otp-flights-live")
         date_from, date_to = validate_date_range(
             request.args.get("dateFrom") or request.args.get("date_from") or DEFAULT_OTP_DATE_FROM,
             request.args.get("dateTo") or request.args.get("date_to") or DEFAULT_OTP_DATE_TO,
         )
         page_size = parse_page_size(request.args.get("pageSize") or request.args.get("limit"))
+        chunk_days = parse_chunk_days(
+            request.args.get("chunkDays") or request.args.get("chunk_days"),
+            default=1 if is_live else 31,
+        )
         include_details_raw = request.args.get("includeDetails") or request.args.get("include_details")
         if include_details_raw is None:
-            include_details = not request.path.rstrip("/").endswith("/otp-flights-live")
+            include_details = not is_live
         else:
             include_details = str(include_details_raw).strip().lower() in {"1", "true", "yes", "on"}
     except EnvisionDateError as exc:
@@ -4363,6 +4370,7 @@ def api_envision_otp_flights():
             date_to,
             page_size=page_size,
             include_details=include_details,
+            chunk_days=chunk_days,
         )
         return jsonify(rows)
     except EnvisionAuthError as exc:

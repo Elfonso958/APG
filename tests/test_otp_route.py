@@ -7,8 +7,8 @@ from app.routes import api_bp
 
 
 class FakeOtpClient:
-    def fetch_otp_flights(self, date_from, date_to, page_size=500, include_details=True):
-        self.args = (date_from, date_to, page_size, include_details)
+    def fetch_otp_flights(self, date_from, date_to, page_size=500, include_details=True, chunk_days=31):
+        self.args = (date_from, date_to, page_size, include_details, chunk_days)
         return [{"id": 1, "Route": "AKL-CHT"}]
 
 
@@ -33,7 +33,7 @@ class OtpRouteTests(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.get_json(), [{"id": 1, "Route": "AKL-CHT"}])
-        self.assertEqual(fake_client.args, ("2022-01-01", "2035-12-31", 500, True))
+        self.assertEqual(fake_client.args, ("2022-01-01", "2035-12-31", 500, True, 31))
 
     def test_otp_flights_returns_powerbi_array(self):
         client = self.create_client()
@@ -44,7 +44,7 @@ class OtpRouteTests(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.get_json(), [{"id": 1, "Route": "AKL-CHT"}])
-        self.assertEqual(fake_client.args, ("2026-06-01", "2026-06-02", 250, True))
+        self.assertEqual(fake_client.args, ("2026-06-01", "2026-06-02", 250, True, 31))
 
     def test_otp_flights_live_alias_returns_powerbi_array(self):
         client = self.create_client()
@@ -55,7 +55,7 @@ class OtpRouteTests(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.get_json(), [{"id": 1, "Route": "AKL-CHT"}])
-        self.assertEqual(fake_client.args, ("2026-06-01", "2026-06-07", 500, False))
+        self.assertEqual(fake_client.args, ("2026-06-01", "2026-06-07", 500, False, 1))
 
     def test_otp_flights_live_can_include_details_when_requested(self):
         client = self.create_client()
@@ -65,7 +65,17 @@ class OtpRouteTests(unittest.TestCase):
             resp = client.get("/api/envision/otp-flights-live?dateFrom=2026-06-01&dateTo=2026-06-07&includeDetails=1")
 
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(fake_client.args, ("2026-06-01", "2026-06-07", 500, True))
+        self.assertEqual(fake_client.args, ("2026-06-01", "2026-06-07", 500, True, 1))
+
+    def test_otp_flights_live_chunk_days_can_be_overridden(self):
+        client = self.create_client()
+        fake_client = FakeOtpClient()
+
+        with patch("app.routes.build_envision_otp_client", return_value=fake_client):
+            resp = client.get("/api/envision/otp-flights-live?dateFrom=2026-06-01&dateTo=2026-06-07&chunkDays=2")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(fake_client.args, ("2026-06-01", "2026-06-07", 500, False, 2))
 
 
 if __name__ == "__main__":

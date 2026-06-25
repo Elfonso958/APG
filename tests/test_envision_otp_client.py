@@ -2,7 +2,7 @@ import unittest
 
 import requests
 
-from app.envision_otp_client import EnvisionOtpClient, _monthly_date_chunks, flatten_otp_flight, validate_date_range
+from app.envision_otp_client import EnvisionOtpClient, _date_chunks, _monthly_date_chunks, flatten_otp_flight, validate_date_range
 
 
 class FakeResponse:
@@ -108,6 +108,16 @@ class EnvisionOtpClientTests(unittest.TestCase):
                 ("2026-01-15", "2026-01-31"),
                 ("2026-02-01", "2026-02-28"),
                 ("2026-03-01", "2026-03-02"),
+            ],
+        )
+
+    def test_date_chunks_can_split_daily(self):
+        self.assertEqual(
+            _date_chunks("2026-06-01", "2026-06-03", chunk_days=1),
+            [
+                ("2026-06-01", "2026-06-01"),
+                ("2026-06-02", "2026-06-02"),
+                ("2026-06-03", "2026-06-03"),
             ],
         )
 

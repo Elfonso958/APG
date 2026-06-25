@@ -77,6 +77,19 @@ def parse_page_size(value: str | None, default: int = 500) -> int:
     return page_size
 
 
+def parse_chunk_days(value: str | None, default: int = 31) -> int:
+    raw = str(value or "").strip()
+    if not raw:
+        return default
+    try:
+        chunk_days = int(raw)
+    except ValueError as exc:
+        raise EnvisionDateError("chunkDays must be a positive integer.") from exc
+    if chunk_days <= 0:
+        raise EnvisionDateError("chunkDays must be a positive integer.")
+    return chunk_days
+
+
 def _date_part(value: datetime | date) -> date:
     return value.date() if isinstance(value, datetime) else value
 
@@ -101,6 +114,23 @@ def _monthly_date_chunks(date_from: str, date_to: str) -> list[tuple[str, str]]:
         chunk_end = date_to if month_end == end else month_end.isoformat()
         chunks.append((chunk_start, chunk_end))
         cursor = month_end + timedelta(days=1)
+    return chunks
+
+
+def _date_chunks(date_from: str, date_to: str, chunk_days: int = 31) -> list[tuple[str, str]]:
+    if chunk_days >= 28:
+        return _monthly_date_chunks(date_from, date_to)
+
+    start = _date_part(_parse_date_param(date_from, "dateFrom"))
+    end = _date_part(_parse_date_param(date_to, "dateTo"))
+    chunks: list[tuple[str, str]] = []
+    cursor = start
+    while cursor <= end:
+        chunk_end = min(cursor + timedelta(days=chunk_days - 1), end)
+        chunk_start = date_from if cursor == start else cursor.isoformat()
+        final_chunk_end = date_to if chunk_end == end else chunk_end.isoformat()
+        chunks.append((chunk_start, final_chunk_end))
+        cursor = chunk_end + timedelta(days=1)
     return chunks
 
 
@@ -382,10 +412,17 @@ class EnvisionOtpClient:
             offset += page_size
         return rows
 
-    def fetch_flights(self, token: str, date_from: str, date_to: str, page_size: int) -> list[dict[str, Any]]:
+    def fetch_flights(
+        self,
+        token: str,
+        date_from: str,
+        date_to: str,
+        page_size: int,
+        chunk_days: int = 31,
+    ) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         seen_ids: set[str] = set()
-        for chunk_from, chunk_to in _monthly_date_chunks(date_from, date_to):
+        for chunk_from, chunk_to in _date_chunks(date_from, date_to, chunk_days=chunk_days):
             chunk_rows = self._fetch_flights_for_range(token, chunk_from, chunk_to, page_size)
             for row in chunk_rows:
                 flight_id = str(row.get("id") or "").strip()
@@ -445,9 +482,10 @@ class EnvisionOtpClient:
         date_to: str,
         page_size: int = 500,
         include_details: bool = True,
+        chunk_days: int = 31,
     ) -> list[dict[str, Any]]:
         token = self.authenticate()
-        flights = self.fetch_flights(token, date_from, date_to, page_size)
+        flights = self.fetch_flights(token, date_from, date_to, page_size, chunk_days=chunk_days)
         registrations = self.fetch_registrations(token)
         flights = self.filter_active_registration_flights(flights, registrations)
         if not flights:
