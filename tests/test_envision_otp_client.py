@@ -38,10 +38,10 @@ class FakeSession:
                             "flightRegistrationId": 1021,
                             "departurePlaceDescription": "AKL",
                             "arrivalPlaceDescription": "CHT",
-                            "departureScheduled": "2026-06-01T10:00:00",
-                            "departureActual": "2026-06-01T10:12:00",
-                            "arrivalScheduled": "2026-06-01T12:00:00",
-                            "arrivalActual": "2026-06-01T12:20:00",
+                            "departureScheduled": "2026-06-01T10:00:00Z",
+                            "departureActual": "2026-06-01T10:12:00Z",
+                            "arrivalScheduled": "2026-06-01T12:00:00Z",
+                            "arrivalActual": "2026-06-01T12:20:00Z",
                         },
                         {
                             "id": 11,
@@ -119,6 +119,8 @@ class EnvisionOtpClientTests(unittest.TestCase):
         self.assertEqual(row["aircraftStatus"], "ACTIVE")
         self.assertEqual(row["aircraftType"], "Saab 340")
         self.assertEqual(row["Route"], "AKL-CHT")
+        self.assertEqual(row["departureScheduled"], "2026-06-01T22:00:00+12:00")
+        self.assertEqual(row["departureActual"], "2026-06-01T22:12:00+12:00")
         self.assertEqual(row["Departure Delay Minutes"], 12)
         self.assertTrue(row["Departure OTP"])
         self.assertEqual(row["Arrival Delay Minutes"], 20)
@@ -142,6 +144,19 @@ class EnvisionOtpClientTests(unittest.TestCase):
 
         self.assertTrue(row["Cancelled"])
         self.assertTrue(row["Diverted"])
+
+    def test_flatten_converts_utc_to_nz_daylight_saving_time(self):
+        row = flatten_otp_flight(
+            {
+                "departureScheduled": "2026-01-01T10:00:00Z",
+                "departureActual": "2026-01-01T10:10:00Z",
+            },
+            {},
+        )
+
+        self.assertEqual(row["departureScheduled"], "2026-01-01T23:00:00+13:00")
+        self.assertEqual(row["departureActual"], "2026-01-01T23:10:00+13:00")
+        self.assertEqual(row["Departure Delay Minutes"], 10)
 
 
 if __name__ == "__main__":
