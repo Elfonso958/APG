@@ -189,7 +189,7 @@ def create_app():
     app.register_blueprint(ui_bp)
     
     with app.app_context():
-        from .models import AppConfig, SyncRun, SyncFlightLog  # noqa: F401
+        from .models import AppConfig, SyncRun, SyncFlightLog, EnvisionOtpFlightCache  # noqa: F401
         from .sync.envision_apg_sync import run_sync_once_return_summary
         from . import db as _db
 

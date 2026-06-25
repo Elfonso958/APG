@@ -106,6 +106,20 @@ class CharterManifest(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
+
+class EnvisionOtpFlightCache(db.Model):
+    __tablename__ = "envision_otp_flight_cache"
+
+    id = db.Column(db.Integer, primary_key=True)
+    envision_flight_id = db.Column(db.String(32), unique=True, index=True, nullable=False)
+    flight_date = db.Column(db.Date, index=True, nullable=True)
+    departure_scheduled = db.Column(db.DateTime, index=True, nullable=True)
+    reg = db.Column(db.String(16), index=True, nullable=True)
+    row_json = db.Column(db.Text, nullable=False, default="{}")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+
 # NEW: simple key/value schedule settings (singleton row: id=1)
 class AppConfig(db.Model):
     __tablename__ = "app_config"

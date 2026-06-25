@@ -8,7 +8,7 @@ from . import db, _normalise_sync_result
 import requests
 from sqlalchemy import func
 from zoneinfo import ZoneInfo
-from .models import SyncRun, SyncFlightLog, SyncFlightState, AppConfig, ManifestUploadState, CharterManifest
+from .models import SyncRun, SyncFlightLog, SyncFlightState, AppConfig, ManifestUploadState, CharterManifest, EnvisionOtpFlightCache
 from .kmh_auth import get_kmh_session
 from .helpers_manifest import _seat_sort_key, _format_ssrs, _calc_age, _parse_dcs_dob, generate_manifest_pdf_from_html, generate_pdf_modern
 
@@ -83,6 +83,7 @@ from .envision_otp_client import (
     parse_page_size,
     validate_date_range,
 )
+from .otp_cache import get_cached_otp_rows, parse_otp_cache_date, upsert_otp_cache_rows
 
 api_bp = Blueprint("api", __name__)
 
@@ -4381,6 +4382,77 @@ def api_envision_otp_flights():
         return jsonify(ok=False, error=str(exc)), 502
     except Exception as exc:
         current_app.logger.exception("otp-flights failed")
+        return jsonify(ok=False, error=str(exc)), 500
+
+
+@api_bp.get("/envision/otp-flights-cached")
+def api_envision_otp_flights_cached():
+    """
+    Fast Power BI endpoint backed by the local OTP flight cache.
+
+    Power BI URL format:
+      /api/envision/otp-flights-cached?dateFrom=2022-01-01&dateTo=2035-12-31
+    """
+    try:
+        date_from, date_to = validate_date_range(
+            request.args.get("dateFrom") or request.args.get("date_from") or DEFAULT_OTP_DATE_FROM,
+            request.args.get("dateTo") or request.args.get("date_to") or DEFAULT_OTP_DATE_TO,
+        )
+        start = parse_otp_cache_date(date_from, DEFAULT_OTP_DATE_FROM)
+        end = parse_otp_cache_date(date_to, DEFAULT_OTP_DATE_TO)
+    except (EnvisionDateError, ValueError) as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+
+    try:
+        return jsonify(get_cached_otp_rows(start, end))
+    except Exception as exc:
+        current_app.logger.exception("otp-flights-cached failed")
+        return jsonify(ok=False, error=str(exc)), 500
+
+
+@api_bp.post("/envision/otp-flights-cache/refresh")
+def api_envision_otp_flights_cache_refresh():
+    """
+    Refresh a date window into the local OTP flight cache.
+
+    Use this in small windows, e.g. one day/week/month. For full historical
+    backfill, run a server-side script/job rather than Power BI.
+    """
+    try:
+        date_from, date_to = validate_date_range(
+            request.args.get("dateFrom") or request.args.get("date_from"),
+            request.args.get("dateTo") or request.args.get("date_to"),
+        )
+        page_size = parse_page_size(request.args.get("pageSize") or request.args.get("limit"))
+        chunk_days = parse_chunk_days(
+            request.args.get("chunkDays") or request.args.get("chunk_days"),
+            default=1,
+        )
+        include_details = str(
+            request.args.get("includeDetails") or request.args.get("include_details") or ""
+        ).strip().lower() in {"1", "true", "yes", "on"}
+    except EnvisionDateError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+
+    try:
+        client = build_envision_otp_client(current_app.config, current_app.logger)
+        rows = client.fetch_otp_flights(
+            date_from,
+            date_to,
+            page_size=page_size,
+            include_details=include_details,
+            chunk_days=chunk_days,
+        )
+        result = upsert_otp_cache_rows(rows)
+        return jsonify(ok=True, dateFrom=date_from, dateTo=date_to, count=len(rows), **result)
+    except EnvisionAuthError as exc:
+        current_app.logger.exception("otp-flights cache refresh Envision authentication failed")
+        return jsonify(ok=False, error=str(exc)), 502
+    except EnvisionFlightsFetchError as exc:
+        current_app.logger.exception("otp-flights cache refresh Envision fetch failed")
+        return jsonify(ok=False, error=str(exc)), 502
+    except Exception as exc:
+        current_app.logger.exception("otp-flights cache refresh failed")
         return jsonify(ok=False, error=str(exc)), 500
 
 
