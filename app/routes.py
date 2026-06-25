@@ -72,6 +72,14 @@ from .sync.envision_apg_sync import (
 import logging
 import re
 from .zenith_client import fetch_dcs_for_flight
+from .envision_otp_client import (
+    EnvisionAuthError,
+    EnvisionDateError,
+    EnvisionFlightsFetchError,
+    build_envision_otp_client,
+    parse_page_size,
+    validate_date_range,
+)
 
 api_bp = Blueprint("api", __name__)
 
@@ -4318,6 +4326,38 @@ def api_envision_flights_raw():
             "flights_raw failed for Envision dateFrom=%s dateTo=%s", date_from, date_to
         )
         return jsonify(ok=False, error=str(e)), 500
+
+
+@api_bp.get("/envision/otp-flights")
+def api_envision_otp_flights():
+    """
+    Power BI-ready Envision OTP flight export.
+
+    Power BI URL format:
+      /api/envision/otp-flights?dateFrom=2026-06-01&dateTo=2026-06-30&pageSize=500
+    """
+    try:
+        date_from, date_to = validate_date_range(
+            request.args.get("dateFrom") or request.args.get("date_from"),
+            request.args.get("dateTo") or request.args.get("date_to"),
+        )
+        page_size = parse_page_size(request.args.get("pageSize") or request.args.get("limit"))
+    except EnvisionDateError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+
+    try:
+        client = build_envision_otp_client(current_app.config, current_app.logger)
+        rows = client.fetch_otp_flights(date_from, date_to, page_size=page_size)
+        return jsonify(rows)
+    except EnvisionAuthError as exc:
+        current_app.logger.exception("otp-flights Envision authentication failed")
+        return jsonify(ok=False, error=str(exc)), 502
+    except EnvisionFlightsFetchError as exc:
+        current_app.logger.exception("otp-flights Envision flights fetch failed")
+        return jsonify(ok=False, error=str(exc)), 502
+    except Exception as exc:
+        current_app.logger.exception("otp-flights failed")
+        return jsonify(ok=False, error=str(exc)), 500
 
 
 @api_bp.get("/envision/defects_powerbi")

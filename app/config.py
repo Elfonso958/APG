@@ -12,6 +12,9 @@ class Config:
     ENVISION_USE_TEST = os.getenv("ENVISION_USE_TEST")
     ENVISION_USER = os.getenv("ENVISION_USER")   # e.g. "OJB"
     ENVISION_PASS = os.getenv("ENVISION_PASS")   # e.g. "********"
+    ENVISION_USERNAME = os.getenv("ENVISION_USERNAME")
+    ENVISION_PASSWORD = os.getenv("ENVISION_PASSWORD")
+    ENVISION_OTP_TIMEOUT = os.getenv("ENVISION_OTP_TIMEOUT", "30")
 
     APG_POST_URL = os.getenv("APG_POST_URL")
     APG_BEARER_TOKEN = os.getenv("APG_BEARER_TOKEN")
