@@ -2,9 +2,8 @@ import logging
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time
 from typing import Any
-from zoneinfo import ZoneInfo
 
 import requests
 
@@ -27,8 +26,6 @@ class EnvisionFlightsFetchError(EnvisionOtpError):
 
 DEFAULT_OTP_DATE_FROM = "2022-01-01"
 DEFAULT_OTP_DATE_TO = "2035-12-31"
-NZ_TZ = ZoneInfo("Pacific/Auckland")
-ISO_DATETIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}")
 
 
 def _normalise_base_url(base_url: str | None) -> str:
@@ -92,21 +89,6 @@ def _parse_datetime(value: Any) -> datetime | None:
         return datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
         return None
-
-
-def _utc_to_nz_iso(value: Any) -> Any:
-    if not isinstance(value, str) or not ISO_DATETIME_RE.match(value.strip()):
-        return value
-    parsed = _parse_datetime(value)
-    if not parsed:
-        return value
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(NZ_TZ).isoformat()
-
-
-def _convert_row_datetimes_to_nz(row: dict[str, Any]) -> dict[str, Any]:
-    return {key: _utc_to_nz_iso(value) for key, value in row.items()}
 
 
 def _minutes_between(actual: Any, scheduled: Any) -> int | None:
@@ -510,7 +492,7 @@ def flatten_otp_flight(flight: dict[str, Any], sections: dict[str, Any]) -> dict
             "Additional Oil/Fuel Details": additional_details,
         }
     )
-    return _convert_row_datetimes_to_nz(row)
+    return row
 
 
 def build_envision_otp_client(config: dict[str, Any], logger: logging.Logger | None = None) -> EnvisionOtpClient:
