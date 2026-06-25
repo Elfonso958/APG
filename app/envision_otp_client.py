@@ -439,13 +439,21 @@ class EnvisionOtpClient:
             )
             return None
 
-    def fetch_otp_flights(self, date_from: str, date_to: str, page_size: int = 500) -> list[dict[str, Any]]:
+    def fetch_otp_flights(
+        self,
+        date_from: str,
+        date_to: str,
+        page_size: int = 500,
+        include_details: bool = True,
+    ) -> list[dict[str, Any]]:
         token = self.authenticate()
         flights = self.fetch_flights(token, date_from, date_to, page_size)
         registrations = self.fetch_registrations(token)
         flights = self.filter_active_registration_flights(flights, registrations)
         if not flights:
             return []
+        if not include_details:
+            return [flatten_otp_flight(flight, {}) for flight in flights]
 
         worker_count = min(self.max_workers, len(flights))
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
