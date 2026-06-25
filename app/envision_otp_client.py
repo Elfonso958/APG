@@ -331,6 +331,44 @@ def _additional_oil_fuel_summary(payload: Any) -> tuple[float | int | None, str 
     return total, " | ".join(details) if details else None
 
 
+def _delay_summary(payload: Any) -> tuple[float | int | None, str | None, str | None]:
+    rows = _items(payload)
+    total = _sum_numbers([
+        _first_value(row, ["delayMinutes", "minutes", "durationMinutes"])
+        for row in rows
+    ])
+
+    codes: list[str] = []
+    details: list[str] = []
+    for row in rows:
+        code = _text(_first_value(row, ["delayCode", "code"]))
+        if code and code not in codes:
+            codes.append(code)
+
+        is_arrival = row.get("isArrival")
+        timing = "ARR" if is_arrival is True else "DEP" if is_arrival is False else ""
+        minutes = _text(_first_value(row, ["delayMinutes", "minutes", "durationMinutes"]))
+        description = _text(_first_value(row, ["delayCodeDescription", "description", "reason"]))
+        remarks = _text(_first_value(row, ["remarks", "remark", "comments", "comment"]))
+
+        parts = [
+            timing,
+            code,
+            f"{minutes}m" if minutes else "",
+            description,
+            remarks,
+        ]
+        detail = " ".join(part for part in parts if part)
+        if detail:
+            details.append(detail)
+
+    return (
+        total,
+        " | ".join(codes) if codes else None,
+        " | ".join(details) if details else None,
+    )
+
+
 class EnvisionOtpClient:
     def __init__(
         self,
@@ -516,6 +554,7 @@ class EnvisionOtpClient:
             "baggage": "Baggage",
             "oil_fuel": "OilAndFuel",
             "additional_oil_fuel": "AdditionalOilAndFuel",
+            "delays": "Delays",
         }
         if not flight_id:
             return flatten_otp_flight(flight, {key: None for key in section_names})
@@ -543,6 +582,7 @@ def flatten_otp_flight(flight: dict[str, Any], sections: dict[str, Any]) -> dict
     oil_fuel = sections.get("oil_fuel")
     additional_oil_fuel = sections.get("additional_oil_fuel")
     additional_total, additional_details = _additional_oil_fuel_summary(additional_oil_fuel)
+    delay_total, delay_codes, delay_details = _delay_summary(sections.get("delays"))
 
     passenger_adult = _number(passengers, ["adult", "adults", "passengerAdult", "actualAdult"])
     passenger_child = _number(passengers, ["child", "children", "passengerChild", "actualChild"])
@@ -588,6 +628,9 @@ def flatten_otp_flight(flight: dict[str, Any], sections: dict[str, Any]) -> dict
             "Oil Uplift": _number(oil_fuel, ["oilUplift", "oilUpliftActual"]),
             "Additional Oil/Fuel Usage Total": additional_total,
             "Additional Oil/Fuel Details": additional_details,
+            "Delay Codes": delay_codes,
+            "Delay Minutes Total": delay_total,
+            "Delay Details": delay_details,
         }
     )
     return row

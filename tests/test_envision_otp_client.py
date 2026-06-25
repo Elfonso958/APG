@@ -91,6 +91,25 @@ class FakeSession:
                     }
                 ]
             )
+        if url.endswith("/Delays"):
+            return FakeResponse(
+                [
+                    {
+                        "delayCode": "41",
+                        "delayCodeDescription": "Aircraft defects",
+                        "delayMinutes": 12,
+                        "remarks": "LH bleed",
+                        "isArrival": False,
+                    },
+                    {
+                        "delayCode": "64",
+                        "delayCodeDescription": "Late passengers",
+                        "delayMinutes": 8,
+                        "remarks": "",
+                        "isArrival": True,
+                    },
+                ]
+            )
         raise AssertionError(f"Unexpected URL {url}")
 
 
@@ -150,6 +169,10 @@ class EnvisionOtpClientTests(unittest.TestCase):
         self.assertEqual(row["Baggage Actual Weight"], 90)
         self.assertEqual(row["Additional Oil/Fuel Usage Total"], 2)
         self.assertIn("Engine 1", row["Additional Oil/Fuel Details"])
+        self.assertEqual(row["Delay Codes"], "41 | 64")
+        self.assertEqual(row["Delay Minutes Total"], 20)
+        self.assertIn("DEP 41 12m Aircraft defects LH bleed", row["Delay Details"])
+        self.assertIn("ARR 64 8m Late passengers", row["Delay Details"])
         self.assertEqual(session.post_call["json"]["nonce"], "api")
 
     def test_flatten_marks_cancelled_and_diverted(self):
