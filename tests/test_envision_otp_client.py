@@ -2,7 +2,7 @@ import unittest
 
 import requests
 
-from app.envision_otp_client import EnvisionOtpClient, flatten_otp_flight, validate_date_range
+from app.envision_otp_client import EnvisionOtpClient, _monthly_date_chunks, flatten_otp_flight, validate_date_range
 
 
 class FakeResponse:
@@ -99,6 +99,16 @@ class EnvisionOtpClientTests(unittest.TestCase):
         self.assertEqual(
             validate_date_range("2026-06-01", "2026-06-02T12:00:00"),
             ("2026-06-01", "2026-06-02T12:00:00"),
+        )
+
+    def test_monthly_date_chunks_split_large_ranges(self):
+        self.assertEqual(
+            _monthly_date_chunks("2026-01-15", "2026-03-02"),
+            [
+                ("2026-01-15", "2026-01-31"),
+                ("2026-02-01", "2026-02-28"),
+                ("2026-03-01", "2026-03-02"),
+            ],
         )
 
     def test_fetch_otp_flights_paginates_and_continues_when_enrichment_fails(self):

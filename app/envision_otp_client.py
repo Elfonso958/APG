@@ -2,7 +2,7 @@ import logging
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 import requests
@@ -75,6 +75,33 @@ def parse_page_size(value: str | None, default: int = 500) -> int:
     if page_size <= 0:
         raise EnvisionDateError("limit/pageSize must be a positive integer.")
     return page_size
+
+
+def _date_part(value: datetime | date) -> date:
+    return value.date() if isinstance(value, datetime) else value
+
+
+def _next_month(value: date) -> date:
+    if value.month == 12:
+        return date(value.year + 1, 1, 1)
+    return date(value.year, value.month + 1, 1)
+
+
+def _monthly_date_chunks(date_from: str, date_to: str) -> list[tuple[str, str]]:
+    start = _date_part(_parse_date_param(date_from, "dateFrom"))
+    end = _date_part(_parse_date_param(date_to, "dateTo"))
+    if start.year == end.year and start.month == end.month:
+        return [(date_from, date_to)]
+
+    chunks: list[tuple[str, str]] = []
+    cursor = start
+    while cursor <= end:
+        month_end = min(_next_month(cursor) - timedelta(days=1), end)
+        chunk_start = date_from if cursor == start else cursor.isoformat()
+        chunk_end = date_to if month_end == end else month_end.isoformat()
+        chunks.append((chunk_start, chunk_end))
+        cursor = month_end + timedelta(days=1)
+    return chunks
 
 
 def _parse_datetime(value: Any) -> datetime | None:
@@ -327,7 +354,7 @@ class EnvisionOtpClient:
             raise EnvisionAuthError("Envision authentication response did not include a token.")
         return str(token)
 
-    def fetch_flights(self, token: str, date_from: str, date_to: str, page_size: int) -> list[dict[str, Any]]:
+    def _fetch_flights_for_range(self, token: str, date_from: str, date_to: str, page_size: int) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         offset = 0
         while True:
@@ -353,6 +380,20 @@ class EnvisionOtpClient:
             if len(page) < page_size:
                 break
             offset += page_size
+        return rows
+
+    def fetch_flights(self, token: str, date_from: str, date_to: str, page_size: int) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for chunk_from, chunk_to in _monthly_date_chunks(date_from, date_to):
+            chunk_rows = self._fetch_flights_for_range(token, chunk_from, chunk_to, page_size)
+            for row in chunk_rows:
+                flight_id = str(row.get("id") or "").strip()
+                if flight_id:
+                    if flight_id in seen_ids:
+                        continue
+                    seen_ids.add(flight_id)
+                rows.append(row)
         return rows
 
     def fetch_registrations(self, token: str) -> list[dict[str, Any]]:
