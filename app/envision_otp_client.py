@@ -24,6 +24,10 @@ class EnvisionFlightsFetchError(EnvisionOtpError):
     pass
 
 
+DEFAULT_OTP_DATE_FROM = "2022-01-01"
+DEFAULT_OTP_DATE_TO = "2035-12-31"
+
+
 def _normalise_base_url(base_url: str | None) -> str:
     base = str(base_url or "").strip().rstrip("/")
     if not base:
@@ -180,6 +184,78 @@ def _text(value: Any) -> str:
     return str(value).strip() if value not in (None, "") else ""
 
 
+def _normalise_registration(value: Any) -> str:
+    return re.sub(r"\s+", "", str(value or "").strip().upper())
+
+
+def _is_active_registration(registration: dict[str, Any]) -> bool:
+    status = _normalise_registration(registration.get("status"))
+    status_id = str(registration.get("statusId") or "").strip()
+    return status == "ACTIVE" or status_id == "1"
+
+
+def _friendly_aircraft_type(model: Any) -> str | None:
+    raw = str(model or "").strip()
+    if not raw:
+        return None
+    compact = re.sub(r"[\s_-]+", "", raw.upper())
+    if compact.startswith("SF340") or "SAAB340" in compact:
+        return "Saab 340"
+    if compact.startswith("ATR72") or compact.startswith("ATR4272"):
+        return "ATR72"
+    if compact in {"DC3", "DOUGLASDC3"}:
+        return "DC-3"
+    if compact in {"CV580", "CONVAIRCV580"}:
+        return "Convair 580"
+    return raw
+
+
+def _registration_lookups(registrations: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    by_id: dict[str, dict[str, Any]] = {}
+    by_reg: dict[str, dict[str, Any]] = {}
+    for registration in registrations:
+        if not _is_active_registration(registration):
+            continue
+        reg_id = str(registration.get("id") or "").strip()
+        reg = _normalise_registration(registration.get("registration"))
+        if reg_id:
+            by_id[reg_id] = registration
+        if reg:
+            by_reg[reg] = registration
+    return by_id, by_reg
+
+
+def _find_flight_registration(
+    flight: dict[str, Any],
+    by_id: dict[str, dict[str, Any]],
+    by_reg: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    for key in ("flightRegistrationId", "registrationId", "regId", "aircraftRegistrationId"):
+        reg_id = str(flight.get(key) or "").strip()
+        if reg_id and reg_id in by_id:
+            return by_id[reg_id]
+
+    for key in ("flightRegistrationDescription", "aircraftRegistration", "registration", "reg"):
+        reg = _normalise_registration(flight.get(key))
+        if reg and reg in by_reg:
+            return by_reg[reg]
+    return None
+
+
+def _with_registration_details(flight: dict[str, Any], registration: dict[str, Any]) -> dict[str, Any]:
+    row = dict(flight)
+    model = registration.get("model")
+    row["aircraftType"] = _friendly_aircraft_type(model)
+    row["aircraftModel"] = model
+    row["aircraftModelId"] = registration.get("modelId")
+    row["aircraftStatus"] = registration.get("status")
+    row["aircraftStatusId"] = registration.get("statusId")
+    row["aircraftSerialNo"] = registration.get("serialNo")
+    row["aircraftOperator"] = registration.get("operator")
+    row["aircraftAssetId"] = registration.get("assetId")
+    return row
+
+
 def _additional_oil_fuel_summary(payload: Any) -> tuple[float | int | None, str | None]:
     rows = _items(payload)
     total = _sum_numbers([row.get("upliftUsage") for row in rows])
@@ -279,6 +355,31 @@ class EnvisionOtpClient:
             offset += page_size
         return rows
 
+    def fetch_registrations(self, token: str) -> list[dict[str, Any]]:
+        try:
+            resp = self.session.get(
+                f"{self.base_url}/Registrations",
+                headers=self._headers(token),
+                timeout=self.timeout,
+            )
+            resp.raise_for_status()
+            return _coerce_list(resp.json() or [], "Registrations")
+        except requests.RequestException as exc:
+            raise EnvisionFlightsFetchError(f"Envision registrations fetch failed: {exc}") from exc
+
+    def filter_active_registration_flights(
+        self,
+        flights: list[dict[str, Any]],
+        registrations: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        by_id, by_reg = _registration_lookups(registrations)
+        active_flights: list[dict[str, Any]] = []
+        for flight in flights:
+            registration = _find_flight_registration(flight, by_id, by_reg)
+            if registration:
+                active_flights.append(_with_registration_details(flight, registration))
+        return active_flights
+
     def fetch_optional_section(self, token: str, flight_id: Any, section: str) -> Any:
         try:
             resp = self.session.get(
@@ -300,6 +401,8 @@ class EnvisionOtpClient:
     def fetch_otp_flights(self, date_from: str, date_to: str, page_size: int = 500) -> list[dict[str, Any]]:
         token = self.authenticate()
         flights = self.fetch_flights(token, date_from, date_to, page_size)
+        registrations = self.fetch_registrations(token)
+        flights = self.filter_active_registration_flights(flights, registrations)
         if not flights:
             return []
 

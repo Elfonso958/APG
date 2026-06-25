@@ -24,12 +24,16 @@ class OtpRouteTests(unittest.TestCase):
         app.register_blueprint(api_bp, url_prefix="/api")
         return app.test_client()
 
-    def test_otp_flights_requires_dates(self):
+    def test_otp_flights_defaults_to_powerbi_date_range(self):
         client = self.create_client()
-        resp = client.get("/api/envision/otp-flights")
+        fake_client = FakeOtpClient()
 
-        self.assertEqual(resp.status_code, 400)
-        self.assertIn("dateFrom is required", resp.get_json()["error"])
+        with patch("app.routes.build_envision_otp_client", return_value=fake_client):
+            resp = client.get("/api/envision/otp-flights")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json(), [{"id": 1, "Route": "AKL-CHT"}])
+        self.assertEqual(fake_client.args, ("2022-01-01", "2035-12-31", 500))
 
     def test_otp_flights_returns_powerbi_array(self):
         client = self.create_client()
@@ -45,4 +49,3 @@ class OtpRouteTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

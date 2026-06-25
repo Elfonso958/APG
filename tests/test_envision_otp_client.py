@@ -35,16 +35,42 @@ class FakeSession:
                     [
                         {
                             "id": 10,
+                            "flightRegistrationId": 1021,
                             "departurePlaceDescription": "AKL",
                             "arrivalPlaceDescription": "CHT",
                             "departureScheduled": "2026-06-01T10:00:00",
                             "departureActual": "2026-06-01T10:12:00",
                             "arrivalScheduled": "2026-06-01T12:00:00",
                             "arrivalActual": "2026-06-01T12:20:00",
+                        },
+                        {
+                            "id": 11,
+                            "flightRegistrationId": 4,
+                            "departurePlaceDescription": "AKL",
+                            "arrivalPlaceDescription": "WLG",
                         }
                     ]
                 )
             return FakeResponse([])
+        if url.endswith("/Registrations"):
+            return FakeResponse(
+                [
+                    {
+                        "id": 1021,
+                        "registration": "ZK-CIT",
+                        "statusId": 1,
+                        "status": "ACTIVE",
+                        "model": "SF340A",
+                    },
+                    {
+                        "id": 4,
+                        "registration": "ZK-CIC",
+                        "statusId": 2,
+                        "status": "INACTIVE",
+                        "model": "SA227AC",
+                    },
+                ]
+            )
         if url.endswith("/Passengers"):
             return FakeResponse({"expected": 8, "adult": 5, "child": 2, "infant": 1, "male": 4, "female": 3})
         if url.endswith("/Freight"):
@@ -85,10 +111,13 @@ class EnvisionOtpClientTests(unittest.TestCase):
             timeout=5,
         )
 
-        rows = client.fetch_otp_flights("2026-06-01", "2026-06-02", page_size=1)
+        rows = client.fetch_otp_flights("2026-06-01", "2026-06-02", page_size=2)
 
         self.assertEqual(len(rows), 1)
         row = rows[0]
+        self.assertEqual(row["id"], 10)
+        self.assertEqual(row["aircraftStatus"], "ACTIVE")
+        self.assertEqual(row["aircraftType"], "Saab 340")
         self.assertEqual(row["Route"], "AKL-CHT")
         self.assertEqual(row["Departure Delay Minutes"], 12)
         self.assertTrue(row["Departure OTP"])
@@ -117,4 +146,3 @@ class EnvisionOtpClientTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

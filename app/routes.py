@@ -73,6 +73,8 @@ import logging
 import re
 from .zenith_client import fetch_dcs_for_flight
 from .envision_otp_client import (
+    DEFAULT_OTP_DATE_FROM,
+    DEFAULT_OTP_DATE_TO,
     EnvisionAuthError,
     EnvisionDateError,
     EnvisionFlightsFetchError,
@@ -4334,12 +4336,13 @@ def api_envision_otp_flights():
     Power BI-ready Envision OTP flight export.
 
     Power BI URL format:
-      /api/envision/otp-flights?dateFrom=2026-06-01&dateTo=2026-06-30&pageSize=500
+      /api/envision/otp-flights?pageSize=500
+      Defaults to dateFrom=2022-01-01 and dateTo=2035-12-31.
     """
     try:
         date_from, date_to = validate_date_range(
-            request.args.get("dateFrom") or request.args.get("date_from"),
-            request.args.get("dateTo") or request.args.get("date_to"),
+            request.args.get("dateFrom") or request.args.get("date_from") or DEFAULT_OTP_DATE_FROM,
+            request.args.get("dateTo") or request.args.get("date_to") or DEFAULT_OTP_DATE_TO,
         )
         page_size = parse_page_size(request.args.get("pageSize") or request.args.get("limit"))
     except EnvisionDateError as exc:
