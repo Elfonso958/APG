@@ -1542,6 +1542,7 @@ if (resetBtn) {
       right: ["B","C"],
       lastRowMode: null,
       hasRow0C: true,
+      lastRowSeats: { left: ["A"], right: ["C","D"] },
     },
     
     ATR72: {
@@ -1720,6 +1721,7 @@ if (resetBtn) {
       rowDiv.appendChild(label);
 
       const isRow0C          = cfg.hasRow0C && rowNum === 0;
+      const isCustomLastRow  = cfg.lastRowSeats && rowNum === lastRowNumber;
       const isLastRow4Inline = cfg.lastRowMode === "4-inline" && rowNum === lastRowNumber;
 
       if (isRow0C) {
@@ -1743,6 +1745,25 @@ if (resetBtn) {
         const rightBlock = document.createElement("div");
         rightBlock.className = "seat-block";
         rightBlock.appendChild(makeSeat(rowNum, "C"));
+        rowDiv.appendChild(rightBlock);
+
+        container.appendChild(rowDiv);
+        return;
+      }
+
+      if (isCustomLastRow) {
+        const leftBlock = document.createElement("div");
+        leftBlock.className = "seat-block";
+        cfg.lastRowSeats.left.forEach(col => leftBlock.appendChild(makeSeat(rowNum, col)));
+        rowDiv.appendChild(leftBlock);
+
+        const aisle = document.createElement("div");
+        aisle.className = "seat-aisle";
+        rowDiv.appendChild(aisle);
+
+        const rightBlock = document.createElement("div");
+        rightBlock.className = "seat-block";
+        cfg.lastRowSeats.right.forEach(col => rightBlock.appendChild(makeSeat(rowNum, col)));
         rowDiv.appendChild(rightBlock);
 
         container.appendChild(rowDiv);

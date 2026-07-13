@@ -4033,10 +4033,12 @@
         jumpSeat: true,
         hasRow0C: false,
         lastRowMode: null,
+        lastRowSeats: null,
       };
       if (reg === "ZK-CIT" || reg === "ZKCIT") {
         cfg.rows = [0].concat(cfg.rows);
         cfg.hasRow0C = true;
+        cfg.lastRowSeats = { left: ["A"], right: ["C", "D"] };
       }
       if (reg === "ZK-CIZ" || reg === "ZKCIZ") {
         cfg.name = `Saab 340B (${reg || "Unknown"})`;
@@ -4217,6 +4219,22 @@
       }
 
       const isLastRow4Inline = cfg.lastRowMode === "4-inline" && rowNum === cfg.rows[cfg.rows.length - 1];
+      const isCustomLastRow = cfg.lastRowSeats && rowNum === cfg.rows[cfg.rows.length - 1];
+      if (isCustomLastRow) {
+        const left = document.createElement("div");
+        left.className = "seat-block";
+        cfg.lastRowSeats.left.forEach((c) => left.appendChild(renderSeatCell(rowNum, c)));
+        row.appendChild(left);
+        const aisle = document.createElement("div");
+        aisle.className = "seat-aisle";
+        row.appendChild(aisle);
+        const right = document.createElement("div");
+        right.className = "seat-block";
+        cfg.lastRowSeats.right.forEach((c) => right.appendChild(renderSeatCell(rowNum, c)));
+        row.appendChild(right);
+        seatmapGrid.appendChild(row);
+        return;
+      }
       if (isLastRow4Inline) {
         const block = document.createElement("div");
         block.className = "seat-block seat-block-inline-4";
