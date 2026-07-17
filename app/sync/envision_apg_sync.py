@@ -948,15 +948,22 @@ def envision_create_flight(token: str, payload: dict) -> dict:
 def envision_create_flight_crew(token: str, flight_id: int | str, payload: dict) -> dict:
     return _envision_request(token, "POST", f"Flights/{flight_id}/Crew", payload, timeout=60)
 
-def _core_from(payload: dict, pic_name: str|None, apg_pic_id: int|None) -> dict:
+def _core_from(
+    payload: dict,
+    pic_name: str | None,
+    apg_pic_id: int | None,
+    cc_names: str | None = None,
+    cc_empnos: str | None = None,
+) -> dict:
     crew = payload.get("crew") or {}
     return {
         "eobt_key": _canon_eobt_to_utc_min_str(payload.get("eobt")),
         "pic_name": (pic_name or None),
         "pic_id": apg_pic_id or None,
-        # NEW: make FO/TIC part of the fingerprint
+        # Crew assignment state that affects APG.
         "fo_id": crew.get("fo_id") or None,
-        "tic_id": crew.get("tic_id") or None,
+        "cc_names": (cc_names or "").strip() or None,
+        "cc_empnos": (cc_empnos or "").strip() or None,
     }
 
 
@@ -986,11 +993,10 @@ def _describe_changes(old_core: Optional[dict], new_core: dict) -> Optional[str]
         new_fo = (new_core.get("fo_name") or new_core.get("fo_id") or "-")
         changes.append(f"FO {old_fo}->{new_fo}")
 
-    # NEW: TIC (prefer names; fall back to ids)
-    if (old_core.get("tic_name") or old_core.get("tic_id")) != (new_core.get("tic_name") or new_core.get("tic_id")):
-        old_tic = (old_core.get("tic_name") or old_core.get("tic_id") or "-")
-        new_tic = (new_core.get("tic_name") or new_core.get("tic_id") or "-")
-        changes.append(f"TIC {old_tic}->{new_tic}")
+    if (old_core.get("cc_names") or old_core.get("cc_empnos")) != (new_core.get("cc_names") or new_core.get("cc_empnos")):
+        old_cc = old_core.get("cc_names") or old_core.get("cc_empnos") or "-"
+        new_cc = new_core.get("cc_names") or new_core.get("cc_empnos") or "-"
+        changes.append(f"Cabin Crew: {old_cc} -> {new_cc}")
 
     return "; ".join(changes) if changes else None
 
@@ -1997,8 +2003,16 @@ def main(
     from typing import Optional, Union
 
     # ---------- tiny helpers (local to this function) ----------
-    def _build_core(payload: dict, pic_name: str|None, apg_pic_id: int|None, pic_code: str|None,
-                    fo_name: str|None = None, tic_name: str|None = None) -> dict:
+    def _build_core(
+        payload: dict,
+        pic_name: str | None,
+        apg_pic_id: int | None,
+        pic_code: str | None,
+        fo_name: str | None = None,
+        cc_names: str | None = None,
+        cc_empnos: str | None = None,
+        cc_count: int = 0,
+    ) -> dict:
         crew = payload.get("crew") or {}
         return {
             "adep": payload.get("adep"),
@@ -2012,11 +2026,11 @@ def main(
             "pic_id": apg_pic_id or None,
             "pic_name": (pic_name or "").strip() or None,
             "pic_code": (pic_code or "").strip().upper() or None,
-            # NEW
             "fo_id": crew.get("fo_id") or None,
-            "tic_id": crew.get("tic_id") or None,
             "fo_name": (fo_name or "").strip() or None,
-            "tic_name": (tic_name or "").strip() or None,
+            "cc_names": (cc_names or "").strip() or None,
+            "cc_empnos": (cc_empnos or "").strip() or None,
+            "cc_count": int(cc_count or 0),
         }
 
 
@@ -2483,8 +2497,10 @@ def main(
             pic_empno = pic_empno.strip().upper()
             apg_pic_id = crewcode_to_id.get(pic_empno)
 
-        # Start/merge crew block
+        # Start/merge crew block. Cabin crew are not APG crew/TIC; clear TIC
+        # so any previous incorrect sync does not leave them there.
         crew_block = payload.get("crew", {"pic_id": 0, "fo_id": 0, "tic_id": 0})
+        crew_block["tic_id"] = 0
 
         if apg_pic_id:
             crew_block["pic_id"] = apg_pic_id
@@ -2520,7 +2536,6 @@ def main(
                 )
 
         # --- CABIN CREW (CC) ---
-        apg_cc_ids = []
         cc_names: list[str] = []
         cc_empnos: list[str] = []
         if cc_list:
@@ -2528,21 +2543,6 @@ def main(
                 cc_empno_norm = (cc_empno or "").strip().upper()
                 cc_names.append((cc_name or "").strip())
                 cc_empnos.append(cc_empno_norm)
-                cid = crewcode_to_id.get(cc_empno_norm) if cc_empno_norm else None
-                apg_cc_ids.append(cid)
-                if not cid and (cc_name or cc_empno_norm):
-                    logging.warning(
-                        "No APG crew match for Cabin Crew employeeNo=%s name=%s (flight %s). "
-                        "Proceeding without TIC linkage for this crew member.",
-                        cc_empno_norm or "-",
-                        cc_name or "-",
-                        f.get("id"),
-                    )
-
-        # Choose TIC (APG supports one) = first mapped CC, else 0
-        tic_id = next((cid for cid in apg_cc_ids if cid), 0)
-        if tic_id:
-            crew_block["tic_id"] = tic_id
 
         # Persist FO context into event/logs (for readable diffs)
         if fo_name is not None:
@@ -2550,24 +2550,14 @@ def main(
         if fo_empno is not None:
             base_evt["fo_empno"] = fo_empno
 
-        # Choose a human-friendly TIC name for diffs
-        tic_name = None
-        if cc_list:
-            if tic_id:
-                for (ccn, cce) in cc_list:
-                    if crewcode_to_id.get((cce or "").strip().upper()) == tic_id:
-                        tic_name = ccn
-                        break
-            if not tic_name:
-                tic_name = cc_list[0][0]
-
         # Persist for the UI/logs
-        if tic_name is not None:
-            base_evt["tic_name"] = tic_name
+        cc_names_text = ", ".join([name for name in cc_names if name])
+        cc_empnos_text = ", ".join(cc_empnos)
+        cc_count = len(cc_list or [])
         if cc_names:
-            base_evt["cc_names"] = ", ".join([name for name in cc_names if name])
-            base_evt["cc_empnos"] = ", ".join(cc_empnos)
-            base_evt["apg_cc_ids"] = ", ".join(str(cid or "") for cid in apg_cc_ids)
+            base_evt["cc_names"] = cc_names_text
+            base_evt["cc_empnos"] = cc_empnos_text
+            base_evt["apg_cc_ids"] = None
 
         # Finalize merged crew block
         payload["crew"] = crew_block
@@ -2587,24 +2577,34 @@ def main(
             prev_fp = prev_entry  # legacy: just fp
 
         # current state
-        new_core = _core_from(payload, pic_name, apg_pic_id)
-        # Ensure FO/TIC are present in new_core even if _core_from() predates FO/TIC
+        new_core = _core_from(payload, pic_name, apg_pic_id, cc_names_text, cc_empnos_text)
+        # Ensure FO/cabin crew are present in new_core.
         new_core["fo_id"] = crew_block.get("fo_id") or None
-        new_core["tic_id"] = crew_block.get("tic_id") or None
-        # (optional nicety for diffs)
         new_core["fo_name"] = base_evt.get("fo_name")
-        new_core["tic_name"] = base_evt.get("tic_name")
+        new_core["cc_names"] = cc_names_text or None
+        new_core["cc_empnos"] = cc_empnos_text or None
+        new_core["cc_count"] = cc_count
 
-        core = _build_core(payload, pic_name, apg_pic_id, None)  # PIC code unknown -> None
-        # Ensure FO/TIC affect fingerprint & extra diff
+        core = _build_core(
+            payload,
+            pic_name,
+            apg_pic_id,
+            None,
+            fo_name=base_evt.get("fo_name"),
+            cc_names=cc_names_text,
+            cc_empnos=cc_empnos_text,
+            cc_count=cc_count,
+        )  # PIC code unknown -> None
+        # Ensure FO/cabin crew affect fingerprint & extra diff.
         core["fo_id"] = crew_block.get("fo_id") or None
-        core["tic_id"] = crew_block.get("tic_id") or None
         core["fo_name"] = base_evt.get("fo_name")
-        core["tic_name"] = base_evt.get("tic_name")
+        core["cc_names"] = cc_names_text or None
+        core["cc_empnos"] = cc_empnos_text or None
+        core["cc_count"] = cc_count
 
         fp = _fingerprint(core)
 
-        # human-readable diff (EOBT + PIC + FO/TIC)
+        # human-readable diff (EOBT + PIC + FO/cabin crew)
         change_reason = _describe_changes(prev_core, new_core)
 
         # small formatter for â€œextraâ€ diffs (PIC code / AC / route / FL / FO / TIC)
@@ -2623,11 +2623,10 @@ def main(
                 changes.append(f"Route: {_v(old.get('route'))} -> {_v(new.get('route'))}")
             if old.get("fl") != new.get("fl"):
                 changes.append(f"FL: {_v(old.get('fl'))} -> {_v(new.get('fl'))}")
-            # NEW: FO/TIC diffs (prefer names; fall back to ids)
             if (old.get("fo_name") or old.get("fo_id")) != (new.get("fo_name") or new.get("fo_id")):
                 changes.append(f"FO: {_v(old.get('fo_name') or old.get('fo_id'))} -> {_v(new.get('fo_name') or new.get('fo_id'))}")
-            if (old.get("tic_name") or old.get("tic_id")) != (new.get("tic_name") or new.get("tic_id")):
-                changes.append(f"TIC: {_v(old.get('tic_name') or old.get('tic_id'))} -> {_v(new.get('tic_name') or new.get('tic_id'))}")
+            if (old.get("cc_names") or old.get("cc_empnos")) != (new.get("cc_names") or new.get("cc_empnos")):
+                changes.append(f"Cabin Crew: {_v(old.get('cc_names') or old.get('cc_empnos'))} -> {_v(new.get('cc_names') or new.get('cc_empnos'))}")
             return "; ".join(changes) if changes else None
 
         # inner push with 401-refresh and special error handling
@@ -2698,8 +2697,6 @@ def main(
                         clean_core[field] = None
                         if field == "fo_id":
                             clean_core["fo_name"] = None
-                        elif field == "tic_id":
-                            clean_core["tic_name"] = None
                     logging.warning(
                         "APG rejected crew field(s) %s=%s; retrying with remaining crew linkage.",
                         ", ".join(bad_fields),
@@ -2772,6 +2769,22 @@ def main(
             except Exception:
                 ret_id = None
 
+            mb_warning = None
+            mb_plan_id = ret_id if ret_id is not None else (_payload.get("id") if isinstance(_payload, dict) else None)
+            if mb_plan_id is not None:
+                try:
+                    applied = apply_cabin_crew_to_apg_loading(apg_bearer, int(mb_plan_id), cc_count)
+                    if not applied and cc_count:
+                        mb_warning = "Cabin crew M&B station was not found in APG plan."
+                        warnings_total += 1
+                except Exception as exc:
+                    mb_warning = f"Cabin crew M&B update failed: {exc}"
+                    warnings_total += 1
+                    logging.exception("Cabin crew M&B update failed for APG plan %s", mb_plan_id)
+            elif cc_count:
+                mb_warning = "Cabin crew M&B update skipped because APG plan id was not returned."
+                warnings_total += 1
+
             new_key = _plan_key_from_payload(_payload)
             cache[str(fid)] = {
                 "fp": _fingerprint(core),
@@ -2786,7 +2799,7 @@ def main(
             _emit_flight_event(**base_evt,
                                result=event_result,
                                reason="; ".join([t for t in [change_reason, _format_changes(prev_core, core)] if t]) or "changed",
-                               warnings=_json.dumps(warns) if warns else None)
+                               warnings="; ".join([t for t in [_json.dumps(warns) if warns else None, mb_warning] if t]) or None)
             return res
 
         # ---------- identity & existence ----------
@@ -3486,6 +3499,79 @@ def build_pax_payload_for_plan(
 
 def apg_plan_get_details(bearer: str, plan_id: int) -> dict:
     return apg_plan_get(bearer, plan_id)
+
+
+def _is_cabin_crew_station_label(label: str | None) -> bool:
+    text = re.sub(r"\s+", " ", str(label or "").strip().lower())
+    if not text:
+        return False
+    if text in {"flight attendant", "cabin attendant", "cabin crew"}:
+        return True
+    return ("attendant" in text and ("flight" in text or "cabin" in text))
+
+
+def apply_cabin_crew_to_apg_loading(
+    bearer: str,
+    plan_id: int,
+    cabin_crew_count: int,
+) -> bool:
+    """
+    APG treats cabin crew as loading/passenger occupancy, not crew.tic_id.
+    Update the matching M&B station while preserving the full loading list.
+    """
+    plan = apg_plan_get(bearer, int(plan_id))
+    mb = plan.get("massAndBalance") or {}
+    loading = [dict(st) for st in (mb.get("loading") or [])]
+    if not loading:
+        logging.warning("[APG] No massAndBalance.loading returned for plan %s; cabin crew not applied.", plan_id)
+        return False
+
+    try:
+        count = max(0, int(cabin_crew_count or 0))
+    except (TypeError, ValueError):
+        count = 0
+    try:
+        mass_each = float(os.getenv("APG_CABIN_CREW_MASS_KG", "86") or 86)
+    except ValueError:
+        mass_each = 86.0
+
+    matched = False
+    for st in loading:
+        if not _is_cabin_crew_station_label(st.get("label")):
+            continue
+        cl = dict(st.get("customLoad") or {})
+        cl["mass"] = float(count * mass_each)
+        cl["volume"] = float(count)
+        cl["pob_count"] = float(count)
+        st["customLoad"] = cl
+        st.setdefault("items", [])
+        matched = True
+        logging.info(
+            "[APG] Cabin crew loading for plan %s station=%s count=%s mass=%.1f",
+            plan_id,
+            st.get("label"),
+            count,
+            float(count * mass_each),
+        )
+        break
+
+    if not matched:
+        logging.warning(
+            "[APG] No Flight Attendant/Cabin Attendant M&B station found for plan %s; cabin crew count=%s not applied.",
+            plan_id,
+            count,
+        )
+        return False
+
+    payload = {
+        "id": int(plan_id),
+        "massAndBalance": {
+            "loading": loading,
+            "fuelMass": mb.get("fuelMass", mb.get("fuel", 0)),
+        },
+    }
+    apg_plan_edit(bearer, payload)
+    return True
 
 def update_apg_plan_from_dcs_row(
     bearer: str,

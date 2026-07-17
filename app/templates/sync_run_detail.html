@@ -75,7 +75,7 @@
                 {% set oldv = words[1:]|join(" ") %}
               {% endif %}
               {% set label_l = label|lower %}
-              <span class="change-chip {{ 'crew-change' if label_l in ['pic', 'fo', 'tic', 'cabin', 'cc'] else '' }}">
+              <span class="change-chip {{ 'crew-change' if label_l in ['pic', 'fo', 'tic', 'cabin', 'cabin crew', 'cc'] else '' }}">
                 <span class="change-label">{{ "Cabin crew" if label_l == "tic" else label }}</span>
                 <span class="change-old">{{ oldv or "-" }}</span>
                 <span class="change-arrow">-></span>
