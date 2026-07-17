@@ -2521,11 +2521,23 @@ def main(
 
         # --- CABIN CREW (CC) ---
         apg_cc_ids = []
+        cc_names: list[str] = []
+        cc_empnos: list[str] = []
         if cc_list:
             for cc_name, cc_empno in cc_list:
                 cc_empno_norm = (cc_empno or "").strip().upper()
+                cc_names.append((cc_name or "").strip())
+                cc_empnos.append(cc_empno_norm)
                 cid = crewcode_to_id.get(cc_empno_norm) if cc_empno_norm else None
                 apg_cc_ids.append(cid)
+                if not cid and (cc_name or cc_empno_norm):
+                    logging.warning(
+                        "No APG crew match for Cabin Crew employeeNo=%s name=%s (flight %s). "
+                        "Proceeding without TIC linkage for this crew member.",
+                        cc_empno_norm or "-",
+                        cc_name or "-",
+                        f.get("id"),
+                    )
 
         # Choose TIC (APG supports one) = first mapped CC, else 0
         tic_id = next((cid for cid in apg_cc_ids if cid), 0)
@@ -2552,6 +2564,10 @@ def main(
         # Persist for the UI/logs
         if tic_name is not None:
             base_evt["tic_name"] = tic_name
+        if cc_names:
+            base_evt["cc_names"] = ", ".join([name for name in cc_names if name])
+            base_evt["cc_empnos"] = ", ".join(cc_empnos)
+            base_evt["apg_cc_ids"] = ", ".join(str(cid or "") for cid in apg_cc_ids)
 
         # Finalize merged crew block
         payload["crew"] = crew_block
@@ -2646,26 +2662,63 @@ def main(
                         logging.error("APG plan/edit denied on create â€” access denied")
                         return None
 
-                # Invalid PIC id â†’ retry once without crew
-                elif "invalid pic_id" in msg or "pic id" in msg:
-                    bad_id = None
-                    try:
-                        bad_id = (_payload.get("crew") or {}).get("pic_id")
-                    except Exception:
-                        pass
-                    logging.warning("APG rejected PIC id=%s; retrying without crew linkageâ€¦", bad_id)
-                    clean_payload = dict(_payload); clean_payload.pop("crew", None)
-                    core = dict(core); core["pic_id"] = None
+                # Invalid crew IDs can happen if APG crew_code mappings are stale.
+                # Keep any other valid crew links instead of dropping the whole block.
+                elif (
+                    "invalid pic_id" in msg
+                    or "pic id" in msg
+                    or "invalid fo_id" in msg
+                    or "fo id" in msg
+                    or "invalid tic_id" in msg
+                    or "tic id" in msg
+                ):
+                    crew_payload = dict((_payload.get("crew") or {}))
+                    bad_fields: list[str] = []
+                    if "pic" in msg:
+                        bad_fields.append("pic_id")
+                    if "fo" in msg:
+                        bad_fields.append("fo_id")
+                    if "tic" in msg:
+                        bad_fields.append("tic_id")
+                    if not bad_fields:
+                        bad_fields = ["pic_id", "fo_id", "tic_id"]
+
+                    bad_values = {field: crew_payload.get(field) for field in bad_fields}
+                    for field in bad_fields:
+                        crew_payload.pop(field, None)
+
+                    clean_payload = dict(_payload)
+                    if crew_payload:
+                        clean_payload["crew"] = crew_payload
+                    else:
+                        clean_payload.pop("crew", None)
+
+                    clean_core = dict(core)
+                    for field in bad_fields:
+                        clean_core[field] = None
+                        if field == "fo_id":
+                            clean_core["fo_name"] = None
+                        elif field == "tic_id":
+                            clean_core["tic_name"] = None
+                    logging.warning(
+                        "APG rejected crew field(s) %s=%s; retrying with remaining crew linkage.",
+                        ", ".join(bad_fields),
+                        bad_values,
+                    )
+                    core = clean_core
                     try:
                         res = apg_plan_edit(apg_bearer, clean_payload)
-                        reason_text = (reason_text + "; " if reason_text else "") + "APG rejected pic_id â†’ retried without crew link"
+                        reason_text = (
+                            (reason_text + "; " if reason_text else "")
+                            + f"APG rejected {', '.join(bad_fields)} -> retried without rejected crew link"
+                        )
                         _payload = clean_payload
                     except Exception:
                         skipped += 1
                         _emit_flight_event(**base_evt, result="failed",
-                                           reason="Invalid pic_id and retry without crew failed",
+                                           reason="Invalid crew id and retry without rejected crew field failed",
                                            warnings=None)
-                        logging.exception("Retry without crew failed")
+                        logging.exception("Retry without rejected crew field failed")
                         return None
                 else:
                     skipped += 1

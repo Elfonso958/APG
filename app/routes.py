@@ -1355,6 +1355,17 @@ def api_sync_run_once():
             pic_name=f.get("pic_name"),
             pic_empno=f.get("pic_empno"),
             apg_pic_id=f.get("apg_pic_id"),
+
+            # FO
+            fo_name=f.get("fo_name"),
+            fo_empno=f.get("fo_empno"),
+            apg_fo_id=f.get("apg_fo_id"),
+
+            # Cabin crew
+            cc_names=f.get("cc_names"),
+            cc_empnos=f.get("cc_empnos"),
+            apg_cc_ids=f.get("apg_cc_ids"),
+
             result=f.get("result"),
             reason=f.get("reason"),
             warnings=f.get("warnings"),
@@ -1437,6 +1448,8 @@ def api_sync_run_flights(rid):
         "eobt": fmt(x.eobt),
         "reg": x.reg, "aircraft_id": x.aircraft_id,
         "pic_name": x.pic_name, "pic_empno": x.pic_empno, "apg_pic_id": x.apg_pic_id,
+        "fo_name": x.fo_name, "fo_empno": x.fo_empno, "apg_fo_id": x.apg_fo_id,
+        "cc_names": x.cc_names, "cc_empnos": x.cc_empnos, "apg_cc_ids": x.apg_cc_ids,
         "result": x.result, "reason": x.reason,
         "warnings": x.warnings,
     } for x in rows]

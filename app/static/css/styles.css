@@ -430,6 +430,232 @@ tr.failed td:first-child  { background-color: #f8d7da; }
 .reason-list li {
   margin-bottom: 2px;
 }
+
+/* ====== Sync run detail ====== */
+.stat-subline {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
+.sync-window-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.window-item {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--text) 3%, transparent);
+}
+
+.sync-flight-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.sync-flight-row {
+  display: grid;
+  grid-template-columns: minmax(210px, 0.8fr) minmax(320px, 1.2fr) minmax(300px, 1fr);
+  gap: 14px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--line);
+}
+
+.sync-flight-row:first-child {
+  border-top: 0;
+}
+
+.sync-flight-row.updated,
+.sync-flight-row.created {
+  background: color-mix(in oklab, var(--ok) 4%, transparent);
+}
+
+.sync-flight-row.failed {
+  background: color-mix(in oklab, var(--err) 5%, transparent);
+}
+
+.flight-title-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.flight-title {
+  font-size: 1.05rem;
+  font-weight: 750;
+  line-height: 1.2;
+}
+
+.flight-sub {
+  color: var(--muted);
+  font-size: 0.86rem;
+  margin-top: 2px;
+}
+
+.flight-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.meta-label {
+  display: block;
+  color: var(--muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.meta-value {
+  display: block;
+  font-weight: 650;
+}
+
+.crew-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.crew-row {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--panel) 90%, var(--bg));
+}
+
+.crew-row.changed {
+  border-color: color-mix(in oklab, var(--ok) 48%, var(--line));
+  background: color-mix(in oklab, var(--ok) 10%, transparent);
+}
+
+.crew-role {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.crew-person,
+.crew-stack {
+  min-width: 0;
+}
+
+.crew-stack {
+  display: grid;
+  gap: 6px;
+}
+
+.crew-name {
+  font-weight: 650;
+}
+
+.crew-code,
+.crew-apg {
+  display: inline-flex;
+  margin-left: 6px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.crew-empty {
+  color: var(--muted);
+}
+
+.change-panel-title {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 8px;
+}
+
+.change-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.change-chip,
+.change-note,
+.change-none {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 5px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: color-mix(in oklab, var(--text) 5%, transparent);
+  font-size: 0.82rem;
+}
+
+.change-chip.crew-change {
+  border-color: color-mix(in oklab, var(--brand) 45%, var(--line));
+  background: color-mix(in oklab, var(--brand) 10%, transparent);
+}
+
+.change-label {
+  color: var(--muted);
+  font-weight: 750;
+}
+
+.change-old {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.change-new {
+  color: var(--ok);
+  font-weight: 750;
+}
+
+.change-arrow {
+  color: var(--muted);
+}
+
+.change-none {
+  color: var(--muted);
+}
+
+.warning-text {
+  margin-top: 10px;
+  color: var(--warn);
+  white-space: normal;
+}
+
+.empty-state {
+  padding: 24px 16px;
+  color: var(--muted);
+}
+
+@media (max-width: 980px) {
+  .sync-flight-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .flight-meta-grid,
+  .crew-row {
+    grid-template-columns: 1fr;
+  }
+}
+
 .page-header {
   display: flex;
   justify-content: space-between;

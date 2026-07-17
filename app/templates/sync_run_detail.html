@@ -1,89 +1,119 @@
 {% extends "base.html" %}
 {% block content %}
 
-{# ---- helpers ---- #}
 {% macro fmt_dt(dt) -%}{{ dt.strftime("%d-%m-%y %H:%M") if dt else "-" }}{%- endmacro %}
 
-{# Render "Reason" as tidy diffs: Label  old -> new #}
-{% macro render_reason_diff(reason) -%}
-  {% if reason %}
-    <ul class="reason-list">
-      {% for part in reason.split(';') %}
-        {% set txt = part|trim|replace('\u2192','->')|replace('\u2014','-') %}
-        {% if txt %}
-          {% set arrow = '->' %}
-          {% set segs = txt.split(arrow) %}
-          {% if segs|length > 1 %}
-            {% set left = segs[0].strip() %}
-            {% set newv = segs[1].strip() %}
-            {% if ':' in left %}
-              {% set label = left.split(':')[0].strip() %}
-              {% set oldv  = left.split(':')|last|trim %}
-            {% else %}
-              {% set lparts = left.split() %}
-              {% set label = lparts[0] if lparts else left %}
-              {% set oldv  = (lparts[1:]|join(' ')).strip() %}
-              {% if not oldv %}{% set oldv = '-' %}{% endif %}
-            {% endif %}
-            <li>
-              <span class="pill-label">{{ label }}</span>
-              <span class="pill-change">
-                <span class="old">{{ oldv }}</span>
-                <span class="arrow">-></span>
-                <span class="new">{{ newv }}</span>
-              </span>
-            </li>
-          {% else %}
-            {% if ':' in txt %}
-              {% set label = txt.split(':')[0].strip() %}
-              {% set val = txt.split(':')|last|trim %}
-              {% set vparts = val.split() %}
-              {% if label in ['PIC','PIC Code','AC ID','Route','FL','FO','TIC'] and vparts|length == 2 %}
-                <li>
-                  <span class="pill-label">{{ label }}</span>
-                  <span class="pill-change">
-                    <span class="old">{{ vparts[0] }}</span>
-                    <span class="arrow">-></span>
-                    <span class="new">{{ vparts[1] }}</span>
-                  </span>
-                </li>
-              {% else %}
-                <li>
-                  <span class="pill-label">{{ label }}</span>
-                  <span class="pill-change">
-                    <span class="new">{{ val or '-' }}</span>
-                  </span>
-                </li>
-              {% endif %}
-            {% else %}
-              {% set parts = txt.split() %}
-              {% set label = parts[0] if parts else '' %}
-              {% set val = (parts[1:]|join(' ')).strip() %}
-              {% if label in ['PIC','EOBT','FO','TIC','Route','FL','AC','Reg'] %}
-                <li>
-                  <span class="pill-label">{{ label }}</span>
-                  <span class="pill-change">
-                    <span class="new">{{ val or '-' }}</span>
-                  </span>
-                </li>
-              {% else %}
-                <li>{{ txt }}</li>
-              {% endif %}
-            {% endif %}
-          {% endif %}
-        {% endif %}
-      {% endfor %}
-    </ul>
+{% macro result_badge(result) -%}
+  {% set value = (result or "unknown")|lower %}
+  {% if value in ["created", "updated", "deleted"] %}
+    {% set cls = "ok" %}
+  {% elif value == "failed" %}
+    {% set cls = "err" %}
+  {% elif value == "skipped" %}
+    {% set cls = "" %}
   {% else %}
-    -
+    {% set cls = "warn" %}
+  {% endif %}
+  <span class="badge {{ cls }}">{{ value|upper }}</span>
+{%- endmacro %}
+
+{% macro crew_person(name, empno, apg_id, empty_text="Not assigned") -%}
+  {% if name or empno or apg_id %}
+    <span class="crew-name">{{ name or "Unknown" }}</span>
+    {% if empno %}<span class="crew-code">{{ empno }}</span>{% endif %}
+    {% if apg_id %}<span class="crew-apg">APG {{ apg_id }}</span>{% endif %}
+  {% else %}
+    <span class="crew-empty">{{ empty_text }}</span>
   {% endif %}
 {%- endmacro %}
+
+{% macro cabin_crew_list(row) -%}
+  {% if row.cc_names %}
+    {% set names = row.cc_names.split(",") %}
+    {% set empnos = row.cc_empnos.split(",") if row.cc_empnos else [] %}
+    {% set apg_ids = row.apg_cc_ids.split(",") if row.apg_cc_ids else [] %}
+    <div class="crew-stack">
+      {% for raw_name in names %}
+        {% set idx = loop.index0 %}
+        {% set name = raw_name|trim %}
+        {% set empno = empnos[idx]|trim if idx < empnos|length else "" %}
+        {% set apg_id = apg_ids[idx]|trim if idx < apg_ids|length else "" %}
+        {% if name or empno or apg_id %}
+          <div class="crew-person">
+            <span class="crew-name">{{ name or "Unknown" }}</span>
+            {% if empno %}<span class="crew-code">{{ empno }}</span>{% endif %}
+            {% if apg_id %}<span class="crew-apg">APG {{ apg_id }}</span>{% endif %}
+          </div>
+        {% endif %}
+      {% endfor %}
+    </div>
+  {% else %}
+    <span class="crew-empty">Not assigned</span>
+  {% endif %}
+{%- endmacro %}
+
+{% macro change_chips(reason) -%}
+  {% if reason %}
+    {% set lowered = reason|lower %}
+    {% if lowered == "no changes since last sync" %}
+      <span class="change-none">No changes since last sync</span>
+    {% else %}
+      <div class="change-chip-list">
+        {% for raw in reason.split(";") %}
+          {% set txt = raw|trim|replace("\u2192", "->")|replace("\u2014", "-") %}
+          {% if txt %}
+            {% set parts = txt.split("->") %}
+            {% if parts|length > 1 %}
+              {% set left = parts[0]|trim %}
+              {% set right = parts[1]|trim %}
+              {% if ":" in left %}
+                {% set label = left.split(":")[0]|trim %}
+                {% set oldv = left.split(":")|last|trim %}
+              {% else %}
+                {% set words = left.split() %}
+                {% set label = words[0] if words else "Change" %}
+                {% set oldv = words[1:]|join(" ") %}
+              {% endif %}
+              {% set label_l = label|lower %}
+              <span class="change-chip {{ 'crew-change' if label_l in ['pic', 'fo', 'tic', 'cabin', 'cc'] else '' }}">
+                <span class="change-label">{{ "Cabin crew" if label_l == "tic" else label }}</span>
+                <span class="change-old">{{ oldv or "-" }}</span>
+                <span class="change-arrow">-></span>
+                <span class="change-new">{{ right or "-" }}</span>
+              </span>
+            {% else %}
+              <span class="change-note">{{ txt }}</span>
+            {% endif %}
+          {% endif %}
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% else %}
+    <span class="change-none">No detail recorded</span>
+  {% endif %}
+{%- endmacro %}
+
+{% set ns = namespace(created=0, updated=0, skipped=0, failed=0, deleted=0, crew_changed=0, with_fo=0, with_cabin=0) %}
+{% for f in flights %}
+  {% set result = (f.result or "")|lower %}
+  {% if result == "created" %}{% set ns.created = ns.created + 1 %}{% endif %}
+  {% if result == "updated" %}{% set ns.updated = ns.updated + 1 %}{% endif %}
+  {% if result == "skipped" %}{% set ns.skipped = ns.skipped + 1 %}{% endif %}
+  {% if result == "failed" %}{% set ns.failed = ns.failed + 1 %}{% endif %}
+  {% if result == "deleted" %}{% set ns.deleted = ns.deleted + 1 %}{% endif %}
+  {% set reason_l = (f.reason or "")|lower %}
+  {% if "pic" in reason_l or "fo" in reason_l or "tic" in reason_l or "cabin" in reason_l %}
+    {% set ns.crew_changed = ns.crew_changed + 1 %}
+  {% endif %}
+  {% if f.fo_name or f.fo_empno or f.apg_fo_id %}{% set ns.with_fo = ns.with_fo + 1 %}{% endif %}
+  {% if f.cc_names %}{% set ns.with_cabin = ns.with_cabin + 1 %}{% endif %}
+{% endfor %}
 
 <div class="page-header mb-3">
   <div>
     <div class="page-kicker">Sync</div>
     <h1 class="page-title">Run #{{ r.id }}</h1>
-    <div class="page-subtitle">Detailed changes and status for this sync.</div>
+    <div class="page-subtitle">What changed, what was skipped, and which crew APG now has for each flight.</div>
   </div>
   <div class="page-meta">
     <div class="actions">
@@ -94,108 +124,125 @@
 
 <div class="grid summary-grid mb-3">
   <div class="card stat-card">
-    <div class="stat-label">Status</div>
+    <div class="stat-label">Run status</div>
     <div class="stat-value">
       {% if r.ok is none %}
-        <span class="status-pill warn">
-          <span class="status-dot dot-warn"></span>
-          UNKNOWN
-        </span>
+        <span class="status-pill warn"><span class="status-dot dot-warn"></span>UNKNOWN</span>
       {% elif r.ok %}
-        <span class="status-pill ok">
-          <span class="status-dot dot-ok"></span>
-          OK
-        </span>
+        <span class="status-pill ok"><span class="status-dot dot-ok"></span>OK</span>
       {% else %}
-        <span class="status-pill err">
-          <span class="status-dot dot-err"></span>
-          FAILED
-        </span>
+        <span class="status-pill err"><span class="status-dot dot-err"></span>FAILED</span>
       {% endif %}
     </div>
   </div>
   <div class="card stat-card">
-    <div class="stat-label">Started</div>
-    <div class="stat-value">{{ fmt_dt(r.started_at) }}</div>
+    <div class="stat-label">Flights touched</div>
+    <div class="stat-value">{{ flights|length }}</div>
+    <div class="stat-subline">
+      {{ ns.created }} created, {{ ns.updated }} updated, {{ ns.skipped }} skipped{% if ns.failed %}, {{ ns.failed }} failed{% endif %}
+    </div>
   </div>
   <div class="card stat-card">
-    <div class="stat-label">Finished</div>
-    <div class="stat-value">{{ fmt_dt(r.finished_at) }}</div>
+    <div class="stat-label">Crew changes</div>
+    <div class="stat-value">{{ ns.crew_changed }}</div>
+    <div class="stat-subline">{{ ns.with_fo }} with FO, {{ ns.with_cabin }} with cabin crew</div>
   </div>
   <div class="card stat-card">
-    <div class="stat-label">Counts</div>
-    <div class="stat-value">
-      <span class="badge ok">Created {{ r.created or 0 }}</span>
-      <span class="badge">Skipped {{ r.skipped or 0 }}</span>
-      <span class="badge warn">Warnings {{ r.warnings or 0 }}</span>
+    <div class="stat-label">Warnings</div>
+    <div class="stat-value {{ 'text-warn' if (r.warnings or 0) else '' }}">{{ r.warnings or 0 }}</div>
+    <div class="stat-subline">{{ fmt_dt(r.started_at) }} -> {{ fmt_dt(r.finished_at) }}</div>
+  </div>
+</div>
+
+<div class="card mb-3">
+  <div class="card-header">
+    <div>
+      <div class="card-title">Sync Window</div>
+      <div class="muted small">Times shown in local and UTC so delayed flights are easier to audit.</div>
+    </div>
+  </div>
+  <div class="card-body sync-window-grid">
+    <div class="window-item">
+      <div class="muted small">Local</div>
+      <div class="fw-semibold">{{ fmt_dt(r.window_from_local) }} -> {{ fmt_dt(r.window_to_local) }}</div>
+    </div>
+    <div class="window-item">
+      <div class="muted small">UTC</div>
+      <div class="fw-semibold">{{ fmt_dt(r.window_from_utc) }} -> {{ fmt_dt(r.window_to_utc) }}</div>
+    </div>
+    <div class="window-item">
+      <div class="muted small">Run type</div>
+      <div class="fw-semibold">{{ r.run_type or "-" }}{% if r.initiated_by %} by {{ r.initiated_by }}{% endif %}</div>
     </div>
   </div>
 </div>
 
 <div class="card mb-3">
   <div class="card-header">
-    <div class="card-title">Sync window</div>
-  </div>
-  <div class="card-body">
-    <div class="grid">
-      <div>
-        <div class="muted small">Local</div>
-        <div class="fw-semibold">{{ fmt_dt(r.window_from_local) }} -> {{ fmt_dt(r.window_to_local) }}</div>
-      </div>
-      <div>
-        <div class="muted small">UTC</div>
-        <div class="fw-semibold">{{ fmt_dt(r.window_from_utc) }} -> {{ fmt_dt(r.window_to_utc) }}</div>
-      </div>
+    <div>
+      <div class="card-title">Flight Outcomes</div>
+      <div class="muted small">Crew shown here is the latest state captured by this sync run.</div>
     </div>
   </div>
-</div>
+  <div class="sync-flight-list">
+    {% for f in flights %}
+      {% set reason_l = (f.reason or "")|lower %}
+      {% set pic_changed = "pic" in reason_l %}
+      {% set fo_changed = "fo" in reason_l %}
+      {% set cabin_changed = "tic" in reason_l or "cabin" in reason_l or "cc" in reason_l %}
+      <section class="sync-flight-row {{ f.result or 'unknown' }}">
+        <div class="flight-main">
+          <div class="flight-title-line">
+            {{ result_badge(f.result) }}
+            <div>
+              <div class="flight-title">{{ f.flight_no or "-" }}</div>
+              <div class="flight-sub">{{ f.adep or "-" }} -> {{ f.ades or "-" }} at {{ fmt_dt(f.eobt) }}</div>
+            </div>
+          </div>
+          <div class="flight-meta-grid">
+            <div>
+              <span class="meta-label">Reg</span>
+              <span class="meta-value">{{ f.reg or "-" }}</span>
+            </div>
+            <div>
+              <span class="meta-label">APG aircraft</span>
+              <span class="meta-value">{{ f.aircraft_id or "-" }}</span>
+            </div>
+          </div>
+        </div>
 
-<div class="card mb-3">
-  <div class="card-header">
-    <div class="card-title">Flights in this sync</div>
-    <div class="muted small">Changes are shown as old -> new</div>
-  </div>
-  <div class="table-wrap">
-    <table class="table">
-      <thead>
-        <tr>
-          <th>Result</th>
-          <th>Changes</th>
-          <th>Flight</th>
-          <th>Route</th>
-          <th>EOBT</th>
-          <th>Reg</th>
-          <th>AC ID</th>
-          <th>PIC</th>
-          <th>PIC Code</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for f in flights %}
-        <tr class="{{ f.result }}">
-          <td>
-            <span class="badge {{ 'ok' if f.result in ['created','updated'] else ('err' if f.result=='failed' else '') }}">
-              {{ f.result }}
-            </span>
-          </td>
-          <td class="reason-cell">{{ render_reason_diff(f.reason) }}</td>
-          <td>{{ f.flight_no }}</td>
-          <td>{{ f.adep }} -> {{ f.ades }}</td>
-          <td>{{ fmt_dt(f.eobt) }}</td>
-          <td>{{ f.reg or "-" }}</td>
-          <td>{{ f.aircraft_id or "-" }}</td>
-          <td>{{ f.pic_name or "-" }}</td>
-          <td>{{ f.pic_empno or "-" }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+        <div class="crew-panel">
+          <div class="crew-row {{ 'changed' if pic_changed else '' }}">
+            <div class="crew-role">PIC</div>
+            <div class="crew-person">{{ crew_person(f.pic_name, f.pic_empno, f.apg_pic_id) }}</div>
+          </div>
+          <div class="crew-row {{ 'changed' if fo_changed else '' }}">
+            <div class="crew-role">FO</div>
+            <div class="crew-person">{{ crew_person(f.fo_name, f.fo_empno, f.apg_fo_id) }}</div>
+          </div>
+          <div class="crew-row {{ 'changed' if cabin_changed else '' }}">
+            <div class="crew-role">Cabin crew</div>
+            <div>{{ cabin_crew_list(f) }}</div>
+          </div>
+        </div>
+
+        <div class="change-panel">
+          <div class="change-panel-title">Changes</div>
+          {{ change_chips(f.reason) }}
+          {% if f.warnings %}
+            <div class="warning-text">{{ f.warnings }}</div>
+          {% endif %}
+        </div>
+      </section>
+    {% else %}
+      <div class="empty-state">No flight rows were recorded for this run.</div>
+    {% endfor %}
   </div>
 </div>
 
 <div class="card">
   <div class="card-header">
-    <div class="card-title">Log tail</div>
+    <div class="card-title">Log Tail</div>
   </div>
   <div class="card-body">
     <pre class="log-tail">{{ r.log_tail }}</pre>
