@@ -2625,8 +2625,6 @@ def main(
                 changes.append(f"FL: {_v(old.get('fl'))} -> {_v(new.get('fl'))}")
             if (old.get("fo_name") or old.get("fo_id")) != (new.get("fo_name") or new.get("fo_id")):
                 changes.append(f"FO: {_v(old.get('fo_name') or old.get('fo_id'))} -> {_v(new.get('fo_name') or new.get('fo_id'))}")
-            if (old.get("cc_names") or old.get("cc_empnos")) != (new.get("cc_names") or new.get("cc_empnos")):
-                changes.append(f"Cabin Crew: {_v(old.get('cc_names') or old.get('cc_empnos'))} -> {_v(new.get('cc_names') or new.get('cc_empnos'))}")
             return "; ".join(changes) if changes else None
 
         # inner push with 401-refresh and special error handling
@@ -2769,22 +2767,6 @@ def main(
             except Exception:
                 ret_id = None
 
-            mb_warning = None
-            mb_plan_id = ret_id if ret_id is not None else (_payload.get("id") if isinstance(_payload, dict) else None)
-            if mb_plan_id is not None:
-                try:
-                    applied = apply_cabin_crew_to_apg_loading(apg_bearer, int(mb_plan_id), cc_count)
-                    if not applied and cc_count:
-                        mb_warning = "Cabin crew M&B station was not found in APG plan."
-                        warnings_total += 1
-                except Exception as exc:
-                    mb_warning = f"Cabin crew M&B update failed: {exc}"
-                    warnings_total += 1
-                    logging.exception("Cabin crew M&B update failed for APG plan %s", mb_plan_id)
-            elif cc_count:
-                mb_warning = "Cabin crew M&B update skipped because APG plan id was not returned."
-                warnings_total += 1
-
             new_key = _plan_key_from_payload(_payload)
             cache[str(fid)] = {
                 "fp": _fingerprint(core),
@@ -2799,7 +2781,7 @@ def main(
             _emit_flight_event(**base_evt,
                                result=event_result,
                                reason="; ".join([t for t in [change_reason, _format_changes(prev_core, core)] if t]) or "changed",
-                               warnings="; ".join([t for t in [_json.dumps(warns) if warns else None, mb_warning] if t]) or None)
+                               warnings=_json.dumps(warns) if warns else None)
             return res
 
         # ---------- identity & existence ----------
@@ -3500,78 +3482,6 @@ def build_pax_payload_for_plan(
 def apg_plan_get_details(bearer: str, plan_id: int) -> dict:
     return apg_plan_get(bearer, plan_id)
 
-
-def _is_cabin_crew_station_label(label: str | None) -> bool:
-    text = re.sub(r"\s+", " ", str(label or "").strip().lower())
-    if not text:
-        return False
-    if text in {"flight attendant", "cabin attendant", "cabin crew"}:
-        return True
-    return ("attendant" in text and ("flight" in text or "cabin" in text))
-
-
-def apply_cabin_crew_to_apg_loading(
-    bearer: str,
-    plan_id: int,
-    cabin_crew_count: int,
-) -> bool:
-    """
-    APG treats cabin crew as loading/passenger occupancy, not crew.tic_id.
-    Update the matching M&B station while preserving the full loading list.
-    """
-    plan = apg_plan_get(bearer, int(plan_id))
-    mb = plan.get("massAndBalance") or {}
-    loading = [dict(st) for st in (mb.get("loading") or [])]
-    if not loading:
-        logging.warning("[APG] No massAndBalance.loading returned for plan %s; cabin crew not applied.", plan_id)
-        return False
-
-    try:
-        count = max(0, int(cabin_crew_count or 0))
-    except (TypeError, ValueError):
-        count = 0
-    try:
-        mass_each = float(os.getenv("APG_CABIN_CREW_MASS_KG", "86") or 86)
-    except ValueError:
-        mass_each = 86.0
-
-    matched = False
-    for st in loading:
-        if not _is_cabin_crew_station_label(st.get("label")):
-            continue
-        cl = dict(st.get("customLoad") or {})
-        cl["mass"] = float(count * mass_each)
-        cl["volume"] = float(count)
-        cl["pob_count"] = float(count)
-        st["customLoad"] = cl
-        st.setdefault("items", [])
-        matched = True
-        logging.info(
-            "[APG] Cabin crew loading for plan %s station=%s count=%s mass=%.1f",
-            plan_id,
-            st.get("label"),
-            count,
-            float(count * mass_each),
-        )
-        break
-
-    if not matched:
-        logging.warning(
-            "[APG] No Flight Attendant/Cabin Attendant M&B station found for plan %s; cabin crew count=%s not applied.",
-            plan_id,
-            count,
-        )
-        return False
-
-    payload = {
-        "id": int(plan_id),
-        "massAndBalance": {
-            "loading": loading,
-            "fuelMass": mb.get("fuelMass", mb.get("fuel", 0)),
-        },
-    }
-    apg_plan_edit(bearer, payload)
-    return True
 
 def update_apg_plan_from_dcs_row(
     bearer: str,
