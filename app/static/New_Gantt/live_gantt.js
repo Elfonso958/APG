@@ -4537,10 +4537,24 @@
   rowsEl.addEventListener("mouseleave", hideCrosshairs);
   if (boardEl) boardEl.addEventListener("mouseleave", hideCrosshairs);
 
-  refreshBtn.addEventListener("click", () => loadData({ showSpinner: true, force: true }));
+  refreshBtn.addEventListener("click", () => {
+    if (isBriefingView && !crewCodeInput?.value.trim()) {
+      crewSearchStatus.textContent = "Enter your EMP crew code before refreshing.";
+      crewCodeInput?.focus();
+      return;
+    }
+    loadData({ showSpinner: true, force: true });
+  });
   if (crewSearchForm) crewSearchForm.addEventListener("submit", (event) => {
     event.preventDefault();
-    findCrewBriefingFlights().catch((err) => {
+    if (!crewCodeInput?.value.trim()) {
+      findCrewBriefingFlights();
+      return;
+    }
+    const runSearch = flightDataReady
+      ? findCrewBriefingFlights()
+      : loadData({ showSpinner: true, force: false });
+    runSearch.catch((err) => {
       if (crewSearchStatus) crewSearchStatus.textContent = err.message || "Unable to load crew assignments.";
     });
   });
@@ -4582,6 +4596,16 @@
   }
   dayInput.addEventListener("change", () => {
     hasUserZoom = false;
+    if (isBriefingView) {
+      flights = [];
+      flightDataReady = false;
+      selectedId = null;
+      setDetail(null);
+      if (briefingFlights) briefingFlights.innerHTML = "";
+      if (crewSearchStatus) crewSearchStatus.textContent = "Starting date changed. Tap Show my flights to search.";
+      if (crewSearchBtn) crewSearchBtn.disabled = false;
+      return;
+    }
     loadData({ showSpinner: true, force: true });
   });
   if (tzSelect) {
@@ -4699,6 +4723,13 @@
     if (isBriefingView && crewCodeInput) crewCodeInput.value = localStorage.getItem("crew_briefing_code") || "";
     updateLiveNowBar();
     await ensureEnvisionEnvironment();
+    if (isBriefingView) {
+      flightDataReady = false;
+      if (crewSearchBtn) crewSearchBtn.disabled = false;
+      if (crewSearchStatus) crewSearchStatus.textContent = "Enter your EMP crew code, then tap Show my flights.";
+      crewCodeInput?.focus();
+      return;
+    }
     await loadData({ showSpinner: true, force: true });
   }
 
