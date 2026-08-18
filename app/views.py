@@ -1249,6 +1249,28 @@ def dcs_new_live_gantt():
     )
 
 
+@ui_bp.route("/dcs/crew-briefing")
+def dcs_crew_briefing():
+    day_str = request.args.get("date")
+    if day_str:
+        try:
+            day = date.fromisoformat(day_str)
+        except ValueError:
+            day = date.today()
+    else:
+        day = date.today()
+    env = get_envision_environment()
+    return render_template(
+        "New_Gantt/live_gantt.html",
+        day=day,
+        page_view="briefing",
+        envision_env_name=env.get("name"),
+        envision_env_host=env.get("host"),
+        envision_env_key=env.get("key"),
+        envision_test_available=env.get("test_available"),
+    )
+
+
 @ui_bp.get("/api/dcs/gantt_data")
 def api_dcs_gantt_data():
     """

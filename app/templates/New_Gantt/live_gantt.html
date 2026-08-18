@@ -3,14 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Live Gantt</title>
+  <title>{{ "Crew Briefing" if page_view == "briefing" else "Live Gantt" }}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='New_Gantt/live_gantt.css') }}">
 </head>
-<body data-theme="light">
+<body data-theme="light" class="view-{{ page_view or 'gantt' }}">
   <div id="new-gantt-app"
+       data-view="{{ page_view or 'gantt' }}"
        data-api-url="{{ url_for('ui.api_dcs_gantt_data') }}"
        data-apg-push-url="{{ url_for('api.api_dcs_push_to_apg') }}"
        data-apg-plan-url-template="{{ url_for('api.api_apg_plan_get', plan_id=0) }}"
@@ -38,17 +39,22 @@
        data-day="{{ day.isoformat() }}">
     <header class="topbar">
       <div class="topbar-meta">
-        <div class="topbar-label">Flight Board Controls</div>
+        <div class="topbar-label">{{ "Crew Briefing" if page_view == "briefing" else "Flight Board Controls" }}</div>
         <div id="envisionEnvPill" class="envision-env-pill envision-env-{{ (envision_env_key or 'base')|lower }}">
           Envision: {{ envision_env_name or "PROD" }}{% if envision_env_host %} - {{ envision_env_host }}{% endif %}
         </div>
       </div>
       <div class="controls">
+        {% if page_view == "briefing" %}
+        <a class="btn btn-ghost view-link" href="{{ url_for('ui.dcs_new_live_gantt', date=day.isoformat()) }}">Gantt View</a>
+        {% else %}
+        <a class="btn btn-ghost view-link" href="{{ url_for('ui.dcs_crew_briefing', date=day.isoformat()) }}">Crew Briefing</a>
+        {% endif %}
         <label class="ctrl">
           <span>Date</span>
           <input id="dayInput" type="date" value="{{ day.isoformat() }}">
         </label>
-        <label class="ctrl">
+        <label class="ctrl gantt-only">
           <span>Time Zone</span>
           <select id="tzSelect">
             <option value="Pacific/Auckland" selected>NZ Local</option>
@@ -56,7 +62,7 @@
             <option value="__browser__">Browser Local</option>
           </select>
         </label>
-        <label class="ctrl">
+        <label class="ctrl gantt-only">
           <span>Location</span>
           <select id="locationFilter">
             <option value="">All Stations</option>
@@ -89,6 +95,25 @@
       <article class="stat"><div class="label">Baggage Kg</div><div class="value" id="statBags">0</div></article>
     </section>
     <div id="loadMessage" class="load-message" hidden></div>
+
+    <section id="briefingView" class="briefing-view" aria-label="Crew flight briefing">
+      <div class="briefing-search-card">
+        <div>
+          <div class="briefing-eyebrow">Your flying programme</div>
+          <h1>Flight briefing</h1>
+          <p>Enter your Envision crew code to see your sectors and passenger information.</p>
+        </div>
+        <form id="crewSearchForm" class="crew-search-form">
+          <label for="crewCodeInput">Crew code</label>
+          <div class="crew-search-row">
+            <input id="crewCodeInput" type="text" inputmode="text" autocomplete="username" autocapitalize="characters" spellcheck="false" placeholder="e.g. ABC123" maxlength="20">
+            <button id="crewSearchBtn" class="btn btn-primary" type="submit">Show my flights</button>
+          </div>
+          <div id="crewSearchStatus" class="crew-search-status" aria-live="polite">Enter your code to begin.</div>
+        </form>
+      </div>
+      <div id="briefingFlights" class="briefing-flights"></div>
+    </section>
 
     <main class="layout">
       <section class="board" aria-label="Flight Gantt">

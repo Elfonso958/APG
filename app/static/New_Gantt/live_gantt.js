@@ -3,6 +3,8 @@
   if (!app) return;
 
   const apiUrl = app.dataset.apiUrl;
+  const pageView = app.dataset.view || "gantt";
+  const isBriefingView = pageView === "briefing";
   const apgPushUrl = app.dataset.apgPushUrl;
   const apgPlanUrlTemplate = app.dataset.apgPlanUrlTemplate;
   const apgCargoSummaryUrlTemplate = app.dataset.apgCargoSummaryUrlTemplate;
@@ -46,6 +48,11 @@
   const loadMessage = document.getElementById("loadMessage");
   const envisionEnvPill = document.getElementById("envisionEnvPill");
   const boardSpinner = document.getElementById("boardSpinner");
+  const crewSearchForm = document.getElementById("crewSearchForm");
+  const crewCodeInput = document.getElementById("crewCodeInput");
+  const crewSearchBtn = document.getElementById("crewSearchBtn");
+  const crewSearchStatus = document.getElementById("crewSearchStatus");
+  const briefingFlights = document.getElementById("briefingFlights");
   const liveNowBar = document.getElementById("liveNowBar");
   const liveNowLabel = document.getElementById("liveNowLabel");
   const crosshairV = document.getElementById("crosshairV");
@@ -3068,6 +3075,7 @@
 
   function setDetail(f) {
     selectedFlight = f || null;
+    if (isBriefingView) document.getElementById("detailCard")?.classList.toggle("has-flight", !!f);
     if (!f) {
       detailMuted.style.display = "";
       detailList.innerHTML = "";
@@ -3512,6 +3520,80 @@
     statBags.textContent = String(Math.round(visibleFlights.reduce((n, f) => n + Number(f.bags_kg || 0), 0)));
   }
 
+  function briefingPaxBreakdown(f) {
+    const pax = Array.isArray(f.pax_list) ? f.pax_list : [];
+    const checked = pax.filter((p) => classifyPaxStatus(p) === "CHECKED").length;
+    const boarded = pax.filter((p) => classifyPaxStatus(p) === "BOARDED").length;
+    return { checked, boarded, total: pax.length || Number(f.pax_count || 0) };
+  }
+
+  function renderBriefingFlights(items, crewCode) {
+    if (!briefingFlights) return;
+    if (!items.length) {
+      briefingFlights.innerHTML = `<div class="briefing-empty"><strong>No flights found</strong><span>No sectors on this date include crew code ${escapeHtml(crewCode)}.</span></div>`;
+      return;
+    }
+    briefingFlights.innerHTML = items.map((f) => {
+      const counts = briefingPaxBreakdown(f);
+      const crewMember = (f.crew || []).find((c) => String(c.employee_no || "").trim().toUpperCase() === crewCode);
+      return `
+        <button class="briefing-flight-card" type="button" data-briefing-flight-id="${escapeHtml(String(f.envision_flight_id || ""))}">
+          <div class="briefing-card-top">
+            <div><span class="briefing-time">${fmtTime(f.std_nz)}</span><span class="briefing-flight-no">${escapeHtml(flightCode(f))}</span></div>
+            <span class="briefing-status">${escapeHtml(f.flight_status || "Scheduled")}</span>
+          </div>
+          <div class="briefing-route">
+            <span>${escapeHtml(f.dep || "-")}</span><span class="briefing-route-line" aria-hidden="true"></span><span>${escapeHtml(f.ades || "-")}</span>
+          </div>
+          <div class="briefing-card-meta">
+            <span><small>Aircraft</small><strong>${escapeHtml(f.reg || "TBA")}</strong></span>
+            <span><small>Role</small><strong>${escapeHtml(crewMember?.position || "Crew")}</strong></span>
+            <span><small>Passengers</small><strong>${counts.total}</strong></span>
+            <span><small>Checked / Boarded</small><strong>${counts.checked} / ${counts.boarded}</strong></span>
+            <span><small>Baggage</small><strong>${Number(f.bags_kg || 0).toFixed(1)} kg</strong></span>
+          </div>
+          <span class="briefing-detail-cta">Flight details and actions <span aria-hidden="true">›</span></span>
+        </button>`;
+    }).join("");
+    briefingFlights.querySelectorAll("[data-briefing-flight-id]").forEach((card) => {
+      card.addEventListener("click", () => {
+        const f = flights.find((row) => String(row.envision_flight_id) === card.dataset.briefingFlightId);
+        if (!f) return;
+        selectedId = f.envision_flight_id;
+        setDetail(f);
+        document.getElementById("detailCard")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    });
+  }
+
+  async function findCrewBriefingFlights() {
+    const crewCode = String(crewCodeInput?.value || "").trim().toUpperCase();
+    if (!crewCode) {
+      if (crewSearchStatus) crewSearchStatus.textContent = "Enter your crew code.";
+      crewCodeInput?.focus();
+      return;
+    }
+    localStorage.setItem("crew_briefing_code", crewCode);
+    if (crewCodeInput) crewCodeInput.value = crewCode;
+    if (crewSearchBtn) crewSearchBtn.disabled = true;
+    if (crewSearchStatus) crewSearchStatus.textContent = `Checking ${flights.length} flights…`;
+    try {
+      const pending = flights.filter((f) => !f.crewLoaded && f.envision_flight_id);
+      for (let offset = 0; offset < pending.length; offset += 6) {
+        await Promise.all(pending.slice(offset, offset + 6).map(async (f) => {
+          const crew = await fetchEnvisionCrew(f.envision_flight_id);
+          f.crewLoaded = crew !== null;
+          f.crew = crew || [];
+        }));
+      }
+      const matches = flights.filter((f) => (f.crew || []).some((c) => String(c.employee_no || "").trim().toUpperCase() === crewCode));
+      renderBriefingFlights(matches, crewCode);
+      if (crewSearchStatus) crewSearchStatus.textContent = `${matches.length} flight${matches.length === 1 ? "" : "s"} found for ${crewCode}.`;
+    } finally {
+      if (crewSearchBtn) crewSearchBtn.disabled = false;
+    }
+  }
+
   async function loadData(opts = {}) {
     const showSpinner = opts.showSpinner !== false;
     const forceRefresh = opts.force === true;
@@ -3540,6 +3622,7 @@
       }
       updateStats();
       renderRows();
+      if (isBriefingView && crewCodeInput?.value.trim()) await findCrewBriefingFlights();
       preloadRegistrationMaintenance().catch(() => {});
       updateLiveNowBar();
       const refreshedSelected = findSelectedFlight();
@@ -4360,6 +4443,12 @@
   if (boardEl) boardEl.addEventListener("mouseleave", hideCrosshairs);
 
   refreshBtn.addEventListener("click", () => loadData({ showSpinner: true, force: true }));
+  if (crewSearchForm) crewSearchForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    findCrewBriefingFlights().catch((err) => {
+      if (crewSearchStatus) crewSearchStatus.textContent = err.message || "Unable to load crew assignments.";
+    });
+  });
   if (locationFilter) {
     selectedLocationFilter = normalizeStationCode(localStorage.getItem(LOCATION_FILTER_STORAGE_KEY) || "");
     locationFilter.addEventListener("change", () => {
@@ -4508,9 +4597,11 @@
     if (crosshairToggle) crosshairToggle.checked = localStorage.getItem("new_gantt_crosshair") === "1";
     showMaintenance = localStorage.getItem("new_gantt_maintenance") === "1";
     if (maintenanceToggle) maintenanceToggle.checked = showMaintenance;
+    if (isBriefingView && autoRefresh) autoRefresh.checked = false;
     setupAutoRefresh();
     setupLiveNowTimer();
     setActionsEnabled(false);
+    if (isBriefingView && crewCodeInput) crewCodeInput.value = localStorage.getItem("crew_briefing_code") || "";
     updateLiveNowBar();
     await ensureEnvisionEnvironment();
     await loadData({ showSpinner: true, force: true });
