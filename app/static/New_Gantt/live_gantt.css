@@ -1802,11 +1802,17 @@ body[data-theme="dark"] .wb-inline-status.is-over {
 .briefing-route { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; margin: 18px 0; font-size: 28px; font-weight: 800; }
 .briefing-route-line { height: 2px; background: var(--line); position: relative; }
 .briefing-route-line::after { content: ""; position: absolute; right: 0; top: -3px; width: 7px; height: 7px; border-top: 2px solid var(--muted); border-right: 2px solid var(--muted); transform: rotate(45deg); }
-.briefing-card-meta { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; padding: 15px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.briefing-card-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding: 15px 0; border-top: 1px solid var(--line); }
 .briefing-card-meta span { min-width: 0; }
 .briefing-card-meta small, .briefing-card-meta strong { display: block; }
 .briefing-card-meta small { margin-bottom: 3px; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
 .briefing-card-meta strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.briefing-pax-overview { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); margin-top: 12px; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
+.briefing-pax-overview span { padding: 9px 10px; border-right: 1px solid var(--line); text-align: center; }
+.briefing-pax-overview span:last-child { border-right: 0; }
+.briefing-pax-overview small, .briefing-pax-overview strong { display: block; }
+.briefing-pax-overview small { color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.briefing-pax-overview strong { margin-top: 2px; font-size: 16px; }
 .briefing-crew-overview { padding-top: 14px; }
 .briefing-crew-label { margin-bottom: 8px; color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
 .briefing-crew-list { display: flex; flex-wrap: wrap; gap: 7px; }
@@ -1841,6 +1847,10 @@ body[data-theme="dark"] .wb-inline-status.is-over {
   .briefing-list-item { border-radius: 15px; }
   .briefing-flight-card { padding: 16px; }
   .briefing-card-meta { grid-template-columns: repeat(2, 1fr); }
+  .briefing-pax-overview { grid-template-columns: repeat(3, 1fr); }
+  .briefing-pax-overview span { border-bottom: 1px solid var(--line); }
+  .briefing-pax-overview span:nth-child(3n) { border-right: 0; }
+  .briefing-pax-overview span:nth-last-child(-n+3) { border-bottom: 0; }
   .briefing-crew-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .briefing-crew-member { min-width: 0; }
   .briefing-crew-member strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

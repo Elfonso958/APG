@@ -3527,7 +3527,15 @@
     const pax = Array.isArray(f.pax_list) ? f.pax_list : [];
     const checked = pax.filter((p) => classifyPaxStatus(p) === "CHECKED").length;
     const boarded = pax.filter((p) => classifyPaxStatus(p) === "BOARDED").length;
-    return { checked, boarded, total: pax.length || Number(f.pax_count || 0) };
+    const types = pax.length ? paxTypeBreakdown(pax) : null;
+    return {
+      checked,
+      boarded,
+      total: pax.length || Number(f.pax_count || 0),
+      adults: types ? types.ad : Number(f.adt || 0),
+      children: types ? types.chd : Number(f.chd || 0),
+      infants: types ? types.inf : Number(f.inf || 0),
+    };
   }
 
   function addDaysIso(isoDate, days) {
@@ -3588,9 +3596,15 @@
           <div class="briefing-card-meta">
             <span><small>Aircraft</small><strong>${escapeHtml(f.reg || "TBA")}</strong></span>
             <span><small>Role</small><strong>${escapeHtml(crewMember?.position || "Crew")}</strong></span>
-            <span><small>Passengers</small><strong>${counts.total}</strong></span>
-            <span><small>Checked / Boarded</small><strong>${counts.checked} / ${counts.boarded}</strong></span>
             <span><small>Baggage</small><strong>${Number(f.bags_kg || 0).toFixed(1)} kg</strong></span>
+          </div>
+          <div class="briefing-pax-overview">
+            <span><small>Total pax</small><strong>${counts.total}</strong></span>
+            <span><small>Adults</small><strong>${counts.adults}</strong></span>
+            <span><small>Children</small><strong>${counts.children}</strong></span>
+            <span><small>Infants</small><strong>${counts.infants}</strong></span>
+            <span><small>Checked</small><strong>${counts.checked}</strong></span>
+            <span><small>Boarded</small><strong>${counts.boarded}</strong></span>
           </div>
           <div class="briefing-crew-overview">
             <div class="briefing-crew-label">Operating crew</div>
