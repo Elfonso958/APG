@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='New_Gantt/live_gantt.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='New_Gantt/live_gantt.css') }}?v=crew-briefing-2">
 </head>
 <body data-theme="light" class="view-{{ page_view or 'gantt' }}">
   <div id="new-gantt-app"
@@ -88,7 +88,7 @@
       </div>
     </header>
 
-    <section class="stats" id="statsRow">
+    <section class="stats" id="statsRow"{% if page_view == "briefing" %} style="display:none"{% endif %}>
       <article class="stat"><div class="label">Flights</div><div class="value" id="statFlights">0</div></article>
       <article class="stat"><div class="label">Passengers</div><div class="value" id="statPax">0</div></article>
       <article class="stat"><div class="label">No APG</div><div class="value" id="statNoApg">0</div></article>
@@ -101,12 +101,12 @@
         <div>
           <div class="briefing-eyebrow">Your flying programme</div>
           <h1>Flight briefing</h1>
-          <p>Enter your Envision crew code to see your sectors and passenger information.</p>
+          <p>Enter the code shown after <strong>EMP</strong> in Envision to see your sectors and passenger information.</p>
         </div>
         <form id="crewSearchForm" class="crew-search-form">
-          <label for="crewCodeInput">Crew code</label>
+          <label for="crewCodeInput">EMP crew code</label>
           <div class="crew-search-row">
-            <input id="crewCodeInput" type="text" inputmode="text" autocomplete="username" autocapitalize="characters" spellcheck="false" placeholder="e.g. ABC123" maxlength="20">
+            <input id="crewCodeInput" type="text" inputmode="text" autocomplete="username" autocapitalize="characters" spellcheck="false" placeholder="e.g. PS" maxlength="20">
             <button id="crewSearchBtn" class="btn btn-primary" type="submit">Show my flights</button>
           </div>
           <div id="crewSearchStatus" class="crew-search-status" aria-live="polite">Enter your code to begin.</div>
@@ -116,7 +116,7 @@
     </section>
 
     <main class="layout">
-      <section class="board" aria-label="Flight Gantt">
+      <section class="board" aria-label="Flight Gantt"{% if page_view == "briefing" %} style="display:none" aria-hidden="true"{% endif %}>
         <div id="boardSpinner" class="board-spinner" hidden>
           <div class="board-spinner-wheel" aria-hidden="true"></div>
         </div>
@@ -130,7 +130,7 @@
 
       <aside class="detail" id="detailCard" aria-live="polite">
         <h2>Flight Detail</h2>
-        <div class="muted">Select a bar on the timeline.</div>
+        <div class="muted">{{ "Select a flight from the list." if page_view == "briefing" else "Select a bar on the timeline." }}</div>
         <div class="detail-actions">
           <button id="btnPaxList" class="btn btn-ghost" type="button">Passenger List</button>
           <button id="btnCargo" class="btn btn-ghost" type="button">Cargo</button>
@@ -558,6 +558,6 @@
     </form>
   </dialog>
 
-  <script src="{{ url_for('static', filename='New_Gantt/live_gantt.js') }}"></script>
+  <script src="{{ url_for('static', filename='New_Gantt/live_gantt.js') }}?v=crew-briefing-2"></script>
 </body>
 </html>

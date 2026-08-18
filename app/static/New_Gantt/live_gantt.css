@@ -1788,7 +1788,7 @@ body[data-theme="dark"] .wb-inline-status.is-over {
 .crew-search-row { display: flex; gap: 9px; }
 .crew-search-row input { min-width: 0; flex: 1; min-height: 48px; padding: 0 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font: inherit; font-size: 16px; text-transform: uppercase; }
 .crew-search-status { min-height: 20px; margin-top: 7px; color: var(--muted); font-size: 13px; }
-.briefing-flights { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding-top: 20px; }
+.briefing-flights { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; padding-top: 20px; }
 .briefing-flight-card { width: 100%; padding: 20px; border: 1px solid var(--line); border-radius: 18px; background: var(--panel); color: var(--text); text-align: left; font: inherit; cursor: pointer; box-shadow: 0 6px 20px rgba(24, 39, 57, .06); }
 .briefing-flight-card:hover { border-color: var(--accent); transform: translateY(-1px); }
 .briefing-card-top { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
@@ -1798,7 +1798,7 @@ body[data-theme="dark"] .wb-inline-status.is-over {
 .briefing-route { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; margin: 18px 0; font-size: 28px; font-weight: 800; }
 .briefing-route-line { height: 2px; background: var(--line); position: relative; }
 .briefing-route-line::after { content: ""; position: absolute; right: 0; top: -3px; width: 7px; height: 7px; border-top: 2px solid var(--muted); border-right: 2px solid var(--muted); transform: rotate(45deg); }
-.briefing-card-meta { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 15px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.briefing-card-meta { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; padding: 15px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .briefing-card-meta span { min-width: 0; }
 .briefing-card-meta small, .briefing-card-meta strong { display: block; }
 .briefing-card-meta small { margin-bottom: 3px; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
