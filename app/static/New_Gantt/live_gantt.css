@@ -1807,6 +1807,16 @@ body[data-theme="dark"] .wb-inline-status.is-over {
 .briefing-card-meta small, .briefing-card-meta strong { display: block; }
 .briefing-card-meta small { margin-bottom: 3px; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
 .briefing-card-meta strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.briefing-crew-overview { padding-top: 14px; }
+.briefing-crew-label { margin-bottom: 8px; color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.briefing-crew-list { display: flex; flex-wrap: wrap; gap: 7px; }
+.briefing-crew-member { display: grid; grid-template-columns: auto auto; gap: 1px 7px; align-items: baseline; padding: 7px 9px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+.briefing-crew-member small { color: var(--muted); font-size: 10px; font-weight: 800; text-transform: uppercase; }
+.briefing-crew-member strong { font-size: 12px; }
+.briefing-crew-member em { grid-column: 1 / -1; color: var(--muted); font-size: 9px; font-style: normal; }
+.briefing-crew-member.is-current { border-color: var(--accent); background: var(--accent-soft); }
+.briefing-crew-member.is-current em { color: var(--accent); font-weight: 800; }
+.briefing-crew-empty { color: var(--muted); font-size: 12px; }
 .briefing-detail-cta { display: flex; justify-content: space-between; padding-top: 14px; color: var(--accent); font-weight: 800; }
 .briefing-chevron { display: inline-block; font-size: 22px; line-height: 16px; transition: transform .18s ease; }
 .briefing-list-item.is-open .briefing-chevron { transform: rotate(90deg); }
@@ -1831,6 +1841,9 @@ body[data-theme="dark"] .wb-inline-status.is-over {
   .briefing-list-item { border-radius: 15px; }
   .briefing-flight-card { padding: 16px; }
   .briefing-card-meta { grid-template-columns: repeat(2, 1fr); }
+  .briefing-crew-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .briefing-crew-member { min-width: 0; }
+  .briefing-crew-member strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .view-briefing .detail { margin: 12px; padding: 16px; }
   .view-briefing .briefing-list-item .detail { margin: 0; padding: 16px; }
   .view-briefing .detail-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }

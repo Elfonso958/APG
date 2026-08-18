@@ -3556,6 +3556,19 @@
     briefingFlights.innerHTML = items.map((f, index) => {
       const counts = briefingPaxBreakdown(f);
       const crewMember = (f.crew || []).find((c) => String(c.employee_no || "").trim().toUpperCase() === crewCode);
+      const operatingCrew = (f.crew || []).filter((c) => c.is_operating !== false);
+      const crewOverview = operatingCrew.length
+        ? operatingCrew.map((c) => {
+          const empCode = String(c.employee_no || "").trim().toUpperCase();
+          const isSearchedCrew = empCode === crewCode;
+          return `
+            <span class="briefing-crew-member ${isSearchedCrew ? "is-current" : ""}">
+              <small>${escapeHtml(c.position || c.position_code || "Crew")}</small>
+              <strong>${escapeHtml(c.name || "Crew member")}</strong>
+              ${empCode ? `<em>EMP ${escapeHtml(empCode)}</em>` : ""}
+            </span>`;
+        }).join("")
+        : '<span class="briefing-crew-empty">No operating crew returned.</span>';
       const dateKey = String(f.std_nz || "").slice(0, 10);
       const previousDateKey = index ? String(items[index - 1].std_nz || "").slice(0, 10) : "";
       const dateHeading = dateKey !== previousDateKey
@@ -3578,6 +3591,10 @@
             <span><small>Passengers</small><strong>${counts.total}</strong></span>
             <span><small>Checked / Boarded</small><strong>${counts.checked} / ${counts.boarded}</strong></span>
             <span><small>Baggage</small><strong>${Number(f.bags_kg || 0).toFixed(1)} kg</strong></span>
+          </div>
+          <div class="briefing-crew-overview">
+            <div class="briefing-crew-label">Operating crew</div>
+            <div class="briefing-crew-list">${crewOverview}</div>
           </div>
           <span class="briefing-detail-cta">Flight details and actions <span class="briefing-chevron" aria-hidden="true">&rsaquo;</span></span>
         </button>
