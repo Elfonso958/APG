@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='New_Gantt/live_gantt.css') }}?v=crew-briefing-3">
+  <link rel="stylesheet" href="{{ url_for('static', filename='New_Gantt/live_gantt.css') }}?v=crew-briefing-4">
 </head>
 <body data-theme="light" class="view-{{ page_view or 'gantt' }}">
   <div id="new-gantt-app"
@@ -51,7 +51,7 @@
         <a class="btn btn-ghost view-link" href="{{ url_for('ui.dcs_crew_briefing', date=day.isoformat()) }}">Crew Briefing</a>
         {% endif %}
         <label class="ctrl">
-          <span>Date</span>
+          <span>{{ "Starting date" if page_view == "briefing" else "Date" }}</span>
           <input id="dayInput" type="date" value="{{ day.isoformat() }}">
         </label>
         <label class="ctrl gantt-only">
@@ -101,13 +101,13 @@
         <div>
           <div class="briefing-eyebrow">Your flying programme</div>
           <h1>Flight briefing</h1>
-          <p>Enter the code shown after <strong>EMP</strong> in Envision to see your sectors and passenger information.</p>
+          <p>Enter the code shown after <strong>EMP</strong> in Envision to see two days of sectors and passenger information.</p>
         </div>
         <form id="crewSearchForm" class="crew-search-form">
           <label for="crewCodeInput">EMP crew code</label>
           <div class="crew-search-row">
             <input id="crewCodeInput" type="text" inputmode="text" autocomplete="username" autocapitalize="characters" spellcheck="false" placeholder="e.g. PS" maxlength="20">
-            <button id="crewSearchBtn" class="btn btn-primary" type="submit">Show my flights</button>
+            <button id="crewSearchBtn" class="btn btn-primary" type="submit" disabled>Show my flights</button>
           </div>
           <div id="crewSearchStatus" class="crew-search-status" aria-live="polite">Enter your code to begin.</div>
         </form>
@@ -558,6 +558,6 @@
     </form>
   </dialog>
 
-  <script src="{{ url_for('static', filename='New_Gantt/live_gantt.js') }}?v=crew-briefing-3"></script>
+  <script src="{{ url_for('static', filename='New_Gantt/live_gantt.js') }}?v=crew-briefing-4"></script>
 </body>
 </html>

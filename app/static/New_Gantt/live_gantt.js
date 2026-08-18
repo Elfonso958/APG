@@ -221,6 +221,8 @@
   let windowStartMin = 0;
   let windowEndMin = minuteInDay;
   let flights = [];
+  let flightDataReady = !isBriefingView;
+  let crewSearchQueued = false;
   let timer = null;
   let selectedId = null;
   let selectedFlight = null;
@@ -3528,19 +3530,39 @@
     return { checked, boarded, total: pax.length || Number(f.pax_count || 0) };
   }
 
+  function addDaysIso(isoDate, days) {
+    const d = new Date(`${isoDate}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0, 10);
+  }
+
+  function briefingDateLabel(f) {
+    const d = new Date(f.std_nz);
+    if (Number.isNaN(d.getTime())) return String(f.std_nz || "").slice(0, 10);
+    return new Intl.DateTimeFormat("en-NZ", {
+      weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "Pacific/Auckland",
+    }).format(d);
+  }
+
   function renderBriefingFlights(items, crewCode) {
     if (!briefingFlights) return;
     if (detailCard?.parentElement === briefingFlights || detailCard?.closest(".briefing-list-item")) {
       document.querySelector(".layout")?.appendChild(detailCard);
     }
     if (!items.length) {
-      briefingFlights.innerHTML = `<div class="briefing-empty"><strong>No flights found</strong><span>No sectors on this date include crew code ${escapeHtml(crewCode)}.</span></div>`;
+      briefingFlights.innerHTML = `<div class="briefing-empty"><strong>No flights found</strong><span>No sectors in this two-day period include crew code ${escapeHtml(crewCode)}.</span></div>`;
       return;
     }
-    briefingFlights.innerHTML = items.map((f) => {
+    briefingFlights.innerHTML = items.map((f, index) => {
       const counts = briefingPaxBreakdown(f);
       const crewMember = (f.crew || []).find((c) => String(c.employee_no || "").trim().toUpperCase() === crewCode);
+      const dateKey = String(f.std_nz || "").slice(0, 10);
+      const previousDateKey = index ? String(items[index - 1].std_nz || "").slice(0, 10) : "";
+      const dateHeading = dateKey !== previousDateKey
+        ? `<h2 class="briefing-day-heading">${escapeHtml(briefingDateLabel(f))}</h2>`
+        : "";
       return `
+        ${dateHeading}
         <article class="briefing-list-item" data-briefing-item-id="${escapeHtml(String(f.envision_flight_id || ""))}">
         <button class="briefing-flight-card" type="button" aria-expanded="false" data-briefing-flight-id="${escapeHtml(String(f.envision_flight_id || ""))}">
           <div class="briefing-card-top">
@@ -3592,6 +3614,13 @@
     }
     localStorage.setItem("crew_briefing_code", crewCode);
     if (crewCodeInput) crewCodeInput.value = crewCode;
+    if (!flightDataReady) {
+      crewSearchQueued = true;
+      if (crewSearchBtn) crewSearchBtn.disabled = true;
+      if (crewSearchStatus) crewSearchStatus.textContent = "Flights are still loading. Your search will run automatically.";
+      return;
+    }
+    crewSearchQueued = false;
     if (crewSearchBtn) crewSearchBtn.disabled = true;
     if (crewSearchStatus) crewSearchStatus.textContent = `Checking ${flights.length} flights…`;
     try {
@@ -3615,30 +3644,46 @@
     const showSpinner = opts.showSpinner !== false;
     const forceRefresh = opts.force === true;
     const day = dayInput.value || app.dataset.day;
-    const u = `${apiUrl}?date=${encodeURIComponent(day)}&include_delays=1${forceRefresh ? "&force=1" : ""}`;
+    const days = isBriefingView ? [day, addDaysIso(day, 1)] : [day];
+    const urls = days.map((dateValue) => `${apiUrl}?date=${encodeURIComponent(dateValue)}&include_delays=1${forceRefresh ? "&force=1" : ""}`);
+    if (isBriefingView) {
+      flightDataReady = false;
+      if (crewSearchBtn) crewSearchBtn.disabled = true;
+      if (crewSearchStatus) crewSearchStatus.textContent = crewCodeInput?.value.trim()
+        ? "Loading two days of flights. Your saved search will run automatically…"
+        : "Loading two days of flights…";
+    }
     refreshBtn.disabled = true;
     if (showSpinner) setBoardLoading(true);
     try {
       regDefectsCache.clear();
-      const resp = await fetch(u, { headers: { Accept: "application/json" } });
-      const data = await resp.json();
-      const maybeRows = data.results || data.rows || data.data || [];
-      flights = Array.isArray(maybeRows) ? maybeRows : [];
+      const responses = await Promise.all(urls.map((u) => fetch(u, { headers: { Accept: "application/json" } })));
+      const payloads = await Promise.all(responses.map((resp) => resp.json()));
+      const failedIndex = responses.findIndex((resp, index) => !resp.ok || payloads[index]?.ok === false);
+      const mergedRows = payloads.flatMap((data) => data.results || data.rows || data.data || []);
+      const seenFlightIds = new Set();
+      flights = mergedRows.filter((f) => {
+        const key = String(f.envision_flight_id || `${f.flight_number}|${f.std_nz}|${f.dep}|${f.ades}`);
+        if (seenFlightIds.has(key)) return false;
+        seenFlightIds.add(key);
+        return true;
+      }).sort((a, b) => new Date(a.std_nz) - new Date(b.std_nz));
       populateLocationFilterOptions();
       flights.forEach((f) => hydrateCargoCacheForFlight(f));
       updateTimeWindowFromFlights();
       if (!hasUserZoom) fitPxPerMinuteToViewport();
       applyTimelineScale();
       buildAxis();
-      if (!resp.ok || data.ok === false) {
-        showMessage(data.error || `Request failed (${resp.status})`, true);
+      if (failedIndex >= 0) {
+        showMessage(payloads[failedIndex]?.error || `Request failed (${responses[failedIndex].status})`, true);
       } else if (!flights.length) {
-        showMessage("No flights returned for this date.", false);
+        showMessage(isBriefingView ? "No flights returned for this two-day period." : "No flights returned for this date.", false);
       } else {
         showMessage("", false);
       }
       updateStats();
       renderRows();
+      flightDataReady = true;
       if (isBriefingView && crewCodeInput?.value.trim()) await findCrewBriefingFlights();
       preloadRegistrationMaintenance().catch(() => {});
       updateLiveNowBar();
@@ -3652,8 +3697,10 @@
     } catch (err) {
       console.error("New Live Gantt load failed", err);
       showMessage(`Failed to load flights: ${err.message}`, true);
+      if (isBriefingView && crewSearchStatus) crewSearchStatus.textContent = "Unable to load flights. Tap Refresh to try again.";
     } finally {
       refreshBtn.disabled = false;
+      if (isBriefingView && crewSearchBtn && flightDataReady) crewSearchBtn.disabled = false;
       if (showSpinner) setBoardLoading(false);
     }
   }
