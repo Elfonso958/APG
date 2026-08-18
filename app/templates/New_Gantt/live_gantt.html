@@ -3,15 +3,24 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0f6fff">
+  {% if page_view == "briefing" %}
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Crew Briefing">
+  <link rel="manifest" href="{{ url_for('ui.crew_briefing_manifest') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='New_Gantt/crew_briefing_icon.svg') }}">
+  {% endif %}
   <title>{{ "Crew Briefing" if page_view == "briefing" else "Live Gantt" }}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='New_Gantt/live_gantt.css') }}?v=crew-briefing-7">
+  <link rel="stylesheet" href="{{ url_for('static', filename='New_Gantt/live_gantt.css') }}?v=crew-briefing-8">
 </head>
 <body data-theme="light" class="view-{{ page_view or 'gantt' }}">
   <div id="new-gantt-app"
        data-view="{{ page_view or 'gantt' }}"
+       data-service-worker-url="{{ url_for('ui.crew_briefing_service_worker') if page_view == 'briefing' else '' }}"
        data-api-url="{{ url_for('ui.api_dcs_gantt_data') }}"
        data-apg-push-url="{{ url_for('api.api_dcs_push_to_apg') }}"
        data-apg-plan-url-template="{{ url_for('api.api_apg_plan_get', plan_id=0) }}"
@@ -112,6 +121,17 @@
           <div id="crewSearchStatus" class="crew-search-status" aria-live="polite">Enter your code to begin.</div>
         </form>
       </div>
+      <div id="briefingStickyHeader" class="briefing-sticky-header" hidden>
+        <div class="briefing-sticky-main">
+          <span id="briefingDateRange" class="briefing-date-range"></span>
+          <strong id="briefingNextFlight">No upcoming flight</strong>
+        </div>
+        <div class="briefing-freshness">
+          <span id="freshnessDot" class="freshness-dot" aria-hidden="true"></span>
+          <span id="freshnessText">Not updated</span>
+          <button id="installBriefingBtn" class="btn btn-ghost install-briefing-btn" type="button" hidden>Install app</button>
+        </div>
+      </div>
       <div id="briefingFlights" class="briefing-flights"></div>
     </section>
 
@@ -129,7 +149,10 @@
       </section>
 
       <aside class="detail" id="detailCard" aria-live="polite">
-        <h2>Flight Detail</h2>
+        <div class="detail-heading-row">
+          <h2>Flight Detail</h2>
+          {% if page_view == "briefing" %}<button id="backToFlightsBtn" class="btn btn-ghost back-to-flights" type="button">Back to flights</button>{% endif %}
+        </div>
         <div class="muted">{{ "Select a flight from the list." if page_view == "briefing" else "Select a bar on the timeline." }}</div>
         <div class="detail-actions">
           <button id="btnPaxList" class="btn btn-ghost" type="button">Passenger List</button>
@@ -558,6 +581,6 @@
     </form>
   </dialog>
 
-  <script src="{{ url_for('static', filename='New_Gantt/live_gantt.js') }}?v=crew-briefing-7"></script>
+  <script src="{{ url_for('static', filename='New_Gantt/live_gantt.js') }}?v=crew-briefing-8"></script>
 </body>
 </html>

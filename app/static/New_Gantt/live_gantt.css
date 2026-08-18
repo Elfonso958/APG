@@ -1788,6 +1788,19 @@ body[data-theme="dark"] .wb-inline-status.is-over {
 .crew-search-row { display: flex; gap: 9px; }
 .crew-search-row input { min-width: 0; flex: 1; min-height: 48px; padding: 0 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font: inherit; font-size: 16px; text-transform: uppercase; }
 .crew-search-status { min-height: 20px; margin-top: 7px; color: var(--muted); font-size: 13px; }
+.briefing-sticky-header { position: sticky; top: 8px; z-index: 30; display: flex; justify-content: space-between; align-items: center; gap: 16px; max-width: 1060px; margin: 14px auto 0; padding: 12px 16px; border: 1px solid var(--line); border-radius: 14px; background: color-mix(in srgb, var(--panel) 94%, transparent); box-shadow: 0 8px 24px rgba(24, 39, 57, .12); backdrop-filter: blur(14px); }
+.briefing-sticky-header[hidden] { display: none; }
+.briefing-sticky-main { display: grid; gap: 2px; min-width: 0; }
+.briefing-date-range { overflow: hidden; color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .05em; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+.briefing-sticky-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.briefing-freshness { display: flex; align-items: center; gap: 7px; flex: 0 0 auto; color: var(--muted); font-size: 11px; }
+.freshness-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+.freshness-dot.is-fresh { background: #13a463; }
+.freshness-dot.is-stale { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 18%, transparent); }
+.freshness-dot.is-offline { background: var(--danger); }
+.freshness-dot.is-loading { background: var(--accent); animation: briefing-pulse 1s ease-in-out infinite; }
+@keyframes briefing-pulse { 50% { opacity: .35; transform: scale(.75); } }
+.install-briefing-btn { padding: 5px 8px; font-size: 10px; }
 .briefing-flights { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; padding-top: 20px; }
 .briefing-day-heading { margin: 16px 2px 0; color: var(--text); font-size: 1.05rem; }
 .briefing-day-heading:first-child { margin-top: 0; }
@@ -1828,6 +1841,8 @@ body[data-theme="dark"] .wb-inline-status.is-over {
 .briefing-list-item.is-open .briefing-chevron { transform: rotate(90deg); }
 .view-briefing .briefing-list-item .detail { width: auto; margin: 0; padding: 18px 20px 20px; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: color-mix(in srgb, var(--panel) 94%, var(--accent) 6%); overflow: visible; }
 .view-briefing .briefing-list-item .detail h2 { font-size: 1.2rem; }
+.detail-heading-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.back-to-flights { min-height: 42px; }
 .briefing-empty { grid-column: 1 / -1; display: grid; gap: 5px; padding: 36px; border: 1px dashed var(--line); border-radius: 16px; text-align: center; color: var(--muted); }
 .briefing-empty strong { color: var(--text); font-size: 18px; }
 
@@ -1839,6 +1854,9 @@ body[data-theme="dark"] .wb-inline-status.is-over {
   .view-briefing .controls .ctrl input { width: 100%; }
   .view-briefing .stats { grid-template-columns: repeat(2, 1fr); padding: 10px 12px; }
   .view-briefing .briefing-view { padding: 10px 12px; }
+  .briefing-sticky-header { top: 6px; align-items: flex-start; margin-top: 10px; padding: 10px 12px; }
+  .briefing-freshness { display: grid; grid-template-columns: auto 1fr; max-width: 145px; }
+  .install-briefing-btn { grid-column: 1 / -1; }
   .briefing-search-card { grid-template-columns: 1fr; gap: 20px; padding: 20px; border-radius: 16px; }
   .crew-search-row { display: grid; }
   .crew-search-row .btn { min-height: 48px; }
@@ -1857,6 +1875,7 @@ body[data-theme="dark"] .wb-inline-status.is-over {
   .view-briefing .detail { margin: 12px; padding: 16px; }
   .view-briefing .briefing-list-item .detail { margin: 0; padding: 16px; }
   .view-briefing .detail-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .view-briefing .detail-actions .btn { min-height: 46px; white-space: normal; }
+  .view-briefing .detail-actions .btn { min-height: 52px; padding: 12px; white-space: normal; }
+  .back-to-flights { min-height: 48px; }
   .view-briefing dialog { width: calc(100vw - 16px); max-width: none; max-height: calc(100dvh - 16px); }
 }

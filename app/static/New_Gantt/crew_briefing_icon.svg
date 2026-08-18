@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Air Chathams Crew Briefing">
+  <rect width="512" height="512" rx="112" fill="#0f6fff"/>
+  <path d="M74 291c79-20 153-61 225-151-22 67-63 122-118 164 76-12 149-42 242-100-68 94-177 158-309 170z" fill="#fff" opacity=".96"/>
+  <circle cx="382" cy="133" r="35" fill="#58c6ff"/>
+  <text x="256" y="438" text-anchor="middle" font-family="Arial, sans-serif" font-size="55" font-weight="700" fill="#fff">CREW</text>
+</svg>

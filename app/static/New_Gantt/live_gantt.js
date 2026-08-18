@@ -54,6 +54,13 @@
   const crewSearchBtn = document.getElementById("crewSearchBtn");
   const crewSearchStatus = document.getElementById("crewSearchStatus");
   const briefingFlights = document.getElementById("briefingFlights");
+  const briefingStickyHeader = document.getElementById("briefingStickyHeader");
+  const briefingDateRange = document.getElementById("briefingDateRange");
+  const briefingNextFlight = document.getElementById("briefingNextFlight");
+  const freshnessDot = document.getElementById("freshnessDot");
+  const freshnessText = document.getElementById("freshnessText");
+  const backToFlightsBtn = document.getElementById("backToFlightsBtn");
+  const installBriefingBtn = document.getElementById("installBriefingBtn");
   const liveNowBar = document.getElementById("liveNowBar");
   const liveNowLabel = document.getElementById("liveNowLabel");
   const crosshairV = document.getElementById("crosshairV");
@@ -223,6 +230,11 @@
   let flights = [];
   let flightDataReady = !isBriefingView;
   let crewSearchQueued = false;
+  let lastBriefingRefreshAt = null;
+  let briefingRefreshTimer = null;
+  let briefingFreshnessTimer = null;
+  let briefingOfflineMode = false;
+  let deferredInstallPrompt = null;
   let timer = null;
   let selectedId = null;
   let selectedFlight = null;
@@ -3525,6 +3537,7 @@
 
   function briefingPaxBreakdown(f) {
     const pax = Array.isArray(f.pax_list) ? f.pax_list : [];
+    if (!pax.length && f.offline_counts) return { ...f.offline_counts };
     const checked = pax.filter((p) => classifyPaxStatus(p) === "CHECKED").length;
     const boarded = pax.filter((p) => classifyPaxStatus(p) === "BOARDED").length;
     const types = pax.length ? paxTypeBreakdown(pax) : null;
@@ -3552,15 +3565,124 @@
     }).format(d);
   }
 
+  function briefingStorageKey(crewCode = crewCodeInput?.value, day = dayInput?.value) {
+    return `crew_briefing_summary_v1:${String(crewCode || "").trim().toUpperCase()}:${day || ""}`;
+  }
+
+  function selectedFlightStorageKey() {
+    return `crew_briefing_selected:${String(crewCodeInput?.value || "").trim().toUpperCase()}:${dayInput?.value || ""}`;
+  }
+
+  function offlineFlightSummary(f) {
+    const allowed = [
+      "reg", "dep", "ades", "std_nz", "sta_nz", "std_sched_nz", "sta_sched_nz",
+      "dep_actual_nz", "arr_actual_nz", "flight_number", "designator", "registration_id",
+      "block_mins", "aircraft_type", "service_type", "flight_type", "flight_status", "adt",
+      "chd", "inf", "pax_count", "bags_kg", "envision_flight_id", "defect_count", "defect_total",
+    ];
+    const summary = {};
+    allowed.forEach((key) => { summary[key] = f[key]; });
+    summary.crewLoaded = true;
+    summary.crew = (f.crew || []).filter((c) => c.is_operating !== false).map((c) => ({
+      id: c.id, position: c.position, name: c.name, employee_no: c.employee_no,
+      is_operating: c.is_operating, is_pilot: c.is_pilot, is_pilot_flying: c.is_pilot_flying,
+    }));
+    summary.offline_counts = briefingPaxBreakdown(f);
+    summary.pax_list = [];
+    summary.delays = [];
+    summary.offline_summary = true;
+    return summary;
+  }
+
+  function saveOfflineBriefing(items, crewCode) {
+    try {
+      localStorage.setItem(briefingStorageKey(crewCode), JSON.stringify({
+        saved_at: new Date().toISOString(),
+        flights: items.map(offlineFlightSummary),
+      }));
+    } catch (err) {
+      console.warn("Unable to save offline briefing", err);
+    }
+  }
+
+  function restoreOfflineBriefing() {
+    try {
+      const raw = localStorage.getItem(briefingStorageKey());
+      if (!raw) return false;
+      const cached = JSON.parse(raw);
+      if (!Array.isArray(cached.flights)) return false;
+      flights = cached.flights;
+      flightDataReady = true;
+      briefingOfflineMode = true;
+      lastBriefingRefreshAt = cached.saved_at ? new Date(cached.saved_at) : null;
+      renderBriefingFlights(flights, String(crewCodeInput?.value || "").trim().toUpperCase());
+      if (crewSearchStatus) crewSearchStatus.textContent = "Showing the last saved briefing. Live actions are unavailable offline.";
+      updateBriefingFreshness();
+      return true;
+    } catch (err) {
+      console.warn("Unable to restore offline briefing", err);
+      return false;
+    }
+  }
+
+  function updateBriefingFreshness() {
+    if (!isBriefingView || !freshnessText || !freshnessDot) return;
+    freshnessDot.classList.remove("is-fresh", "is-stale", "is-offline", "is-loading");
+    if (briefingOfflineMode) {
+      freshnessDot.classList.add("is-offline");
+      freshnessText.textContent = lastBriefingRefreshAt
+        ? `Offline copy from ${lastBriefingRefreshAt.toLocaleTimeString("en-NZ", { hour: "2-digit", minute: "2-digit" })}`
+        : "Offline copy";
+      return;
+    }
+    if (!lastBriefingRefreshAt) {
+      freshnessText.textContent = "Not updated";
+      return;
+    }
+    const ageMs = Date.now() - lastBriefingRefreshAt.getTime();
+    const isStale = ageMs > 5 * 60 * 1000;
+    freshnessDot.classList.add(isStale ? "is-stale" : "is-fresh");
+    const time = lastBriefingRefreshAt.toLocaleTimeString("en-NZ", { hour: "2-digit", minute: "2-digit" });
+    freshnessText.textContent = isStale ? `Data may be stale · updated ${time}` : `Last updated at ${time}`;
+  }
+
+  function updateBriefingStickyHeader(items) {
+    if (!briefingStickyHeader || !items.length) return;
+    briefingStickyHeader.hidden = false;
+    const startLabel = briefingDateLabel(items[0]);
+    const endLabel = briefingDateLabel(items[items.length - 1]);
+    if (briefingDateRange) briefingDateRange.textContent = startLabel === endLabel ? startLabel : `${startLabel} – ${endLabel}`;
+    const now = Date.now();
+    const next = items.find((f) => {
+      const status = String(f.flight_status || "").toLowerCase();
+      return new Date(f.std_nz).getTime() >= now && !status.includes("cancel") && !status.includes("complete");
+    });
+    if (briefingNextFlight) briefingNextFlight.textContent = next
+      ? `Next: ${fmtTime(next.std_nz)} ${flightCode(next)} · ${next.dep || "-"}–${next.ades || "-"}`
+      : "No upcoming flight in this briefing";
+  }
+
+  function startBriefingBackgroundRefresh() {
+    if (briefingRefreshTimer) clearInterval(briefingRefreshTimer);
+    if (briefingFreshnessTimer) clearInterval(briefingFreshnessTimer);
+    briefingFreshnessTimer = setInterval(updateBriefingFreshness, 30000);
+    briefingRefreshTimer = setInterval(() => {
+      if (document.hidden || !navigator.onLine || !crewCodeInput?.value.trim()) return;
+      loadData({ showSpinner: false, force: false, background: true }).catch(() => {});
+    }, 120000);
+  }
+
   function renderBriefingFlights(items, crewCode) {
     if (!briefingFlights) return;
     if (detailCard?.parentElement === briefingFlights || detailCard?.closest(".briefing-list-item")) {
       document.querySelector(".layout")?.appendChild(detailCard);
     }
     if (!items.length) {
+      if (briefingStickyHeader) briefingStickyHeader.hidden = true;
       briefingFlights.innerHTML = `<div class="briefing-empty"><strong>No flights found</strong><span>No sectors in this two-day period include crew code ${escapeHtml(crewCode)}.</span></div>`;
       return;
     }
+    updateBriefingStickyHeader(items);
     briefingFlights.innerHTML = items.map((f, index) => {
       const counts = briefingPaxBreakdown(f);
       const crewMember = (f.crew || []).find((c) => String(c.employee_no || "").trim().toUpperCase() === crewCode);
@@ -3625,15 +3747,29 @@
         if (isAlreadyOpen) {
           setDetail(null);
           selectedId = null;
+          localStorage.removeItem(selectedFlightStorageKey());
           return;
         }
         selectedId = f.envision_flight_id;
         setDetail(f);
+        if (briefingOfflineMode) {
+          setActionsEnabled(false);
+          detailCard?.querySelectorAll("#detailList input, #detailList select, #detailList textarea, #detailList button").forEach((control) => {
+            control.disabled = true;
+          });
+        }
         item?.classList.add("is-open");
         card.setAttribute("aria-expanded", "true");
         if (detailCard && item) item.appendChild(detailCard);
+        localStorage.setItem(selectedFlightStorageKey(), String(f.envision_flight_id || ""));
       });
     });
+    const rememberedId = localStorage.getItem(selectedFlightStorageKey());
+    if (rememberedId) {
+      const rememberedCard = [...briefingFlights.querySelectorAll("[data-briefing-flight-id]")]
+        .find((card) => card.dataset.briefingFlightId === rememberedId);
+      if (rememberedCard) queueMicrotask(() => rememberedCard.click());
+    }
   }
 
   async function findCrewBriefingFlights() {
@@ -3664,7 +3800,12 @@
         }));
       }
       const matches = flights.filter((f) => (f.crew || []).some((c) => String(c.employee_no || "").trim().toUpperCase() === crewCode));
+      briefingOfflineMode = false;
       renderBriefingFlights(matches, crewCode);
+      lastBriefingRefreshAt = new Date();
+      saveOfflineBriefing(matches, crewCode);
+      updateBriefingFreshness();
+      startBriefingBackgroundRefresh();
       if (crewSearchStatus) crewSearchStatus.textContent = `${matches.length} flight${matches.length === 1 ? "" : "s"} found for ${crewCode}.`;
     } finally {
       if (crewSearchBtn) crewSearchBtn.disabled = false;
@@ -3674,6 +3815,8 @@
   async function loadData(opts = {}) {
     const showSpinner = opts.showSpinner !== false;
     const forceRefresh = opts.force === true;
+    const backgroundRefresh = opts.background === true;
+    const refreshLabel = refreshBtn.textContent;
     const day = dayInput.value || app.dataset.day;
     const days = isBriefingView ? [day, addDaysIso(day, 1)] : [day];
     const urls = days.map((dateValue) => `${apiUrl}?date=${encodeURIComponent(dateValue)}&include_delays=1${forceRefresh ? "&force=1" : ""}`);
@@ -3685,6 +3828,12 @@
         : "Loading two days of flights…";
     }
     refreshBtn.disabled = true;
+    refreshBtn.textContent = backgroundRefresh ? "Updating…" : "Refreshing…";
+    if (isBriefingView && freshnessDot) {
+      freshnessDot.classList.remove("is-fresh", "is-stale", "is-offline");
+      freshnessDot.classList.add("is-loading");
+      if (freshnessText) freshnessText.textContent = backgroundRefresh ? "Updating in background…" : "Refreshing briefing…";
+    }
     if (showSpinner) setBoardLoading(true);
     try {
       regDefectsCache.clear();
@@ -3728,11 +3877,14 @@
     } catch (err) {
       console.error("New Live Gantt load failed", err);
       showMessage(`Failed to load flights: ${err.message}`, true);
-      if (isBriefingView && crewSearchStatus) crewSearchStatus.textContent = "Unable to load flights. Tap Refresh to try again.";
+      const restored = isBriefingView && restoreOfflineBriefing();
+      if (isBriefingView && crewSearchStatus && !restored) crewSearchStatus.textContent = "Unable to load flights. Tap Refresh to try again.";
     } finally {
       refreshBtn.disabled = false;
+      refreshBtn.textContent = refreshLabel;
       if (isBriefingView && crewSearchBtn && flightDataReady) crewSearchBtn.disabled = false;
       if (showSpinner) setBoardLoading(false);
+      if (isBriefingView) updateBriefingFreshness();
     }
   }
 
@@ -4558,6 +4710,34 @@
       if (crewSearchStatus) crewSearchStatus.textContent = err.message || "Unable to load crew assignments.";
     });
   });
+  if (backToFlightsBtn) backToFlightsBtn.addEventListener("click", () => {
+    const openItem = briefingFlights?.querySelector(".briefing-list-item.is-open");
+    setDetail(null);
+    openItem?.classList.remove("is-open");
+    openItem?.querySelector(".briefing-flight-card")?.setAttribute("aria-expanded", "false");
+    openItem?.scrollIntoView({ behavior: "smooth", block: "center" });
+  });
+  window.addEventListener("beforeinstallprompt", (event) => {
+    if (!isBriefingView) return;
+    event.preventDefault();
+    deferredInstallPrompt = event;
+    if (installBriefingBtn) installBriefingBtn.hidden = false;
+  });
+  if (installBriefingBtn) installBriefingBtn.addEventListener("click", async () => {
+    if (!deferredInstallPrompt) return;
+    deferredInstallPrompt.prompt();
+    await deferredInstallPrompt.userChoice;
+    deferredInstallPrompt = null;
+    installBriefingBtn.hidden = true;
+  });
+  window.addEventListener("offline", () => {
+    briefingOfflineMode = true;
+    updateBriefingFreshness();
+  });
+  window.addEventListener("online", () => {
+    briefingOfflineMode = false;
+    updateBriefingFreshness();
+  });
   if (locationFilter) {
     selectedLocationFilter = normalizeStationCode(localStorage.getItem(LOCATION_FILTER_STORAGE_KEY) || "");
     locationFilter.addEventListener("change", () => {
@@ -4721,6 +4901,9 @@
     setupLiveNowTimer();
     setActionsEnabled(false);
     if (isBriefingView && crewCodeInput) crewCodeInput.value = localStorage.getItem("crew_briefing_code") || "";
+    if (isBriefingView && "serviceWorker" in navigator && app.dataset.serviceWorkerUrl) {
+      navigator.serviceWorker.register(app.dataset.serviceWorkerUrl).catch((err) => console.warn("Crew briefing service worker unavailable", err));
+    }
     updateLiveNowBar();
     await ensureEnvisionEnvironment();
     if (isBriefingView) {

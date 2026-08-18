@@ -1271,6 +1271,38 @@ def dcs_crew_briefing():
     )
 
 
+@ui_bp.get("/crew-briefing.webmanifest")
+def crew_briefing_manifest():
+    response = jsonify({
+        "name": "Air Chathams Crew Briefing",
+        "short_name": "Crew Briefing",
+        "description": "Two-day mobile flight briefing for Air Chathams crew.",
+        "start_url": url_for("ui.dcs_crew_briefing"),
+        "scope": request.script_root.rstrip("/") + "/",
+        "display": "standalone",
+        "background_color": "#f4f7fb",
+        "theme_color": "#0f6fff",
+        "icons": [{
+            "src": url_for("static", filename="New_Gantt/crew_briefing_icon.svg"),
+            "sizes": "any",
+            "type": "image/svg+xml",
+            "purpose": "any maskable",
+        }],
+    })
+    response.headers["Content-Type"] = "application/manifest+json"
+    response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
+@ui_bp.get("/crew-briefing-sw.js")
+def crew_briefing_service_worker():
+    response = make_response(current_app.send_static_file("New_Gantt/crew_briefing_sw.js"))
+    response.headers["Content-Type"] = "application/javascript"
+    response.headers["Service-Worker-Allowed"] = request.script_root.rstrip("/") + "/"
+    response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 @ui_bp.get("/api/dcs/gantt_data")
 def api_dcs_gantt_data():
     """
