@@ -44,6 +44,7 @@
   const axisEl = document.getElementById("axis");
   const boardEl = document.querySelector(".board");
   const detailList = document.getElementById("detailList");
+  const detailCard = document.getElementById("detailCard");
   const detailMuted = document.querySelector("#detailCard .muted");
   const loadMessage = document.getElementById("loadMessage");
   const envisionEnvPill = document.getElementById("envisionEnvPill");
@@ -3529,6 +3530,9 @@
 
   function renderBriefingFlights(items, crewCode) {
     if (!briefingFlights) return;
+    if (detailCard?.parentElement === briefingFlights || detailCard?.closest(".briefing-list-item")) {
+      document.querySelector(".layout")?.appendChild(detailCard);
+    }
     if (!items.length) {
       briefingFlights.innerHTML = `<div class="briefing-empty"><strong>No flights found</strong><span>No sectors on this date include crew code ${escapeHtml(crewCode)}.</span></div>`;
       return;
@@ -3537,7 +3541,8 @@
       const counts = briefingPaxBreakdown(f);
       const crewMember = (f.crew || []).find((c) => String(c.employee_no || "").trim().toUpperCase() === crewCode);
       return `
-        <button class="briefing-flight-card" type="button" data-briefing-flight-id="${escapeHtml(String(f.envision_flight_id || ""))}">
+        <article class="briefing-list-item" data-briefing-item-id="${escapeHtml(String(f.envision_flight_id || ""))}">
+        <button class="briefing-flight-card" type="button" aria-expanded="false" data-briefing-flight-id="${escapeHtml(String(f.envision_flight_id || ""))}">
           <div class="briefing-card-top">
             <div><span class="briefing-time">${fmtTime(f.std_nz)}</span><span class="briefing-flight-no">${escapeHtml(flightCode(f))}</span></div>
             <span class="briefing-status">${escapeHtml(f.flight_status || "Scheduled")}</span>
@@ -3552,16 +3557,28 @@
             <span><small>Checked / Boarded</small><strong>${counts.checked} / ${counts.boarded}</strong></span>
             <span><small>Baggage</small><strong>${Number(f.bags_kg || 0).toFixed(1)} kg</strong></span>
           </div>
-          <span class="briefing-detail-cta">Flight details and actions <span aria-hidden="true">›</span></span>
-        </button>`;
+          <span class="briefing-detail-cta">Flight details and actions <span class="briefing-chevron" aria-hidden="true">&rsaquo;</span></span>
+        </button>
+        </article>`;
     }).join("");
     briefingFlights.querySelectorAll("[data-briefing-flight-id]").forEach((card) => {
       card.addEventListener("click", () => {
         const f = flights.find((row) => String(row.envision_flight_id) === card.dataset.briefingFlightId);
         if (!f) return;
+        const item = card.closest(".briefing-list-item");
+        const isAlreadyOpen = item?.classList.contains("is-open");
+        briefingFlights.querySelectorAll(".briefing-list-item.is-open").forEach((el) => el.classList.remove("is-open"));
+        briefingFlights.querySelectorAll(".briefing-flight-card[aria-expanded='true']").forEach((el) => el.setAttribute("aria-expanded", "false"));
+        if (isAlreadyOpen) {
+          setDetail(null);
+          selectedId = null;
+          return;
+        }
         selectedId = f.envision_flight_id;
         setDetail(f);
-        document.getElementById("detailCard")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        item?.classList.add("is-open");
+        card.setAttribute("aria-expanded", "true");
+        if (detailCard && item) item.appendChild(detailCard);
       });
     });
   }
