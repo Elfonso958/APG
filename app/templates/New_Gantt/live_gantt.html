@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='New_Gantt/live_gantt.css') }}?v=crew-briefing-8">
+  <link rel="stylesheet" href="{{ url_for('static', filename='New_Gantt/live_gantt.css') }}?v=crew-briefing-9">
 </head>
 <body data-theme="light" class="view-{{ page_view or 'gantt' }}">
   <div id="new-gantt-app"
@@ -116,7 +116,10 @@
           <label for="crewCodeInput">EMP crew code</label>
           <div class="crew-search-row">
             <input id="crewCodeInput" type="text" inputmode="text" autocomplete="username" autocapitalize="characters" spellcheck="false" placeholder="e.g. PS" maxlength="20">
-            <button id="crewSearchBtn" class="btn btn-primary" type="submit">Show my flights</button>
+            <button id="crewSearchBtn" class="btn btn-primary crew-search-btn" type="submit">
+              <span id="crewSearchBtnLabel">Show my flights</span>
+              <span id="crewSearchSpinner" class="crew-search-spinner" aria-hidden="true" hidden></span>
+            </button>
           </div>
           <div id="crewSearchStatus" class="crew-search-status" aria-live="polite">Enter your code to begin.</div>
         </form>
@@ -581,6 +584,6 @@
     </form>
   </dialog>
 
-  <script src="{{ url_for('static', filename='New_Gantt/live_gantt.js') }}?v=crew-briefing-8"></script>
+  <script src="{{ url_for('static', filename='New_Gantt/live_gantt.js') }}?v=crew-briefing-9"></script>
 </body>
 </html>

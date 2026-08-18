@@ -52,6 +52,8 @@
   const crewSearchForm = document.getElementById("crewSearchForm");
   const crewCodeInput = document.getElementById("crewCodeInput");
   const crewSearchBtn = document.getElementById("crewSearchBtn");
+  const crewSearchBtnLabel = document.getElementById("crewSearchBtnLabel");
+  const crewSearchSpinner = document.getElementById("crewSearchSpinner");
   const crewSearchStatus = document.getElementById("crewSearchStatus");
   const briefingFlights = document.getElementById("briefingFlights");
   const briefingStickyHeader = document.getElementById("briefingStickyHeader");
@@ -3551,6 +3553,13 @@
     };
   }
 
+  function setCrewSearchLoading(isLoading) {
+    if (crewSearchBtn) crewSearchBtn.disabled = !!isLoading;
+    if (crewSearchBtnLabel) crewSearchBtnLabel.hidden = !!isLoading;
+    if (crewSearchSpinner) crewSearchSpinner.hidden = !isLoading;
+    if (crewSearchBtn) crewSearchBtn.setAttribute("aria-label", isLoading ? "Loading flights" : "Show my flights");
+  }
+
   function addDaysIso(isoDate, days) {
     const d = new Date(`${isoDate}T12:00:00Z`);
     d.setUTCDate(d.getUTCDate() + days);
@@ -3772,7 +3781,8 @@
     }
   }
 
-  async function findCrewBriefingFlights() {
+  async function findCrewBriefingFlights(opts = {}) {
+    const silent = opts.silent === true;
     const crewCode = String(crewCodeInput?.value || "").trim().toUpperCase();
     if (!crewCode) {
       if (crewSearchStatus) crewSearchStatus.textContent = "Enter your crew code.";
@@ -3788,8 +3798,7 @@
       return;
     }
     crewSearchQueued = false;
-    if (crewSearchBtn) crewSearchBtn.disabled = true;
-    if (crewSearchStatus) crewSearchStatus.textContent = `Checking ${flights.length} flights…`;
+    if (!silent) setCrewSearchLoading(true);
     try {
       const pending = flights.filter((f) => !f.crewLoaded && f.envision_flight_id);
       for (let offset = 0; offset < pending.length; offset += 6) {
@@ -3808,7 +3817,7 @@
       startBriefingBackgroundRefresh();
       if (crewSearchStatus) crewSearchStatus.textContent = `${matches.length} flight${matches.length === 1 ? "" : "s"} found for ${crewCode}.`;
     } finally {
-      if (crewSearchBtn) crewSearchBtn.disabled = false;
+      if (!silent) setCrewSearchLoading(false);
     }
   }
 
@@ -3822,10 +3831,7 @@
     const urls = days.map((dateValue) => `${apiUrl}?date=${encodeURIComponent(dateValue)}&include_delays=1${forceRefresh ? "&force=1" : ""}`);
     if (isBriefingView) {
       flightDataReady = false;
-      if (crewSearchBtn) crewSearchBtn.disabled = true;
-      if (crewSearchStatus) crewSearchStatus.textContent = crewCodeInput?.value.trim()
-        ? "Loading two days of flights. Your saved search will run automatically…"
-        : "Loading two days of flights…";
+      if (!backgroundRefresh) setCrewSearchLoading(true);
     }
     refreshBtn.disabled = true;
     refreshBtn.textContent = backgroundRefresh ? "Updating…" : "Refreshing…";
@@ -3864,7 +3870,7 @@
       updateStats();
       renderRows();
       flightDataReady = true;
-      if (isBriefingView && crewCodeInput?.value.trim()) await findCrewBriefingFlights();
+      if (isBriefingView && crewCodeInput?.value.trim()) await findCrewBriefingFlights({ silent: backgroundRefresh });
       preloadRegistrationMaintenance().catch(() => {});
       updateLiveNowBar();
       const refreshedSelected = findSelectedFlight();
@@ -3882,7 +3888,7 @@
     } finally {
       refreshBtn.disabled = false;
       refreshBtn.textContent = refreshLabel;
-      if (isBriefingView && crewSearchBtn && flightDataReady) crewSearchBtn.disabled = false;
+      if (isBriefingView && !backgroundRefresh) setCrewSearchLoading(false);
       if (showSpinner) setBoardLoading(false);
       if (isBriefingView) updateBriefingFreshness();
     }
