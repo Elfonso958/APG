@@ -1,6 +1,7 @@
 import threading
 from datetime import date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from . import db
 from .envision_otp_client import build_envision_otp_client
@@ -24,6 +25,15 @@ _JOB_STATUS: dict[str, Any] = {
     "windowsDone": 0,
     "windowsTotal": 0,
 }
+
+NZ_TIMEZONE = ZoneInfo("Pacific/Auckland")
+
+
+def rolling_otp_cache_dates(*, today: date | None = None, lookback_days: int = 2) -> tuple[str, str]:
+    """Return the inclusive NZ-local cache window ending today."""
+    end = today or datetime.now(NZ_TIMEZONE).date()
+    start = end - timedelta(days=max(0, lookback_days))
+    return start.isoformat(), end.isoformat()
 
 
 def _parse_date(value: str) -> date:
@@ -149,4 +159,3 @@ def start_otp_cache_job(
     )
     thread.start()
     return True, get_otp_cache_job_status()
-

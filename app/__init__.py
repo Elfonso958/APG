@@ -309,6 +309,41 @@ def create_app():
                 except Exception:
                     logging.exception("Passenger sync scheduled job failed")
 
+        def _run_otp_cache_refresh_job():
+            from .otp_cache_job import rolling_otp_cache_dates, start_otp_cache_job
+
+            date_from, date_to = rolling_otp_cache_dates(lookback_days=2)
+            started, status = start_otp_cache_job(
+                app,
+                date_from=date_from,
+                date_to=date_to,
+                window_days=3,
+                chunk_days=1,
+                page_size=100,
+                include_details=False,
+            )
+            if started:
+                app.logger.info("OTP cache refresh started for %s to %s", date_from, date_to)
+            else:
+                app.logger.warning(
+                    "OTP cache refresh skipped because a refresh is already running: %s",
+                    status.get("currentWindow") or "starting",
+                )
+
+        def _ensure_otp_cache_job():
+            if _scheduler.get_job("envision_otp_cache_four_daily") is None:
+                _scheduler.add_job(
+                    _run_otp_cache_refresh_job,
+                    "cron",
+                    hour="0,6,12,18",
+                    minute=0,
+                    timezone="Pacific/Auckland",
+                    id="envision_otp_cache_four_daily",
+                    replace_existing=True,
+                    coalesce=True,
+                    max_instances=1,
+                )
+
         def _start_or_reschedule_scheduler():
             # allow disabling during migrations/ops
             if os.environ.get("DISABLE_SCHEDULER") == "1":
@@ -335,6 +370,7 @@ def create_app():
                     id="envision_pax_sync_daily",
                     replace_existing=True,
                 )
+                _ensure_otp_cache_job()
                 if _should_start_scheduler(app):
                     _scheduler.start()
                     app.logger.info(f"Scheduler started (interval={interval}s)")
@@ -358,6 +394,7 @@ def create_app():
                         id="envision_pax_sync_daily",
                         replace_existing=True,
                     )
+                _ensure_otp_cache_job()
 
         _start_or_reschedule_scheduler()
 

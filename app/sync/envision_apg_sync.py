@@ -210,7 +210,7 @@ IATA_TO_ICAO = {
     # Tonga (corrected codes)
     "TBU": "NFTF",  # Fua'amotu International (Tongatapu)
     "VAV": "NFTV",  # Vava'u
-    "HPA": "NFTH",  # Ha'apai (NOT "HAP")
+    "HPA": "NFTL",  # Ha'apai (NOT "HAP")
     "NTT": "NFTP",  # Niuatoputapu
 }
 
