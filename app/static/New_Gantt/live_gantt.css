@@ -1828,12 +1828,6 @@ body[data-theme="dark"] .wb-inline-status.is-over {
 .briefing-card-meta small, .briefing-card-meta strong { display: block; }
 .briefing-card-meta small { margin-bottom: 3px; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
 .briefing-card-meta strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-.briefing-gate { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 2px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
-.briefing-gate span { display: flex; align-items: baseline; gap: 8px; }
-.briefing-gate small { color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
-.briefing-gate strong { font-size: 14px; }
-.briefing-gate em { color: var(--muted); font-size: 10px; font-style: normal; text-align: right; }
-.briefing-gate.has-gate { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: var(--accent-soft); }
 .briefing-pax-overview { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); margin-top: 12px; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
 .briefing-pax-overview span { padding: 9px 10px; border-right: 1px solid var(--line); text-align: center; }
 .briefing-pax-overview span:last-child { border-right: 0; }
@@ -1880,8 +1874,6 @@ body[data-theme="dark"] .wb-inline-status.is-over {
   .briefing-flight-card { padding: 16px; }
   .briefing-mel-button, .briefing-seatmap-button { min-height: 40px; padding-inline: 12px; }
   .briefing-card-meta { grid-template-columns: repeat(2, 1fr); }
-  .briefing-gate { align-items: flex-start; }
-  .briefing-gate em { max-width: 130px; }
   .briefing-pax-overview { grid-template-columns: repeat(3, 1fr); }
   .briefing-pax-overview span { border-bottom: 1px solid var(--line); }
   .briefing-pax-overview span:nth-child(3n) { border-right: 0; }
