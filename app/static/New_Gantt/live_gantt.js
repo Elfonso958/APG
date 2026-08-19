@@ -3589,6 +3589,7 @@
       "dep_actual_nz", "arr_actual_nz", "flight_number", "designator", "registration_id",
       "block_mins", "aircraft_type", "service_type", "flight_type", "flight_status", "adt",
       "chd", "inf", "pax_count", "bags_kg", "envision_flight_id", "defect_count", "defect_total",
+      "departure_gate", "arrival_gate", "stand", "check_in_desk",
     ];
     const summary = {};
     allowed.forEach((key) => { summary[key] = f[key]; });
@@ -3696,6 +3697,11 @@
     briefingFlights.innerHTML = items.map((f, index) => {
       const counts = briefingPaxBreakdown(f);
       const defectCount = Number.isFinite(Number(f.defect_count)) ? Number(f.defect_count) : 0;
+      const departureGate = String(f.departure_gate || "").trim();
+      const arrivalGate = String(f.arrival_gate || "").trim();
+      const stand = String(f.stand || "").trim();
+      const gateValue = departureGate || arrivalGate || stand;
+      const gateLabel = departureGate ? "Departure gate" : (arrivalGate ? "Arrival gate" : "Stand");
       const crewMember = (f.crew || []).find((c) => String(c.employee_no || "").trim().toUpperCase() === crewCode);
       const operatingCrew = (f.crew || []).filter((c) => c.is_operating !== false);
       const crewOverview = operatingCrew.length
@@ -3730,6 +3736,10 @@
             <span><small>Aircraft</small><strong>${escapeHtml(f.reg || "TBA")}</strong></span>
             <span><small>Role</small><strong>${escapeHtml(crewMember?.position || "Crew")}</strong></span>
             <span><small>Baggage</small><strong>${Number(f.bags_kg || 0).toFixed(1)} kg</strong></span>
+          </div>
+          <div class="briefing-gate ${gateValue ? "has-gate" : ""}">
+            <span><small>${escapeHtml(gateValue ? gateLabel : "Gate")}</small><strong>${escapeHtml(gateValue || "Not published")}</strong></span>
+            <em>${gateValue ? "Envision operational data" : "No gate or stand has been assigned"}</em>
           </div>
           <div class="briefing-pax-overview">
             <span><small>Total pax</small><strong>${counts.total}</strong></span>
@@ -4699,6 +4709,7 @@
         <div class="cell"><small>STD / STA</small><strong>${fmtTime(f.std_sched_nz)} / ${fmtTime(f.sta_sched_nz)}</strong></div>
         <div class="cell"><small>ETD / ETA</small><strong>${fmtTime(f.std_nz)} / ${fmtTime(f.sta_nz)}</strong></div>
         <div class="cell"><small>Aircraft</small><strong>${escapeHtml(f.reg || "TBA")}</strong></div>
+        <div class="cell"><small>Departure gate</small><strong>${escapeHtml(f.departure_gate || f.stand || "Not published")}</strong></div>
         <div class="cell"><small>Baggage</small><strong>${Number(f.bags_kg || 0).toFixed(1)} kg</strong></div>
         <div class="cell"><small>Total pax</small><strong>${counts.total}</strong></div>
         <div class="cell"><small>Adults</small><strong>${counts.adults}</strong></div>
