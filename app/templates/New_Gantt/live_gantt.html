@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='New_Gantt/live_gantt.css') }}?v=crew-briefing-9">
+  <link rel="stylesheet" href="{{ url_for('static', filename='New_Gantt/live_gantt.css') }}?v=crew-briefing-10">
 </head>
 <body data-theme="light" class="view-{{ page_view or 'gantt' }}">
   <div id="new-gantt-app"
@@ -165,6 +165,7 @@
           <button id="btnResetApg" class="btn btn-ghost" type="button">Reset APG Pax</button>
           <button id="btnSeatmap" class="btn btn-ghost" type="button">Seatmap</button>
           <button id="btnMovementMsg" class="btn btn-ghost" type="button">Movement Message</button>
+          {% if page_view == "briefing" %}<button id="btnPrintBriefing" class="btn btn-ghost" type="button">Print / Save PDF</button>{% endif %}
           <button id="btnSubmitApg" class="btn btn-primary" type="button">Submit to APG</button>
         </div>
         <div id="detailList"></div>
@@ -584,6 +585,6 @@
     </form>
   </dialog>
 
-  <script src="{{ url_for('static', filename='New_Gantt/live_gantt.js') }}?v=crew-briefing-9"></script>
+  <script src="{{ url_for('static', filename='New_Gantt/live_gantt.js') }}?v=crew-briefing-10"></script>
 </body>
 </html>
