@@ -1812,7 +1812,9 @@ body[data-theme="dark"] .wb-inline-status.is-over {
 .briefing-list-item.is-open { border-color: var(--accent); box-shadow: 0 10px 28px rgba(15, 111, 255, .13); }
 .briefing-flight-card { width: 100%; padding: 20px; border: 0; border-radius: 0; background: transparent; color: var(--text); text-align: left; font: inherit; cursor: pointer; }
 .briefing-flight-card:hover { border-color: var(--accent); transform: translateY(-1px); }
-.briefing-mel-button { display: block; min-height: 30px; margin: -8px 16px 14px auto; padding: 5px 9px; border: 1px solid color-mix(in srgb, var(--danger) 55%, var(--line)); border-radius: 999px; background: color-mix(in srgb, var(--danger) 12%, var(--panel)); color: var(--danger); font: inherit; font-size: 10px; font-weight: 800; cursor: pointer; }
+.briefing-quick-actions { display: flex; justify-content: flex-end; gap: 7px; margin: -8px 16px 14px; }
+.briefing-mel-button, .briefing-seatmap-button { min-height: 30px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--accent); font: inherit; font-size: 10px; font-weight: 800; cursor: pointer; }
+.briefing-mel-button { border-color: color-mix(in srgb, var(--danger) 55%, var(--line)); background: color-mix(in srgb, var(--danger) 12%, var(--panel)); color: var(--danger); }
 .briefing-mel-button:disabled { opacity: .65; cursor: wait; }
 .briefing-card-top { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
 .briefing-time { margin-right: 10px; font-size: 24px; font-weight: 800; }
@@ -1870,7 +1872,7 @@ body[data-theme="dark"] .wb-inline-status.is-over {
   .briefing-day-heading { margin-top: 12px; font-size: .98rem; }
   .briefing-list-item { border-radius: 15px; }
   .briefing-flight-card { padding: 16px; }
-  .briefing-mel-button { min-height: 36px; }
+  .briefing-mel-button, .briefing-seatmap-button { min-height: 40px; padding-inline: 12px; }
   .briefing-card-meta { grid-template-columns: repeat(2, 1fr); }
   .briefing-pax-overview { grid-template-columns: repeat(3, 1fr); }
   .briefing-pax-overview span { border-bottom: 1px solid var(--line); }

@@ -3745,7 +3745,10 @@
           </div>
           <span class="briefing-detail-cta">Flight details and actions <span class="briefing-chevron" aria-hidden="true">&rsaquo;</span></span>
         </button>
-        ${defectCount > 0 ? `<button class="briefing-mel-button" type="button" data-mel-reg="${escapeHtml(String(f.reg || ""))}" data-mel-reg-id="${escapeHtml(String(f.registration_id || ""))}" aria-label="View ${defectCount} open aircraft defect${defectCount === 1 ? "" : "s"}">MEL ${defectCount}</button>` : ""}
+        <div class="briefing-quick-actions">
+          <button class="briefing-seatmap-button" type="button" data-seatmap-flight-id="${escapeHtml(String(f.envision_flight_id || ""))}">Seatmap</button>
+          ${defectCount > 0 ? `<button class="briefing-mel-button" type="button" data-mel-reg="${escapeHtml(String(f.reg || ""))}" data-mel-reg-id="${escapeHtml(String(f.registration_id || ""))}" aria-label="View ${defectCount} open aircraft defect${defectCount === 1 ? "" : "s"}">MEL ${defectCount}</button>` : ""}
+        </div>
         </article>`;
     }).join("");
     briefingFlights.querySelectorAll("[data-briefing-flight-id]").forEach((card) => {
@@ -3793,6 +3796,16 @@
           button.disabled = false;
           button.textContent = original;
         }
+      });
+    });
+    briefingFlights.querySelectorAll("[data-seatmap-flight-id]").forEach((button) => {
+      button.addEventListener("click", () => {
+        if (briefingOfflineMode) {
+          alert("Live seat allocation is unavailable offline.");
+          return;
+        }
+        const flight = flights.find((f) => String(f.envision_flight_id || "") === button.dataset.seatmapFlightId);
+        if (flight) openSeatmap(flight);
       });
     });
     const rememberedId = localStorage.getItem(selectedFlightStorageKey());
@@ -4407,8 +4420,8 @@
     return null;
   }
 
-  function openSeatmap() {
-    const f = selectedFlight;
+  function openSeatmap(flight = selectedFlight) {
+    const f = flight;
     if (!f || !seatmapDialog) return;
     const cfg = seatmapConfigForFlight(f);
     seatmapGrid.innerHTML = "";
@@ -4918,7 +4931,7 @@
   if (syncPaxBtn) syncPaxBtn.addEventListener("click", withBusy(syncPaxBtn, "Syncing...", runPassengerSyncTest));
   if (btnSubmitApg) btnSubmitApg.addEventListener("click", withBusy(btnSubmitApg, "Submitting...", submitToApg));
   if (btnResetApg) btnResetApg.addEventListener("click", withBusy(btnResetApg, "Resetting...", resetApgPassengers));
-  if (btnSeatmap) btnSeatmap.addEventListener("click", openSeatmap);
+  if (btnSeatmap) btnSeatmap.addEventListener("click", () => openSeatmap());
   if (btnMovementMsg) btnMovementMsg.addEventListener("click", openMovementDialog);
   if (btnPrintBriefing) btnPrintBriefing.addEventListener("click", printSelectedBriefing);
   if (btnCharterManifest) btnCharterManifest.addEventListener("click", openCharterManifestDialog);
