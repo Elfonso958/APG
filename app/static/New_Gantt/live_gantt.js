@@ -3719,20 +3719,23 @@
         ${dateHeading}
         <article class="briefing-list-item" data-briefing-item-id="${escapeHtml(String(f.envision_flight_id || ""))}">
         <button class="briefing-flight-card" type="button" aria-expanded="false" data-briefing-flight-id="${escapeHtml(String(f.envision_flight_id || ""))}">
-          <div class="briefing-card-top">
-            <div><span class="briefing-time">${fmtTime(f.std_nz)}</span><span class="briefing-flight-no">${escapeHtml(flightCode(f))}</span></div>
+          <div class="briefing-card-header">
+            <div class="briefing-schedule">
+              <span class="briefing-time">${fmtTime(f.std_nz)}</span>
+              <span class="briefing-flight-no">${escapeHtml(flightCode(f))}</span>
+            </div>
+            <div class="briefing-route">
+              <span>${escapeHtml(f.dep || "-")}</span><span class="briefing-route-line" aria-hidden="true"></span><span>${escapeHtml(f.ades || "-")}</span>
+            </div>
             <span class="briefing-status">${escapeHtml(f.flight_status || "Scheduled")}</span>
-          </div>
-          <div class="briefing-route">
-            <span>${escapeHtml(f.dep || "-")}</span><span class="briefing-route-line" aria-hidden="true"></span><span>${escapeHtml(f.ades || "-")}</span>
           </div>
           <div class="briefing-card-meta">
             <span><small>Aircraft</small><strong>${escapeHtml(f.reg || "TBA")}</strong></span>
             <span><small>Role</small><strong>${escapeHtml(crewMember?.position || "Crew")}</strong></span>
             <span><small>Baggage</small><strong>${Number(f.bags_kg || 0).toFixed(1)} kg</strong></span>
+            <span><small>Passengers</small><strong>${counts.total}</strong></span>
           </div>
           <div class="briefing-pax-overview">
-            <span><small>Total pax</small><strong>${counts.total}</strong></span>
             <span><small>Adults</small><strong>${counts.adults}</strong></span>
             <span><small>Children</small><strong>${counts.children}</strong></span>
             <span><small>Infants</small><strong>${counts.infants}</strong></span>
@@ -3743,7 +3746,7 @@
             <div class="briefing-crew-label">Operating crew</div>
             <div class="briefing-crew-list">${crewOverview}</div>
           </div>
-          <span class="briefing-detail-cta">Flight details and actions <span class="briefing-chevron" aria-hidden="true">&rsaquo;</span></span>
+          <span class="briefing-detail-cta">Flight details <span class="briefing-chevron" aria-hidden="true">&rsaquo;</span></span>
         </button>
         <div class="briefing-quick-actions">
           <button class="briefing-seatmap-button" type="button" data-seatmap-flight-id="${escapeHtml(String(f.envision_flight_id || ""))}">Seatmap</button>
