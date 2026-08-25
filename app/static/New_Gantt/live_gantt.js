@@ -15,6 +15,7 @@
   const charterManifestUploadUrl = app.dataset.charterManifestUploadUrl;
   const envisionActionUrl = app.dataset.envisionActionUrl;
   const envisionCrewUrl = app.dataset.envisionCrewUrl;
+  const crewBriefingUrl = app.dataset.crewBriefingUrl;
   const envisionCrewPfUrl = app.dataset.envisionCrewPfUrl;
   const envisionLineRegistrationsUrl = app.dataset.envisionLineRegistrationsUrl;
   const envisionFlightTypesUrl = app.dataset.envisionFlightTypesUrl;
@@ -3839,16 +3840,24 @@
     crewSearchQueued = false;
     if (!silent) setCrewSearchLoading(true);
     try {
-      const pending = flights.filter((f) => !f.crewLoaded && f.envision_flight_id);
-      const crewFetchConcurrency = 12;
-      for (let offset = 0; offset < pending.length; offset += crewFetchConcurrency) {
-        await Promise.all(pending.slice(offset, offset + crewFetchConcurrency).map(async (f) => {
-          const crew = await fetchEnvisionCrew(f.envision_flight_id);
-          f.crewLoaded = crew !== null;
-          f.crew = crew || [];
-        }));
-      }
-      const matches = flights.filter((f) => (f.crew || []).some((c) => String(c.employee_no || "").trim().toUpperCase() === crewCode));
+      const response = await fetch(crewBriefingUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          crew_code: crewCode,
+          flight_ids: flights.map((f) => f.envision_flight_id).filter(Boolean),
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) throw new Error(payload.error || `Crew lookup failed (${response.status})`);
+      const matchById = new Map((payload.matches || []).map((row) => [String(row.flight_id), row.crew || []]));
+      const matches = flights.filter((f) => {
+        const crew = matchById.get(String(f.envision_flight_id));
+        if (!crew) return false;
+        f.crewLoaded = true;
+        f.crew = crew;
+        return true;
+      });
       briefingOfflineMode = false;
       renderBriefingFlights(matches, crewCode);
       lastBriefingRefreshAt = new Date();
@@ -3856,6 +3865,8 @@
       updateBriefingFreshness();
       startBriefingBackgroundRefresh();
       if (crewSearchStatus) crewSearchStatus.textContent = `${matches.length} flight${matches.length === 1 ? "" : "s"} found for ${crewCode}.`;
+    } catch (err) {
+      if (crewSearchStatus) crewSearchStatus.textContent = err.message || "Unable to find crew flights.";
     } finally {
       if (!silent) setCrewSearchLoading(false);
     }

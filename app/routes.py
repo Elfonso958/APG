@@ -71,6 +71,8 @@ from .sync.envision_apg_sync import (
 )
 import logging
 import re
+import time as _time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from .zenith_client import fetch_dcs_for_flight
 from .envision_otp_client import (
     DEFAULT_OTP_DATE_FROM,
@@ -86,6 +88,8 @@ from .envision_otp_client import (
 from .otp_cache import get_cached_otp_rows, parse_otp_cache_date, upsert_otp_cache_rows
 
 api_bp = Blueprint("api", __name__)
+
+_CREW_BRIEFING_RAW_CACHE: dict[int, dict] = {}
 
 
 def _clear_live_gantt_cache() -> None:
@@ -4102,6 +4106,111 @@ def api_envision_flight_crew():
             "flight_crew failed for Envision flight_id=%s", flight_id
         )
         return jsonify(ok=False, error=str(e)), 500
+
+
+@api_bp.post("/envision/crew_briefing")
+def api_envision_crew_briefing():
+    """Return assigned crew only for flights operated by one crew member."""
+    data = request.get_json(silent=True) or {}
+    crew_code = str(data.get("crew_code") or "").strip().upper()
+    raw_flight_ids = data.get("flight_ids") or []
+    if not crew_code:
+        return jsonify(ok=False, error="Missing crew_code"), 400
+
+    flight_ids: list[int] = []
+    seen: set[int] = set()
+    for value in raw_flight_ids:
+        try:
+            flight_id = int(value)
+        except (TypeError, ValueError):
+            continue
+        if flight_id > 0 and flight_id not in seen:
+            seen.add(flight_id)
+            flight_ids.append(flight_id)
+    if not flight_ids:
+        return jsonify(ok=True, matches=[])
+
+    try:
+        token = envision_authenticate()["token"]
+        employees = envision_get_employees(token, employee_no=crew_code) or []
+        employee_ids = {
+            int(row.get("id"))
+            for row in employees
+            if row.get("id") not in (None, "")
+            and str(row.get("employeeNo") or "").strip().upper() == crew_code
+        }
+        if not employee_ids:
+            return jsonify(ok=True, matches=[])
+
+        ttl = max(15, int(current_app.config.get("CREW_BRIEFING_ASSIGNMENT_CACHE_TTL", 120)))
+        now = _time.time()
+        crew_by_flight: dict[int, list[dict]] = {}
+        missing: list[int] = []
+        for flight_id in flight_ids:
+            cached = _CREW_BRIEFING_RAW_CACHE.get(flight_id)
+            if cached and now - float(cached.get("ts") or 0) <= ttl:
+                crew_by_flight[flight_id] = cached.get("crew") or []
+            else:
+                missing.append(flight_id)
+
+        if missing:
+            workers = min(len(missing), max(1, int(current_app.config.get("CREW_BRIEFING_MAX_WORKERS", 12))))
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                future_map = {
+                    executor.submit(envision_get_flight_crew, token, flight_id): flight_id
+                    for flight_id in missing
+                }
+                for future in as_completed(future_map):
+                    flight_id = future_map[future]
+                    try:
+                        raw_crew = future.result() or []
+                    except Exception as exc:
+                        current_app.logger.warning(
+                            "Crew briefing assignment lookup failed for flight %s: %s",
+                            flight_id,
+                            exc,
+                        )
+                        raw_crew = []
+                    crew_by_flight[flight_id] = raw_crew
+                    _CREW_BRIEFING_RAW_CACHE[flight_id] = {"ts": _time.time(), "crew": raw_crew}
+
+        matching_ids = [
+            flight_id
+            for flight_id in flight_ids
+            if any(
+                int(row.get("employeeId") or 0) in employee_ids
+                and bool(row.get("isOperating", True))
+                for row in crew_by_flight.get(flight_id, [])
+            )
+        ]
+
+        matches: list[dict] = []
+        if matching_ids:
+            workers = min(len(matching_ids), 6)
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                future_map = {
+                    executor.submit(fetch_envision_crew_for_apg, flight_id, False): flight_id
+                    for flight_id in matching_ids
+                }
+                for future in as_completed(future_map):
+                    flight_id = future_map[future]
+                    try:
+                        crew = future.result() or []
+                    except Exception as exc:
+                        current_app.logger.warning(
+                            "Crew briefing detail lookup failed for flight %s: %s",
+                            flight_id,
+                            exc,
+                        )
+                        crew = []
+                    matches.append({"flight_id": flight_id, "crew": crew})
+
+        order = {flight_id: index for index, flight_id in enumerate(flight_ids)}
+        matches.sort(key=lambda row: order.get(row["flight_id"], len(order)))
+        return jsonify(ok=True, matches=matches)
+    except Exception as exc:
+        current_app.logger.exception("Crew briefing lookup failed for crew code %s", crew_code)
+        return jsonify(ok=False, error=str(exc)), 502
 
 
 @api_bp.get("/envision/flight_crew_raw")

@@ -32,6 +32,7 @@
        data-charter-manifest-upload-url="{{ url_for('api.api_charter_manifest_upload') }}"
        data-envision-action-url="{{ url_for('api.api_envision_flight_action') }}"
        data-envision-crew-url="{{ url_for('api.api_envision_flight_crew') }}"
+       data-crew-briefing-url="{{ url_for('api.api_envision_crew_briefing') }}"
        data-envision-crew-pf-url="{{ url_for('api.api_envision_flight_crew_pilot_flying') }}"
        data-envision-line-registrations-url="{{ url_for('api.api_envision_line_registrations') }}"
        data-envision-flight-types-url="{{ url_for('api.api_envision_flight_types') }}"
@@ -585,6 +586,6 @@
     </form>
   </dialog>
 
-  <script src="{{ url_for('static', filename='New_Gantt/live_gantt.js') }}?v=crew-briefing-14"></script>
+  <script src="{{ url_for('static', filename='New_Gantt/live_gantt.js') }}?v=crew-briefing-15"></script>
 </body>
 </html>
