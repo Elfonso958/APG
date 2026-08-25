@@ -43,6 +43,19 @@
           </div>
         </div>
 
+        <div class="form-row mt-2">
+          <label class="form-field">
+            <span>Create APG flights ahead (hours)</span>
+            <input type="number" name="apg_create_ahead_hours" min="1" max="336" step="1" value="{{ (cfg.apg_create_ahead_hours if cfg and cfg.apg_create_ahead_hours else 48) }}">
+            <span class="muted small">Automatic sync will create eligible flights departing within this many hours. Default: 48 hours.</span>
+          </label>
+          <div class="preset-row">
+            <button class="btn secondary btn-sm" type="button" data-ahead-hours="24">24 hr</button>
+            <button class="btn secondary btn-sm" type="button" data-ahead-hours="48">48 hr</button>
+            <button class="btn secondary btn-sm" type="button" data-ahead-hours="72">72 hr</button>
+          </div>
+        </div>
+
         <div class="mt-2">
           <button type="submit" class="btn">Save settings</button>
         </div>
@@ -78,10 +91,16 @@
     (function () {
       const presetButtons = document.querySelectorAll("[data-interval]");
       const input = document.querySelector("input[name='interval_sec']");
+      const aheadInput = document.querySelector("input[name='apg_create_ahead_hours']");
       presetButtons.forEach((btn) => {
         btn.addEventListener("click", () => {
           if (!input) return;
           input.value = btn.getAttribute("data-interval");
+        });
+      });
+      document.querySelectorAll("[data-ahead-hours]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          if (aheadInput) aheadInput.value = btn.getAttribute("data-ahead-hours");
         });
       });
     })();

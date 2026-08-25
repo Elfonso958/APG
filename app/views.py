@@ -725,12 +725,15 @@ def settings_page():
     if request.method == "POST":
         auto_enabled = bool(request.form.get("auto_enabled"))
         interval_sec = int(request.form.get("interval_sec") or 300)
+        apg_create_ahead_hours = int(request.form.get("apg_create_ahead_hours") or 48)
         if interval_sec < 60:
             interval_sec = 60
+        apg_create_ahead_hours = min(max(apg_create_ahead_hours, 1), 336)
         if not cfg:
             cfg = AppConfig(id=1)
         cfg.auto_enabled = auto_enabled
         cfg.interval_sec = interval_sec
+        cfg.apg_create_ahead_hours = apg_create_ahead_hours
         db.session.add(cfg); db.session.commit()
         # API also reschedules; but you can reschedule here if desired.
         return redirect(url_for("ui.settings_page"))

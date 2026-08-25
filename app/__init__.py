@@ -196,11 +196,16 @@ def create_app():
         def _tables_ready() -> bool:
             try:
                 insp = inspect(_db.engine)
-                return (
+                tables_exist = (
                     insp.has_table("app_config")
                     and insp.has_table("sync_runs")
                     and insp.has_table("sync_flight_logs")
                 )
+                if not tables_exist:
+                    return False
+                app_config_columns = {column["name"] for column in insp.get_columns("app_config")}
+                required_columns = {column.name for column in AppConfig.__table__.columns}
+                return required_columns.issubset(app_config_columns)
             except Exception:
                 return False
 
@@ -210,7 +215,7 @@ def create_app():
                 return None
             cfg = AppConfig.query.get(1)
             if not cfg:
-                cfg = AppConfig(id=1, auto_enabled=False, interval_sec=300)
+                cfg = AppConfig(id=1, auto_enabled=False, interval_sec=300, apg_create_ahead_hours=48)
                 _db.session.add(cfg); _db.session.commit()
             return cfg
 
@@ -238,7 +243,10 @@ def create_app():
                     run = SyncRun(started_at=datetime.utcnow(), run_type="auto", initiated_by="scheduler")
                     _db.session.add(run); _db.session.commit()
 
-                    res = run_sync_once_return_summary() or {}
+                    create_ahead_hours = min(max(int(cfg.apg_create_ahead_hours or 48), 1), 336)
+                    res = run_sync_once_return_summary(
+                        future_hours_override=create_ahead_hours,
+                    ) or {}
                     outcome = _normalise_sync_result(res)
 
                     for ev in (res.get("flights") or []):

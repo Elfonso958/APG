@@ -126,5 +126,6 @@ class AppConfig(db.Model):
     id = db.Column(db.Integer, primary_key=True, default=1)
     auto_enabled = db.Column(db.Boolean, default=False, nullable=False)
     interval_sec = db.Column(db.Integer, default=300, nullable=False)  # default 5 min
+    apg_create_ahead_hours = db.Column(db.Integer, default=48, nullable=False)
     last_auto_started = db.Column(db.DateTime, nullable=True)
     last_auto_finished = db.Column(db.DateTime, nullable=True)

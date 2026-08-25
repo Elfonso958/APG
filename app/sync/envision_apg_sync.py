@@ -134,7 +134,7 @@ APG_PASSWORD = os.getenv("APG_PASSWORD", "")           # API user password (from
 
 # Sync window
 WINDOW_PAST_HOURS = int(os.getenv("WINDOW_PAST_HOURS", "24"))
-WINDOW_FUTURE_HOURS = int(os.getenv("WINDOW_FUTURE_HOURS", "72"))
+WINDOW_FUTURE_HOURS = int(os.getenv("WINDOW_FUTURE_HOURS", "48"))
 
 # Envision pagination
 ENVISION_PAGE_LIMIT = int(os.getenv("ENVISION_PAGE_LIMIT", "100"))
@@ -1990,6 +1990,7 @@ def envision_to_apg_plan(f: Dict[str, Any], aircraft_id: Optional[int], pic_name
 def main(
     date_from_utc: Optional[Union[str, datetime]] = None,
     date_to_utc: Optional[Union[str, datetime]] = None,
+    future_hours_override: Optional[int] = None,
 ):
     """
     One sync pass: Envision â†’ APG.
@@ -2042,7 +2043,8 @@ def main(
         local_tz = _get_local_tz()
         now_local = datetime.now(local_tz)
         date_from_local = now_local - timedelta(hours=WINDOW_PAST_HOURS)
-        date_to_local   = now_local + timedelta(hours=WINDOW_FUTURE_HOURS)
+        future_hours = WINDOW_FUTURE_HOURS if future_hours_override is None else min(max(int(future_hours_override), 1), 336)
+        date_to_local   = now_local + timedelta(hours=future_hours)
         return (now_local, date_from_local, date_to_local,
                 date_from_local.astimezone(timezone.utc),
                 date_to_local.astimezone(timezone.utc))
@@ -3130,6 +3132,7 @@ def build_existing_plan_keyset(bearer: str,
 def run_sync_once_return_summary(
     date_from_utc: Optional[Union[str, datetime]] = None,
     date_to_utc: Optional[Union[str, datetime]] = None,
+    future_hours_override: Optional[int] = None,
 ) -> dict:
     """
     Calls main() and returns a simple summary dict for the GUI/history.
@@ -3152,7 +3155,8 @@ def run_sync_once_return_summary(
             local_tz = _get_local_tz()
             now_local = datetime.now(local_tz)
             window_from_local = now_local - timedelta(hours=WINDOW_PAST_HOURS)
-            window_to_local   = now_local + timedelta(hours=WINDOW_FUTURE_HOURS)
+            future_hours = WINDOW_FUTURE_HOURS if future_hours_override is None else min(max(int(future_hours_override), 1), 336)
+            window_to_local   = now_local + timedelta(hours=future_hours)
             window_from_utc = window_from_local.astimezone(timezone.utc)
             window_to_utc   = window_to_local.astimezone(timezone.utc)
     except Exception:
@@ -3166,7 +3170,11 @@ def run_sync_once_return_summary(
         root = logging.getLogger()
         root.addHandler(handler)
         try:
-            summary = main(date_from_utc=date_from_utc, date_to_utc=date_to_utc)
+            summary = main(
+                date_from_utc=date_from_utc,
+                date_to_utc=date_to_utc,
+                future_hours_override=future_hours_override,
+            )
         finally:
             root.removeHandler(handler)
 
