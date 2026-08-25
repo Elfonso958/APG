@@ -4074,8 +4074,15 @@ def api_envision_flight_crew():
         return jsonify(ok=False, error="Missing flight_id"), 400
 
     debug = request.args.get("debug") == "1"
+    compact = request.args.get("compact") == "1"
     try:
-        crew = fetch_envision_crew_for_apg(flight_id)
+        # Crew briefing only needs assigned crew. Skipping the available-employee
+        # lists avoids an additional Envision request for every position on every
+        # flight while preserving the crew data displayed on the briefing page.
+        crew = fetch_envision_crew_for_apg(
+            flight_id,
+            include_available_employees=not compact,
+        )
         payload = {"ok": True, "crew": crew}
         if debug:
             # Lightweight diagnostics: count + raw response from Envision

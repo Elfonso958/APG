@@ -1575,22 +1575,30 @@ def api_dcs_gantt_data():
                 current_app.logger.exception("api_dcs_gantt_data: Envision auth failed for delays")
                 return jsonify({"ok": False, "error": f"Envision auth failed: {e}", "results": []}), 502
         try:
+            delay_rows = [r for r in rows if r.get("envision_flight_id")]
             for r in rows:
-                fid = r.get("envision_flight_id")
-                if not fid:
-                    r["delays"] = []
-                    continue
+                r["delays"] = []
 
-                try:
-                    delays = envision_get_delays(token, int(fid))
-                except Exception as e:
-                    current_app.logger.warning(
-                        "api_dcs_gantt_data: failed to load delays for flight %s: %s",
-                        fid, e
-                    )
-                    delays = []
-
-                r["delays"] = delays or []
+            max_workers = min(
+                len(delay_rows),
+                max(1, int(current_app.config.get("ENVISION_DELAY_MAX_WORKERS", 8))),
+            )
+            if delay_rows:
+                with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                    future_map = {
+                        ex.submit(envision_get_delays, token, int(r["envision_flight_id"])): r
+                        for r in delay_rows
+                    }
+                    for fut in as_completed(future_map):
+                        row = future_map[fut]
+                        fid = row.get("envision_flight_id")
+                        try:
+                            row["delays"] = fut.result() or []
+                        except Exception as e:
+                            current_app.logger.warning(
+                                "api_dcs_gantt_data: failed to load delays for flight %s: %s",
+                                fid, e
+                            )
         except Exception as e:
             current_app.logger.warning(
                 "api_dcs_gantt_data: top-level delay fetch error: %s", e

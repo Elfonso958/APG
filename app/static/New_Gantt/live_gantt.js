@@ -2782,7 +2782,8 @@
   async function fetchEnvisionCrew(envisionFlightId) {
     if (!envisionFlightId || !envisionCrewUrl) return null;
     try {
-      const resp = await fetch(`${envisionCrewUrl}?flight_id=${encodeURIComponent(envisionFlightId)}`, {
+      const compact = isBriefingView ? "&compact=1" : "";
+      const resp = await fetch(`${envisionCrewUrl}?flight_id=${encodeURIComponent(envisionFlightId)}${compact}`, {
         headers: { Accept: "application/json" },
       });
       const data = await resp.json();
@@ -3839,8 +3840,9 @@
     if (!silent) setCrewSearchLoading(true);
     try {
       const pending = flights.filter((f) => !f.crewLoaded && f.envision_flight_id);
-      for (let offset = 0; offset < pending.length; offset += 6) {
-        await Promise.all(pending.slice(offset, offset + 6).map(async (f) => {
+      const crewFetchConcurrency = 12;
+      for (let offset = 0; offset < pending.length; offset += crewFetchConcurrency) {
+        await Promise.all(pending.slice(offset, offset + crewFetchConcurrency).map(async (f) => {
           const crew = await fetchEnvisionCrew(f.envision_flight_id);
           f.crewLoaded = crew !== null;
           f.crew = crew || [];
