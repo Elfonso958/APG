@@ -2976,6 +2976,11 @@
     const mac = Number(apgTrim.mac);
     const forwardArm = Number(apgTrim.scale_forward_arm);
     const aftArm = Number(apgTrim.scale_aft_arm);
+    const envelope = saabOperationalTrimEnvelope(f, apgTrim)
+      || longitudinalEnvelopeAtMass(apgTrim.envelope_points, mass);
+    const withinEnvelope = envelope.available
+      ? Boolean(envelope.massInRange && cgArm >= envelope.forwardArm && cgArm <= envelope.aftArm)
+      : null;
     return {
       ...apgTrim,
       mass,
@@ -2983,8 +2988,88 @@
       cg_arm: cgArm,
       percent_mac: Number.isFinite(lemac) && mac > 0 ? ((cgArm - lemac) / mac) * 100 : apgTrim.percent_mac,
       position_percent: aftArm > forwardArm ? Math.max(0, Math.min(100, ((cgArm - forwardArm) / (aftArm - forwardArm)) * 100)) : 50,
+      envelope,
+      within_envelope: withinEnvelope,
       projected: true,
     };
+  }
+
+  function longitudinalEnvelopeAtMass(rawPoints, mass) {
+    const points = (Array.isArray(rawPoints) ? rawPoints : []).map((point) => ({
+      mass: Number(point?.mass), arm: Number(point?.arm),
+    })).filter((point) => Number.isFinite(point.mass) && Number.isFinite(point.arm));
+    if (points.length < 3 || !Number.isFinite(mass)) return { available: false };
+    const masses = points.map((point) => point.mass);
+    const minMass = Math.min(...masses);
+    const maxMass = Math.max(...masses);
+    const intersections = [];
+    points.forEach((a, index) => {
+      const b = points[(index + 1) % points.length];
+      if (a.mass === b.mass) {
+        if (Math.abs(mass - a.mass) < 0.001) intersections.push(a.arm, b.arm);
+        return;
+      }
+      if (mass < Math.min(a.mass, b.mass) || mass > Math.max(a.mass, b.mass)) return;
+      const ratio = (mass - a.mass) / (b.mass - a.mass);
+      intersections.push(a.arm + ratio * (b.arm - a.arm));
+    });
+    const overallForwardArm = Math.min(...points.map((point) => point.arm));
+    const overallAftArm = Math.max(...points.map((point) => point.arm));
+    if (intersections.length < 2) return {
+      available: true, massInRange: false, minMass, maxMass, overallForwardArm, overallAftArm,
+    };
+    return {
+      available: true, massInRange: mass >= minMass && mass <= maxMass,
+      minMass, maxMass, forwardArm: Math.min(...intersections), aftArm: Math.max(...intersections),
+      overallForwardArm, overallAftArm,
+    };
+  }
+
+  function saabOperationalTrimEnvelope(f, trim) {
+    const reg = String(f?.reg || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const type = String(f?.aircraft_type || "").toUpperCase();
+    const isSaab = type.includes("SAAB") || type.includes("SF3") || reg.startsWith("ZKCI") || reg.startsWith("ZKKR");
+    if (!isSaab) return null;
+    const is340B = reg === "ZKCIZ" || type.includes("340B");
+    const forwardPercent = is340B ? 15.82592593 : 17.38719646;
+    const landingForwardPercent = is340B ? 14.81759259 : 16.34048775;
+    const aftPercent = is340B ? 37.4 : 33.52538774;
+    const lemac = Number(trim?.lemac);
+    const mac = Number(trim?.mac);
+    if (!Number.isFinite(lemac) || !Number.isFinite(mac) || mac <= 0) return null;
+    return {
+      available: true,
+      massInRange: true,
+      forwardArm: lemac + (forwardPercent / 100) * mac,
+      aftArm: lemac + (aftPercent / 100) * mac,
+      overallForwardArm: lemac + (landingForwardPercent / 100) * mac,
+      overallAftArm: lemac + (aftPercent / 100) * mac,
+      forwardPercent,
+      landingForwardPercent,
+      aftPercent,
+      source: is340B ? "SF340B" : "SF340A",
+    };
+  }
+
+  function trimDisplayState(trim) {
+    const envelope = trim?.envelope || {};
+    if (!envelope.available) return { key: "unknown", label: "Envelope unavailable", detail: "Confirm trim in APG." };
+    if (!envelope.massInRange) return {
+      key: "outside", label: "Outside trim envelope",
+      detail: `Loaded mass is outside the APG envelope range ${Number(envelope.minMass).toFixed(0)}-${Number(envelope.maxMass).toFixed(0)} kg.`,
+    };
+    const cg = Number(trim.cg_arm);
+    const forward = Number(envelope.forwardArm);
+    const aft = Number(envelope.aftArm);
+    if (cg < forward) return { key: "outside", label: "Outside trim - nose heavy", detail: `${(forward - cg).toFixed(1)} cm forward of the limit.` };
+    if (cg > aft) return { key: "outside", label: "Outside trim - tail heavy", detail: `${(cg - aft).toFixed(1)} cm aft of the limit.` };
+    const nearest = Math.min(cg - forward, aft - cg);
+    const span = Math.max(0.1, aft - forward);
+    const rangeLabel = envelope.source
+      ? `${envelope.source} ${Number(envelope.forwardPercent).toFixed(1)}-${Number(envelope.aftPercent).toFixed(1)}% MAC. `
+      : "";
+    if (nearest / span <= 0.1) return { key: "near", label: "Near trim limit", detail: `${rangeLabel}${nearest.toFixed(1)} cm to the nearest limit.` };
+    return { key: "within", label: "Within trim envelope", detail: `${rangeLabel}${nearest.toFixed(1)} cm to the nearest limit.` };
   }
 
   function renderCargoWeightsSummary(f) {
@@ -3026,18 +3111,32 @@
     const overallState = summarizeWeightBalance(computed);
     const detailsOpen = Boolean(f.apgCargoWeightDetailsOpen);
     const trim = projectedLoadedTrim(f, summary.loaded_trim || null);
+    const trimState = trim?.available ? trimDisplayState(trim) : null;
+    const trimEnvelope = trim?.envelope || {};
+    const trimScaleMin = trimEnvelope.available
+      ? Math.min(Number(trimEnvelope.forwardArm ?? trimEnvelope.overallForwardArm), Number(trim.cg_arm))
+      : Number(trim?.scale_forward_arm);
+    const trimScaleMax = trimEnvelope.available
+      ? Math.max(Number(trimEnvelope.aftArm ?? trimEnvelope.overallAftArm), Number(trim.cg_arm))
+      : Number(trim?.scale_aft_arm);
+    const trimScaleSpan = Math.max(0.1, trimScaleMax - trimScaleMin);
+    const trimMarkerPosition = ((Number(trim?.cg_arm) - trimScaleMin) / trimScaleSpan) * 100;
+    const trimForwardPosition = trimEnvelope.forwardArm !== undefined ? ((Number(trimEnvelope.forwardArm) - trimScaleMin) / trimScaleSpan) * 100 : 0;
+    const trimAftPosition = trimEnvelope.aftArm !== undefined ? ((Number(trimEnvelope.aftArm) - trimScaleMin) / trimScaleSpan) * 100 : 100;
     const trimHtml = trim?.available ? `
-      <section class="cargo-trim-card" aria-label="Loaded aircraft trim">
+      <section class="cargo-trim-card trim-${trimState.key}" aria-label="Loaded aircraft trim">
         <div class="cargo-trim-heading">
           <div><strong>Loaded Trim</strong><span>Live calculation from the weights entered below and APG station arms</span></div>
           <div class="cargo-trim-value">${Number(trim.percent_mac).toFixed(1)}% MAC</div>
         </div>
+        <div class="cargo-trim-status"><strong>${escapeHtml(trimState.label)}</strong><span>${escapeHtml(trimState.detail)}</span></div>
         <div class="cargo-trim-scale">
-          <span class="cargo-trim-centre" aria-hidden="true"></span>
-          <span class="cargo-trim-marker" style="left:${Math.max(0, Math.min(100, Number(trim.position_percent) || 0)).toFixed(1)}%" title="Current loaded CG"></span>
+          <span class="cargo-trim-valid-range" style="left:${Math.max(0, trimForwardPosition).toFixed(1)}%;right:${Math.max(0, 100 - trimAftPosition).toFixed(1)}%" aria-hidden="true"></span>
+          <span class="cargo-trim-marker" style="left:${Math.max(0, Math.min(100, trimMarkerPosition)).toFixed(1)}%" title="Current loaded CG"></span>
         </div>
         <div class="cargo-trim-labels"><span>Nose</span><strong>CG arm ${Number(trim.cg_arm).toFixed(1)} ${escapeHtml(summary.units?.length || "cm")}</strong><span>Tail</span></div>
         <div class="cargo-trim-meta">Loaded mass ${Number(trim.mass).toFixed(0)} ${massUnit} · Moment ${Number(trim.moment).toFixed(0)} ${massUnit}·${escapeHtml(summary.units?.length || "cm")}</div>
+        <div class="cargo-trim-advisory">Loader guidance only — the operational weight and balance check must be completed in APG.</div>
       </section>
     ` : `<div class="cargo-trim-unavailable">Trim unavailable: ${escapeHtml(trim?.reason || "APG aircraft station arms are unavailable")}</div>`;
     cargoWeightsSummary.innerHTML = `

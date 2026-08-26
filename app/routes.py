@@ -2569,6 +2569,45 @@ def api_apg_plan_get(plan_id: int):
 
     return jsonify({"ok": True, "plan_id": plan_id, "plan": plan})
 
+def _longitudinal_envelope_limits(points: list[dict], mass: float) -> dict:
+    """Intersect an APG mass/arm envelope polygon at the requested mass."""
+    parsed = []
+    for point in points or []:
+        try:
+            parsed.append((float(point.get("mass")), float(point.get("arm"))))
+        except (AttributeError, TypeError, ValueError):
+            continue
+    if len(parsed) < 3:
+        return {"available": False}
+    masses = [item[0] for item in parsed]
+    min_mass, max_mass = min(masses), max(masses)
+    intersections = []
+    for idx, (mass_a, arm_a) in enumerate(parsed):
+        mass_b, arm_b = parsed[(idx + 1) % len(parsed)]
+        if mass_a == mass_b:
+            if abs(mass - mass_a) < 0.001:
+                intersections.extend([arm_a, arm_b])
+            continue
+        if mass < min(mass_a, mass_b) or mass > max(mass_a, mass_b):
+            continue
+        ratio = (mass - mass_a) / (mass_b - mass_a)
+        intersections.append(arm_a + ratio * (arm_b - arm_a))
+    if len(intersections) < 2:
+        return {
+            "available": True, "mass_in_range": False,
+            "min_mass": min_mass, "max_mass": max_mass,
+            "overall_forward_arm": min(item[1] for item in parsed),
+            "overall_aft_arm": max(item[1] for item in parsed),
+        }
+    return {
+        "available": True, "mass_in_range": min_mass <= mass <= max_mass,
+        "min_mass": min_mass, "max_mass": max_mass,
+        "forward_arm": min(intersections), "aft_arm": max(intersections),
+        "overall_forward_arm": min(item[1] for item in parsed),
+        "overall_aft_arm": max(item[1] for item in parsed),
+    }
+
+
 def _calculate_apg_loaded_trim(plan: dict, aircraft_mb: dict) -> dict:
     """Calculate loaded/ZFW longitudinal CG from APG station arms and loading masses."""
     stations = aircraft_mb.get("stations") or []
@@ -2621,6 +2660,15 @@ def _calculate_apg_loaded_trim(plan: dict, aircraft_mb: dict) -> dict:
 
     cg_arm = total_moment / total_mass
     percent_mac = ((cg_arm - lemac) / mac_length) * 100.0
+    envelope_points = ((aircraft_mb.get("envelope") or {}).get("longitudinal") or [])
+    envelope = _longitudinal_envelope_limits(envelope_points, total_mass)
+    forward_limit = envelope.get("forward_arm")
+    aft_limit = envelope.get("aft_arm")
+    within_envelope = bool(
+        envelope.get("mass_in_range")
+        and forward_limit is not None and aft_limit is not None
+        and forward_limit <= cg_arm <= aft_limit
+    ) if envelope.get("available") else None
     arm_values = list(station_arms.values())
     if bem_arm is not None:
         arm_values.append(bem_arm)
@@ -2629,8 +2677,9 @@ def _calculate_apg_loaded_trim(plan: dict, aircraft_mb: dict) -> dict:
     position = ((cg_arm - forward_arm) / (aft_arm - forward_arm)) * 100.0 if aft_arm > forward_arm else 50.0
     return {
         "available": True, "mass": total_mass, "moment": total_moment,
-        "cg_arm": cg_arm, "percent_mac": percent_mac, "within_envelope": None,
+        "cg_arm": cg_arm, "percent_mac": percent_mac, "within_envelope": within_envelope,
         "lemac": lemac, "mac": mac_length, "station_loads": station_loads,
+        "envelope_points": envelope_points, "envelope": envelope,
         "scale_forward_arm": forward_arm, "scale_aft_arm": aft_arm,
         "position_percent": max(0.0, min(100.0, position)),
         "missing_stations": sorted(set(missing_stations)),
