@@ -2526,13 +2526,9 @@
     const atrRows = Array.isArray(f.apgAtrRowFreightAllocations) ? f.apgAtrRowFreightAllocations : [];
     const isFullFreighter = isFullFreighterFlight(f);
     normalizeAtrRowFreightForOccupancy(f);
-    const showAtrRows = !isFullFreighter && isAtrRowFreightFlight(f) && atrRows.length > 0;
-    if (isFullFreighter) {
-      f.apgCargoEditorTab = "freight";
-    } else if (!f.apgCargoEditorTab || (f.apgCargoEditorTab === "rowFreight" && !showAtrRows)) {
-      f.apgCargoEditorTab = rows.length ? "holds" : showAtrRows ? "rowFreight" : "freight";
-    }
-    const activeTab = f.apgCargoEditorTab;
+    const showAtrRows = false;
+    f.apgCargoEditorTab = "freight";
+    const activeTab = "freight";
     const totals = cargoTotalsForFlight(f);
     const renderHoldPanel = () => rows.length ? `
       <div class="cargo-hold-grid">
@@ -2722,15 +2718,9 @@
           </div>
           </div>
           <div class="cargo-editor-tabs" role="tablist" aria-label="Cargo allocation mode">
-            ${isFullFreighter ? "" : `<button type="button" class="cargo-editor-tab ${activeTab === "holds" ? "is-active" : ""}" data-cargo-tab="holds">Holds</button>`}
-            ${showAtrRows ? `<button type="button" class="cargo-editor-tab ${activeTab === "rowFreight" ? "is-active" : ""}" data-cargo-tab="rowFreight">Row Freight</button>` : ""}
-            <button type="button" class="cargo-editor-tab ${activeTab === "freight" ? "is-active" : ""}" data-cargo-tab="freight">Freight</button>
+            <button type="button" class="cargo-editor-tab is-active" data-cargo-tab="freight">Freight</button>
           </div>
-        ${isFullFreighter ? "" : `<div class="cargo-editor-panel" data-cargo-panel="holds" ${activeTab === "holds" ? "" : "hidden"}>${renderHoldPanel()}</div>`}
-        <div class="cargo-editor-panel" data-cargo-panel="rowFreight" ${activeTab === "rowFreight" ? "" : "hidden"}>
-          ${renderRowFreightPanel()}
-        </div>
-        <div class="cargo-editor-panel" data-cargo-panel="freight" ${activeTab === "freight" ? "" : "hidden"}>
+        <div class="cargo-editor-panel" data-cargo-panel="freight">
           ${renderFreightPanel()}
         </div>
         <div class="cargo-summary-strip">
@@ -2954,12 +2944,28 @@
     ` : "";
     const overallState = summarizeWeightBalance(computed);
     const detailsOpen = Boolean(f.apgCargoWeightDetailsOpen);
+    const trim = summary.loaded_trim || null;
+    const trimHtml = trim?.available ? `
+      <section class="cargo-trim-card" aria-label="Loaded aircraft trim">
+        <div class="cargo-trim-heading">
+          <div><strong>Loaded Trim</strong><span>Calculated locally from APG station weights and arms</span></div>
+          <div class="cargo-trim-value">${Number(trim.percent_mac).toFixed(1)}% MAC</div>
+        </div>
+        <div class="cargo-trim-scale">
+          <span class="cargo-trim-centre" aria-hidden="true"></span>
+          <span class="cargo-trim-marker" style="left:${Math.max(0, Math.min(100, Number(trim.position_percent) || 0)).toFixed(1)}%" title="Current loaded CG"></span>
+        </div>
+        <div class="cargo-trim-labels"><span>Nose</span><strong>CG arm ${Number(trim.cg_arm).toFixed(1)} ${escapeHtml(summary.units?.length || "cm")}</strong><span>Tail</span></div>
+        <div class="cargo-trim-meta">Loaded mass ${Number(trim.mass).toFixed(0)} ${massUnit} · Moment ${Number(trim.moment).toFixed(0)} ${massUnit}·${escapeHtml(summary.units?.length || "cm")}</div>
+      </section>
+    ` : `<div class="cargo-trim-unavailable">Trim unavailable: ${escapeHtml(trim?.reason || "APG aircraft station arms are unavailable")}</div>`;
     cargoWeightsSummary.innerHTML = `
       <div class="cargo-safety-banner ${overallState.cls}">
         <div class="cargo-safety-title">${overallState.title}</div>
         <div class="cargo-safety-text">${overallState.text}</div>
         <div class="cargo-safety-focus">${overallState.subtext}</div>
       </div>
+      ${trimHtml}
       <details class="cargo-weight-accordion" ${detailsOpen ? "open" : ""}>
         <summary>
           <span>Weight and estimate details</span>

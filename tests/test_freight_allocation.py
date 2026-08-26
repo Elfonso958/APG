@@ -5,7 +5,7 @@ from unittest.mock import patch
 from app import create_app, db
 from app.config import Config
 from app.models import AppConfig, FlightFreightAllocation, FlightCargoAllocation
-from app.routes import _seat_bag_front_conflicts
+from app.routes import _seat_bag_front_conflicts, _calculate_apg_loaded_trim
 from app.sync.envision_apg_sync import update_apg_plan_from_dcs_row
 
 
@@ -94,6 +94,25 @@ class FreightAllocationTest(unittest.TestCase):
     def test_front_conflict_only_checks_same_columns_immediate_row(self):
         occupied = {"9C", "9D", "9A", "8C"}
         self.assertEqual(_seat_bag_front_conflicts(["10C", "10D"], occupied), ["9C", "9D"])
+
+    def test_loaded_trim_uses_apg_station_arms(self):
+        plan = {"massAndBalance": {"loading": [
+            {"label": "BEW", "customLoad": {"mass": 1000}},
+            {"label": "Cargo 1", "customLoad": {"mass": 100}},
+        ]}}
+        aircraft_mb = {
+            "bem": {"label": "BEW", "arm": {"lon": 100}},
+            "mac": {"lemac": 100, "mac": 100},
+            "stations": [
+                {"label": "Forward", "arm": {"lon": 50}},
+                {"label": "Cargo 1", "arm": {"lon": 200}},
+            ],
+        }
+        trim = _calculate_apg_loaded_trim(plan, aircraft_mb)
+        self.assertTrue(trim["available"])
+        self.assertAlmostEqual(trim["cg_arm"], 109.0909, places=3)
+        self.assertAlmostEqual(trim["percent_mac"], 9.0909, places=3)
+        self.assertAlmostEqual(trim["position_percent"], 39.3939, places=3)
 
     @patch("app.sync.envision_apg_sync.apg_plan_get")
     def test_apg_individual_seats_receive_split_weight(self, plan_get):

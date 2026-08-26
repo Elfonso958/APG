@@ -2569,6 +2569,71 @@ def api_apg_plan_get(plan_id: int):
 
     return jsonify({"ok": True, "plan_id": plan_id, "plan": plan})
 
+def _calculate_apg_loaded_trim(plan: dict, aircraft_mb: dict) -> dict:
+    """Calculate loaded/ZFW longitudinal CG from APG station arms and loading masses."""
+    stations = aircraft_mb.get("stations") or []
+    station_arms = {}
+    for station in stations:
+        label = str(station.get("label") or "").strip().casefold()
+        try:
+            arm = float(((station.get("arm") or {}).get("lon")))
+        except (TypeError, ValueError):
+            continue
+        if label:
+            station_arms[label] = arm
+    bem = aircraft_mb.get("bem") or {}
+    try:
+        bem_arm = float(((bem.get("arm") or {}).get("lon")))
+    except (TypeError, ValueError):
+        bem_arm = None
+    mac_data = aircraft_mb.get("mac") or {}
+    try:
+        lemac = float(mac_data.get("lemac"))
+        mac_length = float(mac_data.get("mac"))
+    except (TypeError, ValueError):
+        return {"available": False, "reason": "APG aircraft MAC data is unavailable"}
+    if mac_length <= 0:
+        return {"available": False, "reason": "APG aircraft MAC length is invalid"}
+
+    total_mass = 0.0
+    total_moment = 0.0
+    missing_stations = []
+    loading = ((plan.get("massAndBalance") or {}).get("loading") or [])
+    for load in loading:
+        label = str(load.get("label") or "").strip()
+        try:
+            mass = float(((load.get("customLoad") or {}).get("mass")) or 0)
+        except (TypeError, ValueError):
+            continue
+        if mass <= 0:
+            continue
+        key = label.casefold()
+        arm = bem_arm if key in {"bew", "bem", str(bem.get("label") or "").strip().casefold()} else station_arms.get(key)
+        if arm is None:
+            missing_stations.append(label)
+            continue
+        total_mass += mass
+        total_moment += mass * arm
+    if total_mass <= 0:
+        return {"available": False, "reason": "No APG loading mass with station arms was found"}
+
+    cg_arm = total_moment / total_mass
+    percent_mac = ((cg_arm - lemac) / mac_length) * 100.0
+    arm_values = list(station_arms.values())
+    if bem_arm is not None:
+        arm_values.append(bem_arm)
+    forward_arm = min(arm_values) if arm_values else cg_arm
+    aft_arm = max(arm_values) if arm_values else cg_arm
+    position = ((cg_arm - forward_arm) / (aft_arm - forward_arm)) * 100.0 if aft_arm > forward_arm else 50.0
+    return {
+        "available": True, "mass": total_mass, "moment": total_moment,
+        "cg_arm": cg_arm, "percent_mac": percent_mac, "within_envelope": None,
+        "scale_forward_arm": forward_arm, "scale_aft_arm": aft_arm,
+        "position_percent": max(0.0, min(100.0, position)),
+        "missing_stations": sorted(set(missing_stations)),
+    }
+
+
 @api_bp.get("/apg/plan/<int:plan_id>/cargo_summary")
 def api_apg_plan_cargo_summary(plan_id: int):
     def to_float(value, default=0.0):
@@ -2799,13 +2864,7 @@ def api_apg_plan_cargo_summary(plan_id: int):
     )
     aircraft_data = {}
     aircraft_error = None
-    need_aircraft_fallback = (
-        not to_float(limits.get("mzfm"))
-        or not to_float(limits.get("mtom"))
-        or not to_float(limits.get("mldgm"))
-        or not to_float(bem.get("mass"))
-    )
-    if need_aircraft_fallback and aircraft_id not in (None, ""):
+    if aircraft_id not in (None, ""):
         try:
             aircraft_data = apg_aircraft_get(bearer, int(aircraft_id))
         except Exception as e:
@@ -2817,6 +2876,7 @@ def api_apg_plan_cargo_summary(plan_id: int):
         or aircraft_data.get("mb")
         or {}
     )
+    loaded_trim = _calculate_apg_loaded_trim(plan, aircraft_mb) if aircraft_mb else {"available": False, "reason": aircraft_error or "APG aircraft mass-and-balance data is unavailable"}
     if not limits:
         limits = aircraft_mb.get("limits") or {}
     else:
@@ -2917,6 +2977,7 @@ def api_apg_plan_cargo_summary(plan_id: int):
             "length": units.get("length") or "",
         },
         "cargo_stations": cargo_stations,
+        "loaded_trim": loaded_trim,
         "weights": {
             "dow": {
                 "code": "DOW",
