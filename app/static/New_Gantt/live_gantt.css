@@ -1191,13 +1191,27 @@ body {
 .freight-seat.selected { outline: 3px solid var(--accent); outline-offset: 1px; background: color-mix(in srgb, var(--accent) 22%, white); }
 .freight-seat:disabled { cursor: not-allowed; opacity: .58; }
 .freight-convert-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; }
-.freight-seatbag { width: 154px; min-height: 128px; margin: 3px 0; padding: 9px; border: 2px solid var(--accent); border-radius: 12px; background: color-mix(in srgb, var(--accent) 12%, var(--panel)); box-shadow: 0 5px 16px rgba(15, 23, 42, .16); position: relative; z-index: 2; }
-.freight-seatbag-title { margin-bottom: 7px; color: var(--accent); font-size: .72rem; font-weight: 800; text-align: center; }
-.freight-seatbag label { display: grid; gap: 3px; font-size: .68rem; font-weight: 700; }
-.freight-seatbag input { width: 100%; min-height: 34px; border: 1px solid var(--line); border-radius: 7px; padding: 5px 7px; background: var(--panel); color: var(--text); font: inherit; }
-.freight-seatbag-result { margin-top: 6px; color: var(--muted); font-size: .62rem; line-height: 1.35; }
-.freight-seatbag-actions { display: flex; gap: 5px; margin-top: 7px; }
-.freight-seatbag-actions .btn { min-height: 28px; padding: 4px 8px; font-size: .65rem; }
+.freight-seatbag { width: 68px; height: 32px; min-width: 68px; min-height: 32px; padding: 2px 4px; border: 2px solid var(--accent); border-radius: 6px; background: color-mix(in srgb, var(--accent) 16%, var(--panel)); color: var(--text); display: grid; place-content: center; text-align: center; cursor: pointer; line-height: 1.05; }
+.freight-seatbag span { color: var(--accent); font-size: .48rem; font-weight: 800; }
+.freight-seatbag strong { font-size: .61rem; white-space: nowrap; }
+.freight-seatbag.has-conflict { border-color: #dc2626; background: color-mix(in srgb, #dc2626 18%, var(--panel)); box-shadow: 0 0 0 2px color-mix(in srgb, #dc2626 20%, transparent); }
+.freight-seatbag.has-conflict span, .freight-seatbag.has-conflict strong { color: #b91c1c; }
+.seatbag-weight-body { display: grid; gap: 14px; }
+.seatbag-conflict-warning { padding: 10px 12px; border: 1px solid #dc2626; border-radius: 9px; background: color-mix(in srgb, #dc2626 10%, var(--panel)); color: #b91c1c; font-size: .78rem; font-weight: 800; }
+.freight-calculation { min-height: 42px; display: flex; align-items: center; padding: 10px 12px; border-radius: 10px; background: var(--panel-soft); color: var(--text-muted); font-weight: 700; }
+.freight-map-jump { display: grid; justify-items: center; gap: 3px; margin: 0 0 8px; padding-bottom: 8px; border-bottom: 1px dashed var(--line); color: var(--muted); font-size: .65rem; }
+.freight-hold-deck { width: 100%; display: grid; grid-template-columns: 1fr 52px 1fr; gap: 7px; align-items: start; padding: 9px 0; border-bottom: 1px dashed var(--line); }
+.freight-hold-deck-aft { margin-top: 7px; border-top: 1px dashed var(--line); border-bottom: 0; }
+.freight-hold-side, .freight-hold-centre { display: grid; gap: 6px; }
+.freight-hold-centre { grid-column: 2; }
+.freight-hold-side:last-child { grid-column: 3; }
+.freight-map-hold { min-width: 96px; display: grid; gap: 3px; padding: 7px; border: 2px solid #64748b; border-radius: 9px; background: color-mix(in srgb, #64748b 12%, var(--panel)); }
+.freight-map-hold strong { color: var(--text); font-size: .68rem; overflow-wrap: anywhere; }
+.freight-map-hold span, .freight-map-hold small { color: var(--muted); font-size: .58rem; }
+.freight-map-hold input { width: 100%; min-height: 31px; border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; background: var(--panel); color: var(--text); font: inherit; }
+.freight-saab-hold { width: min(100%, 230px); display: grid; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line); }
+.freight-saab-hold > span { color: var(--muted); font-size: .66rem; font-weight: 800; text-align: center; }
+.freight-saab-hold .freight-map-hold { width: 100%; }
 @media (max-width: 760px) { .freight-convert-bar { align-items: stretch; flex-direction: column; } }
 .cargo-hold-card {
   border: 1px solid var(--line);

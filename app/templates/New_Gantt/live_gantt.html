@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='New_Gantt/live_gantt.css') }}?v=freight-2">
+  <link rel="stylesheet" href="{{ url_for('static', filename='New_Gantt/live_gantt.css') }}?v=seatbag-modal-1">
 </head>
 <body data-theme="light" class="view-{{ page_view or 'gantt' }}">
   <div id="new-gantt-app"
@@ -338,6 +338,28 @@
     </form>
   </dialog>
 
+  <dialog id="seatBagWeightDialog" class="flight-edit-dialog">
+    <form method="dialog" class="flight-edit-shell">
+      <header>
+        <h3 id="seatBagWeightTitle">Seat Bag Weight</h3>
+        <button class="btn btn-ghost" value="cancel">Close</button>
+      </header>
+      <div class="status-body seatbag-weight-body">
+        <div id="seatBagWeightSeats" class="card-sub"></div>
+        <div id="seatBagConflictWarning" class="seatbag-conflict-warning" hidden></div>
+        <label class="cargo-field">
+          <span>Freight weight (kg)</span>
+          <input id="seatBagFreightKg" class="form-control" type="number" min="0" step="0.1" value="0">
+        </label>
+        <div id="seatBagWeightCalculation" class="freight-calculation"></div>
+        <div class="dialog-actions">
+          <button id="removeSeatBag" class="btn btn-ghost" type="button">Remove Seat Bag</button>
+          <button id="saveSeatBagWeight" class="btn btn-primary" type="button">Save Weight</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="envPickerDialog" class="status-dialog">
     <form method="dialog" class="status-shell">
       <header>
@@ -607,6 +629,6 @@
     </form>
   </dialog>
 
-  <script src="{{ url_for('static', filename='New_Gantt/live_gantt.js') }}?v=freight-2"></script>
+  <script src="{{ url_for('static', filename='New_Gantt/live_gantt.js') }}?v=seatbag-modal-1"></script>
 </body>
 </html>
