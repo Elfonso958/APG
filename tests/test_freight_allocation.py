@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from app import create_app, db
 from app.config import Config
-from app.models import AppConfig, FlightFreightAllocation
+from app.models import AppConfig, FlightFreightAllocation, FlightCargoAllocation
 from app.routes import _seat_bag_front_conflicts
 from app.sync.envision_apg_sync import update_apg_plan_from_dcs_row
 
@@ -55,6 +55,33 @@ class FreightAllocationTest(unittest.TestCase):
         self.assertEqual(data["total_kg"], 164.0)
         self.assertEqual(data["allocations"][0]["per_seat_kg"], 28.5)
         self.assertEqual(data["allocations"][1]["per_seat_kg"], 53.5)
+
+    def test_cargo_weights_persist_and_reject_stale_update(self):
+        first = self.client.put("/api/dcs/cargo-allocation/123", json={
+            "expected_revision": 0,
+            "allocations": [{"label": "Cargo B1", "baggage_kg": 0, "freight_kg": 120}],
+            "atr_rows": [],
+        })
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.get_json()["revision"], 1)
+        saved = self.client.get("/api/dcs/cargo-allocation/123").get_json()
+        self.assertEqual(saved["allocations"][0]["freight_kg"], 120.0)
+        self.assertEqual(FlightCargoAllocation.query.filter_by(envision_flight_id="123").count(), 1)
+
+        stale = self.client.put("/api/dcs/cargo-allocation/123", json={
+            "expected_revision": 0,
+            "allocations": [{"label": "Cargo B1", "baggage_kg": 0, "freight_kg": 90}],
+            "atr_rows": [],
+        })
+        self.assertEqual(stale.status_code, 409)
+        self.assertTrue(stale.get_json()["stale"])
+
+    def test_seat_bag_revision_rejects_stale_update(self):
+        first = self.client.put("/api/dcs/freight/123", json={"seats": ["2A", "2B"], "freight_kg": 10, "aircraft_type": "ATR72", "expected_revision": 0})
+        self.assertEqual(first.status_code, 200)
+        stale = self.client.put("/api/dcs/freight/123", json={"seats": ["2A", "2B"], "freight_kg": 20, "aircraft_type": "ATR72", "expected_revision": 0})
+        self.assertEqual(stale.status_code, 409)
+        self.assertTrue(stale.get_json()["stale"])
 
     def test_rejects_seats_from_different_rows(self):
         response = self.client.put("/api/dcs/freight/123", json={"seats": ["2A", "10A"], "freight_kg": 100, "aircraft_type": "ATR72"})

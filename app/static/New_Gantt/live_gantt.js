@@ -253,6 +253,7 @@
   let briefingOfflineMode = false;
   let deferredInstallPrompt = null;
   let timer = null;
+  let cargoRevisionTimer = null;
   let selectedId = null;
   let selectedFlight = null;
   let seatBagWeightFlight = null;
@@ -272,10 +273,63 @@
   const apgCargoAllocationsCache = new Map();
   const apgAtrRowFreightCache = new Map();
   const freightUrlTemplate = app.dataset.freightUrlTemplate || "";
+  const cargoAllocationUrlTemplate = app.dataset.cargoAllocationUrlTemplate || "";
   const freightSettingsUrl = app.dataset.freightSettingsUrl || "";
 
   function freightUrl(f) {
     return freightUrlTemplate.replace("__FLIGHT__", encodeURIComponent(String(f?.envision_flight_id || "")));
+  }
+
+  function cargoAllocationUrl(f) {
+    return cargoAllocationUrlTemplate.replace("__FLIGHT__", encodeURIComponent(String(f?.envision_flight_id || "")));
+  }
+
+  function applyPersistedCargoAllocation(f, data) {
+    const savedHolds = new Map((data.allocations || []).map((row) => [String(row.label || ""), row]));
+    (f.apgCargoAllocations || []).forEach((row) => {
+      const saved = savedHolds.get(String(row.label || ""));
+      if (!saved) return;
+      row.baggage_kg = Number(saved.baggage_kg || 0);
+      row.freight_kg = Number(saved.freight_kg || 0);
+    });
+    const savedRows = new Map((data.atr_rows || []).map((row) => [String(row.label || ""), row]));
+    (f.apgAtrRowFreightAllocations || []).forEach((row) => {
+      const saved = savedRows.get(String(row.label || ""));
+      if (!saved) return;
+      row.left_freight_kg = Number(saved.left_freight_kg || 0);
+      row.right_freight_kg = Number(saved.right_freight_kg || 0);
+    });
+    f.cargoAllocationRevision = Number(data.revision || 0);
+    f.cargoAllocationStale = false;
+    cacheCargoAllocationsForFlight(f);
+  }
+
+  async function fetchPersistedCargoAllocation(f, { apply = false } = {}) {
+    if (!f?.envision_flight_id || !cargoAllocationUrlTemplate) return null;
+    const resp = await fetch(cargoAllocationUrl(f), { headers: { Accept: "application/json" } });
+    const data = await resp.json();
+    if (!resp.ok || data.ok === false) throw new Error(data.error || "Unable to load saved cargo weights");
+    if (apply) applyPersistedCargoAllocation(f, data);
+    return data;
+  }
+
+  async function persistCargoAllocation(f) {
+    if (!f?.envision_flight_id || !cargoAllocationUrlTemplate) return;
+    const body = {
+      expected_revision: Number(f.cargoAllocationRevision || 0),
+      allocations: (f.apgCargoAllocations || []).map((row) => ({ label: row.label, baggage_kg: Number(row.baggage_kg || 0), freight_kg: Number(row.freight_kg || 0) })),
+      atr_rows: (f.apgAtrRowFreightAllocations || []).map((row) => ({ label: row.label, left_freight_kg: Number(row.left_freight_kg || 0), right_freight_kg: Number(row.right_freight_kg || 0) })),
+    };
+    const resp = await fetch(cargoAllocationUrl(f), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const data = await resp.json();
+    if (resp.status === 409 || data.stale) {
+      f.cargoAllocationStale = true;
+      if (selectedFlight === f) renderCargoEditor(f);
+      throw new Error(data.error || "Cargo weights were updated on another device. Refresh before saving.");
+    }
+    if (!resp.ok || data.ok === false) throw new Error(data.error || "Unable to save cargo weights");
+    f.cargoAllocationRevision = Number(data.revision || 0);
+    f.cargoAllocationStale = false;
   }
 
   async function populateFreightAllocation(f, force = false) {
@@ -285,6 +339,30 @@
     if (!resp.ok || data.ok === false) throw new Error(data.error || "Unable to load freight allocation");
     f.freightAllocation = data;
     f.freightAllocationLoaded = true;
+  }
+
+  function setupCargoRevisionTimer() {
+    if (cargoRevisionTimer) clearInterval(cargoRevisionTimer);
+    cargoRevisionTimer = setInterval(async () => {
+      const f = selectedFlight;
+      if (!cargoDialog?.open || !f?.envision_flight_id || f.cargoAllocationStale) return;
+      try {
+        const [cargoData, freightResp] = await Promise.all([
+          fetchPersistedCargoAllocation(f),
+          fetch(freightUrl(f), { headers: { Accept: "application/json" } }),
+        ]);
+        const freightData = await freightResp.json();
+        if (!freightResp.ok || freightData.ok === false) return;
+        const cargoNewer = Number(cargoData?.revision || 0) > Number(f.cargoAllocationRevision || 0);
+        const freightNewer = Number(freightData.revision || 0) > Number(f.freightAllocation?.revision || 0);
+        if (cargoNewer || freightNewer) {
+          f.cargoAllocationStale = true;
+          renderCargoEditor(f);
+        }
+      } catch (err) {
+        console.warn("Cargo revision check failed", err);
+      }
+    }, 10000);
   }
   const apgCargoWeightSummaryCache = new Map();
   let showMaintenance = true;
@@ -2616,9 +2694,9 @@
       : `${saabZonesHtml}${holdsAt("aft-left")}${holdsAt("aft-center")}${holdsAt("aft-right")}`;
     const renderFreightPanel = () => cfg ? `
       <div class="freight-editor ${isFullFreighter ? "is-full-freighter" : ""} ${isSaabFreightMap ? "is-saab-map" : ""}" data-freight-editor>
-        <div class="cargo-editor-head">
+        <div class="cargo-editor-head freight-editor-head">
           <div><div class="card-title">${isFullFreighter ? "Freighter Cargo Zones" : "Seat-bag Freight"}</div><div class="card-sub">${isFullFreighter ? "This is a full freighter. Only the APG freight and cargo zones are shown." : "Select one or more adjacent seat pairs, convert them together, then click each seat bag to enter its weight."}</div></div>
-          ${isFullFreighter ? "" : '<button type="button" class="btn btn-ghost" data-freight-settings>Settings</button>'}
+          ${isFullFreighter ? "" : '<div class="freight-header-actions"><span data-freight-selection>Select one or more adjacent pairs.</span><button type="button" class="btn btn-ghost" data-freight-settings>Settings</button><button type="button" class="btn btn-primary" data-convert-freight disabled>Convert to Seat Bags</button></div>'}
         </div>
         <div class="freight-aircraft">
           <div class="freight-aircraft-nose" aria-hidden="true"></div>
@@ -2629,11 +2707,11 @@
           </div>
           <div class="freight-aircraft-tail" aria-hidden="true"></div>
         </div>
-        ${isFullFreighter ? "" : '<div class="freight-convert-bar"><span data-freight-selection>Select one or more adjacent pairs.</span><button type="button" class="btn btn-primary" data-convert-freight disabled>Convert Selected to Seat Bags</button></div>'}
       </div>
     ` : '<div class="muted">A freight seat map is not available for this aircraft type.</div>';
     host.innerHTML = `
       <div class="cargo-editor-shell">
+        ${f.cargoAllocationStale ? `<div class="cargo-stale-warning"><div><strong>Out of date</strong><span>Cargo or seat-bag weights were updated on another device.</span></div><button type="button" class="btn btn-primary" data-refresh-saved-cargo>Refresh</button></div>` : ""}
         <div class="cargo-editor-head">
           <div>
             <div class="card-title">Cargo Allocation</div>
@@ -2694,6 +2772,7 @@
         updateCargoEditorSummary(f);
         renderCargoWeightsSummary(f);
       });
+      input.addEventListener("change", () => persistCargoAllocation(f).catch((err) => alert(err.message || String(err))));
     });
     host.querySelectorAll(".atr-row-freight-input").forEach((input) => {
       input.addEventListener("input", () => {
@@ -2708,6 +2787,7 @@
         updateCargoEditorSummary(f);
         renderCargoWeightsSummary(f);
       });
+      input.addEventListener("change", () => persistCargoAllocation(f).catch((err) => alert(err.message || String(err))));
     });
     host.querySelectorAll(".freight-map-hold-input").forEach((input) => {
       input.addEventListener("input", () => {
@@ -2724,6 +2804,20 @@
         const total = card?.querySelector("small");
         if (total) total.textContent = `Total ${((Number(row.baggage_kg) || 0) + row.freight_kg).toFixed(1)} kg`;
       });
+      input.addEventListener("change", () => persistCargoAllocation(f).catch((err) => alert(err.message || String(err))));
+    });
+    host.querySelector("[data-refresh-saved-cargo]")?.addEventListener("click", async (event) => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      button.textContent = "Refreshing...";
+      try {
+        await Promise.all([fetchPersistedCargoAllocation(f, { apply: true }), populateFreightAllocation(f, true)]);
+        if (selectedFlight === f) renderCargoEditor(f);
+      } catch (err) {
+        alert(err.message || String(err));
+        button.disabled = false;
+        button.textContent = "Refresh";
+      }
     });
     host.querySelectorAll("[data-compact-hold]").forEach((button) => button.addEventListener("click", () => {
       const row = (f.apgCargoAllocations || []).find((item) => item.label === button.dataset.compactHold);
@@ -2765,8 +2859,13 @@
       try {
         const allocations = (f.freightAllocation?.allocations || []).map((item) => ({ seats: item.seats, freight_kg: item.freight_kg, override: item.override }));
         pairs.forEach((pair) => allocations.push({ seats: pair, freight_kg: 0, override }));
-        const resp = await fetch(freightUrl(f), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ allocations, aircraft_type: f.aircraft_type || "", reg: f.reg || "" }) });
+        const resp = await fetch(freightUrl(f), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ allocations, aircraft_type: f.aircraft_type || "", reg: f.reg || "", expected_revision: Number(f.freightAllocation?.revision || 0) }) });
         const data = await resp.json();
+        if (resp.status === 409 || data.stale) {
+          f.cargoAllocationStale = true;
+          if (selectedFlight === f) renderCargoEditor(f);
+          throw new Error(data.error || "Seat-bag data was updated on another device. Refresh before saving.");
+        }
         if (!resp.ok || data.ok === false) throw new Error(data.error || "Unable to convert selected seats");
         f.freightAllocation = data;
         if (selectedFlight === f) renderCargoEditor(f);
@@ -2792,6 +2891,9 @@
     }
     if (f.apgCargoStationsLoaded) {
       ensureCargoAllocations(f, f.apgCargoStations);
+      if (f.cargoAllocationRevision === undefined) {
+        await fetchPersistedCargoAllocation(f, { apply: true });
+      }
       renderCargoEditor(f);
       return;
     }
@@ -2803,6 +2905,7 @@
       f.apgCargoStations = stations;
       f.apgCargoStationsLoaded = true;
       ensureCargoAllocations(f, stations);
+      await fetchPersistedCargoAllocation(f, { apply: true });
     } catch (err) {
       if (selectedFlight !== f) return;
       host.innerHTML = `<div class="muted">Failed to load APG cargo stations: ${escapeHtml(err.message || String(err))}</div>`;
@@ -5307,12 +5410,17 @@
       if (!freightHoldWeightRow) return;
       freightHoldWeightRow.freight_kg = Math.max(0, Number(seatBagFreightKg.value || 0));
       cacheCargoAllocationsForFlight(f);
-      seatBagWeightDialog.close();
-      if (selectedFlight === f) {
-        updateCargoEditorSummary(f);
-        renderCargoWeightsSummary(f);
-        renderCargoEditor(f);
-      }
+      saveSeatBagWeight.disabled = true;
+      try {
+        await persistCargoAllocation(f);
+        seatBagWeightDialog.close();
+        if (selectedFlight === f) {
+          updateCargoEditorSummary(f);
+          renderCargoWeightsSummary(f);
+          renderCargoEditor(f);
+        }
+      } catch (err) { alert(err.message || String(err)); }
+      finally { saveSeatBagWeight.disabled = false; }
       return;
     }
     if (seatBagWeightSeatCodes.length !== 2) return;
@@ -5325,8 +5433,13 @@
       const freightKg = Math.max(0, Number(seatBagFreightKg.value || 0));
       const allocations = (f.freightAllocation?.allocations || []).filter((item) => item.id !== seatBagEditingId).map((item) => ({ seats: item.seats, freight_kg: item.freight_kg, override: item.override }));
       allocations.push({ seats: seatBagWeightSeatCodes, freight_kg: freightKg, override: Boolean(seatBagOverride.checked) });
-      const resp = await fetch(freightUrl(f), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ allocations, aircraft_type: f.aircraft_type || "", reg: f.reg || "" }) });
+      const resp = await fetch(freightUrl(f), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ allocations, aircraft_type: f.aircraft_type || "", reg: f.reg || "", expected_revision: Number(f.freightAllocation?.revision || 0) }) });
       const data = await resp.json();
+      if (resp.status === 409 || data.stale) {
+        f.cargoAllocationStale = true;
+        if (selectedFlight === f) renderCargoEditor(f);
+        throw new Error(data.error || "Seat-bag data was updated on another device. Refresh before saving.");
+      }
       if (!resp.ok || data.ok === false) throw new Error(data.error || "Unable to save seat bag");
       f.freightAllocation = data;
       seatBagWeightDialog.close();
@@ -5340,8 +5453,13 @@
     removeSeatBag.disabled = true;
     try {
       const allocations = (f.freightAllocation?.allocations || []).filter((item) => item.id !== seatBagEditingId).map((item) => ({ seats: item.seats, freight_kg: item.freight_kg, override: item.override }));
-      const resp = await fetch(freightUrl(f), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ allocations, aircraft_type: f.aircraft_type || "", reg: f.reg || "" }) });
+      const resp = await fetch(freightUrl(f), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ allocations, aircraft_type: f.aircraft_type || "", reg: f.reg || "", expected_revision: Number(f.freightAllocation?.revision || 0) }) });
       const data = await resp.json();
+      if (resp.status === 409 || data.stale) {
+        f.cargoAllocationStale = true;
+        if (selectedFlight === f) renderCargoEditor(f);
+        throw new Error(data.error || "Seat-bag data was updated on another device. Refresh before removing it.");
+      }
       if (!resp.ok || data.ok === false) throw new Error(data.error || "Unable to remove seat bag");
       f.freightAllocation = data;
       seatBagWeightDialog.close();
@@ -5420,6 +5538,7 @@
     if (isBriefingView && autoRefresh) autoRefresh.checked = false;
     setupAutoRefresh();
     setupLiveNowTimer();
+    setupCargoRevisionTimer();
     setActionsEnabled(false);
     if (isBriefingView && crewCodeInput) crewCodeInput.value = localStorage.getItem("crew_briefing_code") || "";
     if (isBriefingView && "serviceWorker" in navigator && app.dataset.serviceWorkerUrl) {

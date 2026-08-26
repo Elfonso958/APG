@@ -1223,7 +1223,9 @@ body {
 }
 
 .freight-editor { display: grid; gap: 16px; }
-.freight-editor:not(.is-full-freighter) { padding-bottom: 84px; }
+.freight-editor-head { position: sticky; top: 54px; z-index: 15; margin: -4px -4px 0; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--panel) 96%, transparent); box-shadow: 0 8px 24px rgba(15, 23, 42, .12); backdrop-filter: blur(10px); }
+.freight-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.freight-header-actions [data-freight-selection] { max-width: 260px; color: var(--muted); font-size: .72rem; font-weight: 700; }
 .freight-aircraft { width: min(100%, 390px); margin: 0 auto; }
 .freight-aircraft-nose, .freight-aircraft-tail { width: 76%; height: 42px; margin: 0 auto; border: 2px solid var(--line); background: var(--panel); }
 .freight-aircraft-nose { border-bottom: 0; border-radius: 50% 50% 0 0 / 100% 100% 0 0; }
@@ -1234,7 +1236,6 @@ body {
 .freight-seat { min-width: 32px; min-height: 32px; border: 0; cursor: pointer; font-weight: 800; }
 .freight-seat.selected { outline: 3px solid var(--accent); outline-offset: 1px; background: color-mix(in srgb, var(--accent) 22%, white); }
 .freight-seat:disabled { cursor: not-allowed; opacity: .58; }
-.freight-convert-bar { position: fixed; left: 50%; bottom: max(18px, env(safe-area-inset-bottom)); z-index: 10020; width: min(620px, calc(100vw - 32px)); box-sizing: border-box; transform: translateX(-50%); display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: color-mix(in srgb, var(--panel) 96%, transparent); box-shadow: 0 18px 45px rgba(15, 23, 42, .28); backdrop-filter: blur(12px); }
 .freight-seatbag { width: 68px; height: 32px; min-width: 68px; min-height: 32px; padding: 2px 4px; border: 2px solid var(--accent); border-radius: 6px; background: color-mix(in srgb, var(--accent) 16%, var(--panel)); color: var(--text); display: grid; place-content: center; text-align: center; cursor: pointer; line-height: 1.05; }
 .freight-seatbag span { color: var(--accent); font-size: .48rem; font-weight: 800; }
 .freight-seatbag strong { font-size: .61rem; white-space: nowrap; }
@@ -1285,9 +1286,15 @@ body {
   font-size: .7rem;
 }
 @media (max-width: 760px) {
-  .freight-editor:not(.is-full-freighter) { padding-bottom: 132px; }
-  .freight-convert-bar { bottom: max(10px, env(safe-area-inset-bottom)); width: calc(100vw - 20px); align-items: stretch; flex-direction: column; }
+  .freight-editor-head { top: 66px; }
+  .freight-header-actions { width: 100%; flex-wrap: wrap; justify-content: stretch; }
+  .freight-header-actions [data-freight-selection] { flex: 1 0 100%; max-width: none; }
+  .freight-header-actions .btn { flex: 1; }
 }
+.cargo-stale-warning { position: sticky; top: 54px; z-index: 19; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; border: 2px solid #f59e0b; border-radius: 12px; background: color-mix(in srgb, #f59e0b 16%, var(--panel)); box-shadow: 0 10px 28px rgba(15, 23, 42, .16); color: var(--text); }
+.cargo-stale-warning div { display: grid; gap: 2px; }
+.cargo-stale-warning span { color: var(--muted); font-size: .8rem; }
+.cargo-editor-shell:has(.cargo-stale-warning) .freight-editor-head { top: 128px; }
 .cargo-hold-card {
   border: 1px solid var(--line);
   border-radius: 18px;
@@ -1484,6 +1491,10 @@ body[data-theme="dark"] .wb-inline-status.is-over {
   border-color: rgba(252, 165, 165, .4);
 }
 @media (max-width: 900px) {
+  .freight-editor-head .freight-header-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
   .cargo-weight-grid {
     grid-template-columns: 1fr;
   }

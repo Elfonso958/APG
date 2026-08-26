@@ -140,5 +140,18 @@ class FlightFreightAllocation(db.Model):
     seats_json = db.Column(db.Text, nullable=False, default="[]")
     freight_kg = db.Column(db.Float, nullable=False, default=0.0)
     tare_kg = db.Column(db.Float, nullable=False, default=7.0)
+    revision = db.Column(db.Integer, nullable=False, default=1)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+
+class FlightCargoAllocation(db.Model):
+    __tablename__ = "flight_cargo_allocations"
+
+    id = db.Column(db.Integer, primary_key=True)
+    envision_flight_id = db.Column(db.String(32), unique=True, index=True, nullable=False)
+    allocations_json = db.Column(db.Text, nullable=False, default="[]")
+    atr_rows_json = db.Column(db.Text, nullable=False, default="[]")
+    revision = db.Column(db.Integer, nullable=False, default=1)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)

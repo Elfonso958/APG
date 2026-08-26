@@ -45,6 +45,7 @@
        data-envision-pax-sync-url="{{ url_for('api.api_envision_passenger_sync_run') }}"
        data-save-times-url="{{ url_for('api.api_dcs_save_times') }}"
        data-freight-url-template="{{ url_for('api.api_dcs_freight', flight_id='__FLIGHT__') }}"
+       data-cargo-allocation-url-template="{{ url_for('api.api_dcs_cargo_allocation', flight_id='__FLIGHT__') }}"
        data-freight-settings-url="{{ url_for('api.api_dcs_freight_settings') }}"
        data-envision-env-key="{{ envision_env_key or 'base' }}"
        data-envision-test-available="{{ '1' if envision_test_available else '0' }}"

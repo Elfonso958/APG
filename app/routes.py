@@ -8,7 +8,7 @@ from . import db, _normalise_sync_result
 import requests
 from sqlalchemy import func
 from zoneinfo import ZoneInfo
-from .models import SyncRun, SyncFlightLog, SyncFlightState, AppConfig, ManifestUploadState, CharterManifest, EnvisionOtpFlightCache, FlightFreightAllocation
+from .models import SyncRun, SyncFlightLog, SyncFlightState, AppConfig, ManifestUploadState, CharterManifest, EnvisionOtpFlightCache, FlightFreightAllocation, FlightCargoAllocation
 from .kmh_auth import get_kmh_session
 from .helpers_manifest import _seat_sort_key, _format_ssrs, _calc_age, _parse_dcs_dob, generate_manifest_pdf_from_html, generate_pdf_modern
 
@@ -2120,7 +2120,7 @@ def _freight_payload(row: FlightFreightAllocation | None) -> dict:
         freight = max(0.0, float(item.get("freight_kg") or 0))
         total = freight + tare
         allocations.append({"id": "+".join(seats), "seats": seats, "freight_kg": freight, "tare_kg": tare, "total_kg": total, "per_seat_kg": total / 2 if len(seats) == 2 else 0, "override": bool(item.get("override"))})
-    return {"allocations": allocations, "tare_kg": tare, "freight_kg": sum(v["freight_kg"] for v in allocations), "total_kg": sum(v["total_kg"] for v in allocations)}
+    return {"allocations": allocations, "tare_kg": tare, "freight_kg": sum(v["freight_kg"] for v in allocations), "total_kg": sum(v["total_kg"] for v in allocations), "revision": int(row.revision or 0) if row else 0}
 
 
 def _seat_bag_front_conflicts(seats: list[str], occupied: set[str]) -> list[str]:
@@ -2174,6 +2174,9 @@ def api_dcs_freight(flight_id: str):
         return jsonify({"ok": True, **payload})
 
     data = request.get_json(silent=True) or {}
+    expected_revision = data.get("expected_revision")
+    if row is not None and expected_revision is not None and int(expected_revision) != int(row.revision or 0):
+        return jsonify({"ok": False, "stale": True, "error": "Seat-bag data was updated by another user.", **_freight_payload(row)}), 409
     incoming = data.get("allocations")
     if incoming is None:
         incoming = [{"seats": data.get("seats") or [], "freight_kg": data.get("freight_kg") or 0, "override": data.get("override", False)}] if data.get("seats") else []
@@ -2193,10 +2196,71 @@ def api_dcs_freight(flight_id: str):
     row.seats_json = json.dumps(allocations)
     row.freight_kg = sum(v["freight_kg"] for v in allocations)
     row.tare_kg = default_tare
+    row.revision = int(row.revision or 0) + 1
     row.updated_at = now
     db.session.add(row)
     db.session.commit()
     return jsonify({"ok": True, **_freight_payload(row)})
+
+
+def _cargo_allocation_payload(row: FlightCargoAllocation | None) -> dict:
+    def parsed(value):
+        try:
+            result = json.loads(value or "[]")
+            return result if isinstance(result, list) else []
+        except (TypeError, ValueError):
+            return []
+    return {
+        "allocations": parsed(row.allocations_json) if row else [],
+        "atr_rows": parsed(row.atr_rows_json) if row else [],
+        "revision": int(row.revision or 0) if row else 0,
+        "updated_at": row.updated_at.isoformat() + "Z" if row and row.updated_at else None,
+    }
+
+
+@api_bp.route("/dcs/cargo-allocation/<string:flight_id>", methods=["GET", "PUT"])
+def api_dcs_cargo_allocation(flight_id: str):
+    row = FlightCargoAllocation.query.filter_by(envision_flight_id=flight_id).first()
+    if request.method == "GET":
+        return jsonify({"ok": True, **_cargo_allocation_payload(row)})
+    data = request.get_json(silent=True) or {}
+    expected_revision = data.get("expected_revision")
+    if row is not None and expected_revision is not None and int(expected_revision) != int(row.revision or 0):
+        return jsonify({"ok": False, "stale": True, "error": "Cargo weights were updated by another user.", **_cargo_allocation_payload(row)}), 409
+    allocations = data.get("allocations") or []
+    atr_rows = data.get("atr_rows") or []
+    if not isinstance(allocations, list) or not isinstance(atr_rows, list):
+        return jsonify({"ok": False, "error": "Invalid cargo allocation data"}), 400
+    clean_allocations = []
+    for item in allocations:
+        label = str(item.get("label") or "").strip()
+        if not label: continue
+        try:
+            baggage = max(0.0, float(item.get("baggage_kg") or 0))
+            freight = max(0.0, float(item.get("freight_kg") or 0))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "Cargo weights must be numbers"}), 400
+        clean_allocations.append({"label": label, "baggage_kg": baggage, "freight_kg": freight})
+    clean_atr_rows = []
+    for item in atr_rows:
+        label = str(item.get("label") or "").strip()
+        if not label: continue
+        try:
+            left = max(0.0, float(item.get("left_freight_kg") or 0))
+            right = max(0.0, float(item.get("right_freight_kg") or 0))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "ATR row weights must be numbers"}), 400
+        clean_atr_rows.append({"label": label, "left_freight_kg": left, "right_freight_kg": right})
+    now = datetime.utcnow()
+    if row is None:
+        row = FlightCargoAllocation(envision_flight_id=flight_id, created_at=now, revision=0)
+    row.allocations_json = json.dumps(clean_allocations)
+    row.atr_rows_json = json.dumps(clean_atr_rows)
+    row.revision = int(row.revision or 0) + 1
+    row.updated_at = now
+    db.session.add(row)
+    db.session.commit()
+    return jsonify({"ok": True, **_cargo_allocation_payload(row)})
 
 
 @api_bp.route("/dcs/freight-settings", methods=["GET", "PUT"])
@@ -2213,7 +2277,11 @@ def api_dcs_freight_settings():
         if value < 0 or value > 100:
             return jsonify({"ok": False, "error": "Seat-bag weight must be between 0 and 100 kg"}), 400
         cfg.seat_bag_tare_kg = value
-        FlightFreightAllocation.query.update({FlightFreightAllocation.tare_kg: value})
+        FlightFreightAllocation.query.update({
+            FlightFreightAllocation.tare_kg: value,
+            FlightFreightAllocation.revision: FlightFreightAllocation.revision + 1,
+            FlightFreightAllocation.updated_at: datetime.utcnow(),
+        })
         db.session.add(cfg)
         db.session.commit()
     return jsonify({"ok": True, "seat_bag_tare_kg": float(cfg.seat_bag_tare_kg if cfg.seat_bag_tare_kg is not None else 7.0)})
