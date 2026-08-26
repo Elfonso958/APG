@@ -127,5 +127,18 @@ class AppConfig(db.Model):
     auto_enabled = db.Column(db.Boolean, default=False, nullable=False)
     interval_sec = db.Column(db.Integer, default=300, nullable=False)  # default 5 min
     apg_create_ahead_hours = db.Column(db.Integer, default=48, nullable=False)
+    seat_bag_tare_kg = db.Column(db.Float, default=7.0, nullable=False)
     last_auto_started = db.Column(db.DateTime, nullable=True)
     last_auto_finished = db.Column(db.DateTime, nullable=True)
+
+
+class FlightFreightAllocation(db.Model):
+    __tablename__ = "flight_freight_allocations"
+
+    id = db.Column(db.Integer, primary_key=True)
+    envision_flight_id = db.Column(db.String(32), unique=True, index=True, nullable=False)
+    seats_json = db.Column(db.Text, nullable=False, default="[]")
+    freight_kg = db.Column(db.Float, nullable=False, default=0.0)
+    tare_kg = db.Column(db.Float, nullable=False, default=7.0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)

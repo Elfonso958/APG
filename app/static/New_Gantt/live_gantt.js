@@ -100,6 +100,9 @@
   const cargoWeightsSummary = document.getElementById("cargoWeightsSummary");
   const cargoEditor = document.getElementById("cargoEditor");
   const btnCargoRefresh = document.getElementById("btnCargoRefresh");
+  const freightSettingsDialog = document.getElementById("freightSettingsDialog");
+  const seatBagTareKg = document.getElementById("seatBagTareKg");
+  const saveFreightSettings = document.getElementById("saveFreightSettings");
   const envPickerDialog = document.getElementById("envPickerDialog");
   const envBaseBtn = document.getElementById("envBaseBtn");
   const envTestBtn = document.getElementById("envTestBtn");
@@ -253,6 +256,21 @@
   const apgCargoStationsCache = new Map();
   const apgCargoAllocationsCache = new Map();
   const apgAtrRowFreightCache = new Map();
+  const freightUrlTemplate = app.dataset.freightUrlTemplate || "";
+  const freightSettingsUrl = app.dataset.freightSettingsUrl || "";
+
+  function freightUrl(f) {
+    return freightUrlTemplate.replace("__FLIGHT__", encodeURIComponent(String(f?.envision_flight_id || "")));
+  }
+
+  async function populateFreightAllocation(f, force = false) {
+    if (!f?.envision_flight_id || (!force && f.freightAllocationLoaded)) return;
+    const resp = await fetch(freightUrl(f));
+    const data = await resp.json();
+    if (!resp.ok || data.ok === false) throw new Error(data.error || "Unable to load freight allocation");
+    f.freightAllocation = data;
+    f.freightAllocationLoaded = true;
+  }
   const apgCargoWeightSummaryCache = new Map();
   let showMaintenance = true;
   let liveNowTimer = null;
@@ -2137,12 +2155,13 @@
     const rowFreightTotal = atrRows.reduce((sum, row) => (
       sum + (Number(row.left_freight_kg) || 0) + (Number(row.right_freight_kg) || 0)
     ), 0);
-    const freightTotal = holdFreightTotal + rowFreightTotal;
-    const plannedCargoTotal = rows.reduce((sum, row) => sum + (Number(row.baggage_kg) || 0) + (Number(row.freight_kg) || 0), 0) + rowFreightTotal;
+    const seatBagFreightTotal = Number(f?.freightAllocation?.total_kg || 0);
+    const freightTotal = holdFreightTotal + rowFreightTotal + seatBagFreightTotal;
+    const plannedCargoTotal = rows.reduce((sum, row) => sum + (Number(row.baggage_kg) || 0) + (Number(row.freight_kg) || 0), 0) + rowFreightTotal + seatBagFreightTotal;
     const currentCargoTotal = rows.reduce((sum, row) => sum + (Number(row.current_mass) || 0), 0);
     const dcsBaggage = Number(f?.bags_kg || 0);
     const remaining = dcsBaggage - baggageTotal;
-    return { baggageTotal, freightTotal, holdFreightTotal, rowFreightTotal, plannedCargoTotal, currentCargoTotal, dcsBaggage, remaining };
+    return { baggageTotal, freightTotal, holdFreightTotal, rowFreightTotal, seatBagFreightTotal, plannedCargoTotal, currentCargoTotal, dcsBaggage, remaining };
   }
 
   function estimateDcsPassengerMass(f) {
@@ -2344,12 +2363,8 @@
     const atrRows = Array.isArray(f.apgAtrRowFreightAllocations) ? f.apgAtrRowFreightAllocations : [];
     normalizeAtrRowFreightForOccupancy(f);
     const showAtrRows = isAtrRowFreightFlight(f) && atrRows.length > 0;
-    if (!rows.length && !showAtrRows) {
-      host.innerHTML = '<div class="muted">No APG cargo/hold stations found on this plan.</div>';
-      return;
-    }
     if (!f.apgCargoEditorTab || (f.apgCargoEditorTab === "rowFreight" && !showAtrRows)) {
-      f.apgCargoEditorTab = rows.length ? "holds" : "rowFreight";
+      f.apgCargoEditorTab = rows.length ? "holds" : showAtrRows ? "rowFreight" : "freight";
     }
     const activeTab = f.apgCargoEditorTab;
     const totals = cargoTotalsForFlight(f);
@@ -2407,6 +2422,39 @@
         `).join("")}
       </div>
     ` : '<div class="muted">Row freight is only available when APG exposes row loading stations.</div>';
+    const allocation = f.freightAllocation || { seats: [], freight_kg: 0, tare_kg: 7, total_kg: 0, per_seat_kg: 0 };
+    const selectedFreightSeats = new Set(allocation.seats || []);
+    const occupiedSeats = new Set((f.pax_list || []).map((p) => String(p.Seat || p.SeatNumber || p.SeatNo || "").trim().toUpperCase()).filter(Boolean));
+    const cfg = seatmapConfigForFlight(f);
+    const freightSeatCodes = [];
+    if (cfg) {
+      cfg.rows.forEach((rowNumber) => {
+        let columns = [...cfg.left, ...cfg.right];
+        if (cfg.hasRow0C && rowNumber === 0) columns = ["C"];
+        if (cfg.lastRowMode === "4-inline" && rowNumber === cfg.rows[cfg.rows.length - 1]) columns = ["A", "B", "C", "D"];
+        if (cfg.lastRowSeats && rowNumber === cfg.rows[cfg.rows.length - 1]) columns = [...cfg.lastRowSeats.left, ...cfg.lastRowSeats.right];
+        columns.forEach((column) => freightSeatCodes.push(`${rowNumber}${column}`));
+      });
+    }
+    const renderFreightPanel = () => cfg ? `
+      <div class="freight-editor" data-freight-editor>
+        <div class="cargo-editor-head">
+          <div><div class="card-title">Seat-bag Freight</div><div class="card-sub">Select empty seats, enter the net freight weight, then save the conversion.</div></div>
+          <button type="button" class="btn btn-ghost" data-freight-settings>Settings</button>
+        </div>
+        <div class="freight-seat-grid">
+          ${freightSeatCodes.map((seat) => {
+            const occupied = occupiedSeats.has(seat);
+            return `<button type="button" class="seat freight-seat ${selectedFreightSeats.has(seat) ? "selected" : ""} ${occupied ? "seat-adult" : "seat-empty"}" data-freight-seat="${escapeHtml(seat)}" ${occupied ? "disabled title=\"Occupied seat\"" : ""}>${escapeHtml(seat)}</button>`;
+          }).join("")}
+        </div>
+        <div class="freight-controls">
+          <label class="cargo-field"><span>Freight weight (kg)</span><input class="form-control" data-freight-weight type="number" min="0" step="0.1" value="${Number(allocation.freight_kg || 0).toFixed(1)}"></label>
+          <div class="freight-calculation" data-freight-calculation></div>
+          <button type="button" class="btn btn-primary" data-save-freight>Convert to Seat Bags</button>
+        </div>
+      </div>
+    ` : '<div class="muted">A freight seat map is not available for this aircraft type.</div>';
     host.innerHTML = `
       <div class="cargo-editor-shell">
         <div class="cargo-editor-head">
@@ -2418,17 +2466,19 @@
             ${Math.abs(totals.remaining) < 0.05 ? "Baggage complete" : totals.remaining > 0 ? "Baggage remaining" : "Over allocated"}
           </div>
         </div>
-        ${showAtrRows ? `
           <div class="cargo-editor-tabs" role="tablist" aria-label="Cargo allocation mode">
             <button type="button" class="cargo-editor-tab ${activeTab === "holds" ? "is-active" : ""}" data-cargo-tab="holds">Holds</button>
-            <button type="button" class="cargo-editor-tab ${activeTab === "rowFreight" ? "is-active" : ""}" data-cargo-tab="rowFreight">Row Freight</button>
+            ${showAtrRows ? `<button type="button" class="cargo-editor-tab ${activeTab === "rowFreight" ? "is-active" : ""}" data-cargo-tab="rowFreight">Row Freight</button>` : ""}
+            <button type="button" class="cargo-editor-tab ${activeTab === "freight" ? "is-active" : ""}" data-cargo-tab="freight">Freight</button>
           </div>
-        ` : ""}
         <div class="cargo-editor-panel" data-cargo-panel="holds" ${activeTab === "holds" ? "" : "hidden"}>
           ${renderHoldPanel()}
         </div>
         <div class="cargo-editor-panel" data-cargo-panel="rowFreight" ${activeTab === "rowFreight" ? "" : "hidden"}>
           ${renderRowFreightPanel()}
+        </div>
+        <div class="cargo-editor-panel" data-cargo-panel="freight" ${activeTab === "freight" ? "" : "hidden"}>
+          ${renderFreightPanel()}
         </div>
         <div class="cargo-summary-strip">
           <div class="cargo-summary-item">
@@ -2484,6 +2534,46 @@
         renderCargoWeightsSummary(f);
       });
     });
+    const updateFreightCalculation = () => {
+      const editor = host.querySelector("[data-freight-editor]");
+      if (!editor) return;
+      const seats = [...editor.querySelectorAll("[data-freight-seat].selected")];
+      const freight = Math.max(0, Number(editor.querySelector("[data-freight-weight]")?.value || 0));
+      const tare = Number(f.freightAllocation?.tare_kg ?? 7);
+      const total = freight + (seats.length ? tare : 0);
+      const perSeat = seats.length ? total / seats.length : 0;
+      editor.querySelector("[data-freight-calculation]").textContent = seats.length
+        ? `${freight.toFixed(1)} kg + ${tare.toFixed(1)} kg tare = ${total.toFixed(1)} kg total / ${seats.length} seat${seats.length === 1 ? "" : "s"} = ${perSeat.toFixed(1)} kg each`
+        : "Select at least one empty seat.";
+    };
+    host.querySelectorAll("[data-freight-seat]:not(:disabled)").forEach((button) => button.addEventListener("click", () => {
+      button.classList.toggle("selected");
+      updateFreightCalculation();
+    }));
+    host.querySelector("[data-freight-weight]")?.addEventListener("input", updateFreightCalculation);
+    host.querySelector("[data-freight-settings]")?.addEventListener("click", async () => {
+      const resp = await fetch(freightSettingsUrl);
+      const data = await resp.json();
+      seatBagTareKg.value = Number(data.seat_bag_tare_kg ?? 7).toFixed(1);
+      freightSettingsDialog.showModal();
+    });
+    host.querySelector("[data-save-freight]")?.addEventListener("click", async (event) => {
+      const button = event.currentTarget;
+      const editor = host.querySelector("[data-freight-editor]");
+      const seats = [...editor.querySelectorAll("[data-freight-seat].selected")].map((node) => node.dataset.freightSeat);
+      const freightKg = Math.max(0, Number(editor.querySelector("[data-freight-weight]")?.value || 0));
+      if (freightKg > 0 && !seats.length) return alert("Select at least one empty seat.");
+      button.disabled = true;
+      try {
+        const resp = await fetch(freightUrl(f), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ seats, freight_kg: freightKg }) });
+        const data = await resp.json();
+        if (!resp.ok || data.ok === false) throw new Error(data.error || "Unable to save freight");
+        f.freightAllocation = data;
+        renderCargoEditor(f);
+      } catch (err) { alert(err.message || String(err)); }
+      finally { button.disabled = false; }
+    });
+    updateFreightCalculation();
     updateCargoEditorSummary(f);
   }
 
@@ -2697,6 +2787,7 @@
     renderCargoWeightsSummary(f);
     renderCargoEditor(f);
     cargoDialog.showModal();
+    await populateFreightAllocation(f).catch((err) => { console.warn(err); });
     await Promise.allSettled([populateCargoWeightsSummary(f), populateCargoEditor(f)]);
   }
 
@@ -4943,6 +5034,21 @@
   if (btnPreviewManifest) btnPreviewManifest.addEventListener("click", withBusy(btnPreviewManifest, "Loading...", previewManifest));
   if (btnCargo) btnCargo.addEventListener("click", withBusy(btnCargo, "Loading...", openCargoDialog));
   if (btnCargoRefresh) btnCargoRefresh.addEventListener("click", withBusy(btnCargoRefresh, "Refreshing...", refreshCargoDialog));
+  if (saveFreightSettings) saveFreightSettings.addEventListener("click", async () => {
+    saveFreightSettings.disabled = true;
+    try {
+      const resp = await fetch(freightSettingsUrl, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ seat_bag_tare_kg: Number(seatBagTareKg.value) }) });
+      const data = await resp.json();
+      if (!resp.ok || data.ok === false) throw new Error(data.error || "Unable to save settings");
+      freightSettingsDialog.close();
+      if (selectedFlight) {
+        selectedFlight.freightAllocationLoaded = false;
+        await populateFreightAllocation(selectedFlight, true);
+        renderCargoEditor(selectedFlight);
+      }
+    } catch (err) { alert(err.message || String(err)); }
+    finally { saveFreightSettings.disabled = false; }
+  });
   if (btnPaxList) btnPaxList.addEventListener("click", openPassengerList);
   if (syncPaxBtn) syncPaxBtn.addEventListener("click", withBusy(syncPaxBtn, "Syncing...", runPassengerSyncTest));
   if (btnSubmitApg) btnSubmitApg.addEventListener("click", withBusy(btnSubmitApg, "Submitting...", submitToApg));

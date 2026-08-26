@@ -8,7 +8,7 @@ from . import db, _normalise_sync_result
 import requests
 from sqlalchemy import func
 from zoneinfo import ZoneInfo
-from .models import SyncRun, SyncFlightLog, SyncFlightState, AppConfig, ManifestUploadState, CharterManifest, EnvisionOtpFlightCache
+from .models import SyncRun, SyncFlightLog, SyncFlightState, AppConfig, ManifestUploadState, CharterManifest, EnvisionOtpFlightCache, FlightFreightAllocation
 from .kmh_auth import get_kmh_session
 from .helpers_manifest import _seat_sort_key, _format_ssrs, _calc_age, _parse_dcs_dob, generate_manifest_pdf_from_html, generate_pdf_modern
 
@@ -2102,6 +2102,70 @@ def api_envision_passenger_sync_run():
         current_app.logger.exception("Passenger sync run failed")
         return jsonify({"ok": False, "error": str(e)}), 500
 
+
+def _freight_payload(row: FlightFreightAllocation | None) -> dict:
+    seats = []
+    if row is not None:
+        try:
+            seats = json.loads(row.seats_json or "[]")
+        except (TypeError, ValueError):
+            seats = []
+    freight = float(row.freight_kg or 0.0) if row else 0.0
+    tare = float(row.tare_kg or 0.0) if row else 0.0
+    per_seat = (freight + tare) / len(seats) if seats else 0.0
+    return {"seats": seats, "freight_kg": freight, "tare_kg": tare, "total_kg": freight + tare, "per_seat_kg": per_seat}
+
+
+@api_bp.route("/dcs/freight/<string:flight_id>", methods=["GET", "PUT"])
+def api_dcs_freight(flight_id: str):
+    row = FlightFreightAllocation.query.filter_by(envision_flight_id=flight_id).first()
+    cfg = db.session.get(AppConfig, 1)
+    default_tare = float(cfg.seat_bag_tare_kg if cfg and cfg.seat_bag_tare_kg is not None else 7.0)
+    if request.method == "GET":
+        payload = _freight_payload(row)
+        if row is None:
+            payload["tare_kg"] = default_tare
+        return jsonify({"ok": True, **payload})
+
+    data = request.get_json(silent=True) or {}
+    seats = sorted({str(s).strip().upper() for s in (data.get("seats") or []) if str(s).strip()})
+    try:
+        freight_kg = float(data.get("freight_kg") or 0.0)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Freight weight must be a number"}), 400
+    if freight_kg < 0 or (freight_kg > 0 and not seats):
+        return jsonify({"ok": False, "error": "Select at least one seat for a positive freight weight"}), 400
+    now = datetime.utcnow()
+    if row is None:
+        row = FlightFreightAllocation(envision_flight_id=flight_id, created_at=now)
+    row.seats_json = json.dumps(seats)
+    row.freight_kg = freight_kg
+    row.tare_kg = default_tare if seats else 0.0
+    row.updated_at = now
+    db.session.add(row)
+    db.session.commit()
+    return jsonify({"ok": True, **_freight_payload(row)})
+
+
+@api_bp.route("/dcs/freight-settings", methods=["GET", "PUT"])
+def api_dcs_freight_settings():
+    cfg = db.session.get(AppConfig, 1)
+    if cfg is None:
+        cfg = AppConfig(id=1)
+    if request.method == "PUT":
+        data = request.get_json(silent=True) or {}
+        try:
+            value = float(data.get("seat_bag_tare_kg"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "Seat-bag weight must be a number"}), 400
+        if value < 0 or value > 100:
+            return jsonify({"ok": False, "error": "Seat-bag weight must be between 0 and 100 kg"}), 400
+        cfg.seat_bag_tare_kg = value
+        FlightFreightAllocation.query.update({FlightFreightAllocation.tare_kg: value})
+        db.session.add(cfg)
+        db.session.commit()
+    return jsonify({"ok": True, "seat_bag_tare_kg": float(cfg.seat_bag_tare_kg if cfg.seat_bag_tare_kg is not None else 7.0)})
+
 @api_bp.post("/dcs/push_to_apg")
 def api_dcs_push_to_apg():
     """
@@ -2134,6 +2198,7 @@ def api_dcs_push_to_apg():
     preview_only = bool(data.get("preview_only"))
     pax_list     = data.get("pax_list") or []
     cargo_loads  = data.get("cargo_loads") or []
+    seat_freight_loads = []
     cargo_station_label = (data.get("cargo_station_label") or "").strip()
     cargo_mass_kg_raw = data.get("cargo_mass_kg")
     try:
@@ -2158,6 +2223,18 @@ def api_dcs_push_to_apg():
         envision_flight_id = int(env_id_raw) if env_id_raw not in (None, "") else None
     except (TypeError, ValueError):
         envision_flight_id = None
+
+    if envision_flight_id is not None:
+        freight_row = FlightFreightAllocation.query.filter_by(envision_flight_id=str(envision_flight_id)).first()
+        freight_data = _freight_payload(freight_row)
+        occupied = {
+            str(p.get("Seat") or p.get("SeatNumber") or p.get("SeatNo") or "").strip().upper()
+            for p in pax_list if isinstance(p, dict)
+        }
+        conflicts = sorted(set(freight_data["seats"]) & occupied)
+        if conflicts:
+            return jsonify({"ok": False, "error": f"Freight seats are now occupied: {', '.join(conflicts)}. Update the freight allocation first."}), 409
+        seat_freight_loads = [{"seat": seat, "mass_kg": freight_data["per_seat_kg"]} for seat in freight_data["seats"]]
 
     if not (dep and flight_date and designator and flight_no):
         return jsonify({
@@ -2212,6 +2289,7 @@ def api_dcs_push_to_apg():
             cargo_loads=cargo_loads,
             cargo_station_label=cargo_station_label or None,
             cargo_mass_kg=cargo_mass_kg,
+            seat_freight_loads=seat_freight_loads,
             preview_only=preview_only,
         )
     except Exception as e:

@@ -3498,6 +3498,7 @@ def update_apg_plan_from_dcs_row(
     cargo_loads: list[dict] | None = None,
     cargo_station_label: str | None = None,
     cargo_mass_kg: float | None = None,
+    seat_freight_loads: list[dict] | None = None,
     preview_only: bool = False,
 ) -> dict:
     """
@@ -3532,6 +3533,39 @@ def update_apg_plan_from_dcs_row(
     # --- 2) Apply DCS passengers onto APG passenger rows ---
     aircraft_reg = _extract_aircraft_reg(dcs_flight, plan)
     apply_dcs_passengers_to_apg_rows(loading, dcs_flight, aircraft_reg=aircraft_reg)
+
+    # Seat-bag freight is persisted separately from DCS passengers and added
+    # after passenger weights have reset the APG loading stations.
+    freight_by_seat: dict[str, float] = {}
+    for item in seat_freight_loads or []:
+        seat = _normalise_seat_code(item.get("seat") if isinstance(item, dict) else None)
+        try:
+            mass = float(item.get("mass_kg") or 0.0) if isinstance(item, dict) else 0.0
+        except (TypeError, ValueError):
+            mass = 0.0
+        if seat and mass > 0:
+            freight_by_seat[seat] = mass
+    if freight_by_seat:
+        if _is_atr_row_loading_layout(loading, aircraft_reg):
+            freight_by_row: dict[str, float] = {}
+            for seat, mass in freight_by_seat.items():
+                row_label = _seat_row_label(seat)
+                if row_label:
+                    freight_by_row[row_label.lower()] = freight_by_row.get(row_label.lower(), 0.0) + mass
+            for station in loading:
+                label = str(station.get("label") or "").strip().lower()
+                if label in freight_by_row:
+                    load = station.setdefault("customLoad", {})
+                    load["mass"] = float(load.get("mass") or 0.0) + freight_by_row[label]
+        else:
+            for station in loading:
+                label = str(station.get("label") or "").strip()
+                if not label.startswith("Passenger "):
+                    continue
+                seat = _normalise_seat_code(label.split(" ", 1)[1])
+                if seat in freight_by_seat:
+                    load = station.setdefault("customLoad", {})
+                    load["mass"] = float(load.get("mass") or 0.0) + freight_by_seat[seat]
 
     # --- 3) Optional baggage update from DCS ---
     total_bags_kg = 0.0
