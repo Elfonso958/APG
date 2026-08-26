@@ -4004,7 +4004,10 @@ def _find_apg_plan_id_by_local_clock(
         return None
 
     tolerance_min = int(os.getenv("APG_GANTT_LINK_LOCAL_CLOCK_TOLERANCE_MIN", "75") or "75")
-    max_date_diff_days = int(os.getenv("APG_GANTT_LINK_LOCAL_DATE_DIFF_DAYS", "1") or "1")
+    # Flight numbers and local departure times repeat daily.  Crossing a local
+    # calendar-day boundary can therefore attach tomorrow's plan to today's
+    # Gantt row (even when the registrations/aircraft types differ).
+    max_date_diff_days = int(os.getenv("APG_GANTT_LINK_LOCAL_DATE_DIFF_DAYS", "0") or "0")
     scored: list[tuple[int, int, Optional[int]]] = []
     local_tz = _get_local_tz()
     for plan_dt, candidate_pid in candidates:
@@ -4094,15 +4097,6 @@ def attach_apg_presence_to_rows(
     for candidates in existing_candidates_by3.values():
         candidates.sort(key=lambda item: item[0])
 
-    state_plan_by_fid: dict[str, int] = {}
-    try:
-        from app.models import SyncFlightState
-        for state in SyncFlightState.query.filter(SyncFlightState.apg_id.isnot(None)).all():
-            if state.envision_flight_id and state.apg_id:
-                state_plan_by_fid[str(state.envision_flight_id)] = int(state.apg_id)
-    except Exception:
-        state_plan_by_fid = {}
-
     # 3) Attach APG plan ids
     for r in rows:
         plan_id = _find_apg_plan_id_for_row(r, existing_index, existing_candidates_by3)
@@ -4115,10 +4109,10 @@ def attach_apg_presence_to_rows(
             if flight_no and adep_icao and ades_icao:
                 candidates = existing_candidates_by3.get((flight_no, adep_icao, ades_icao)) or []
                 plan_id = _find_apg_plan_id_by_local_clock(r, candidates)
-        if plan_id is None:
-            fid = r.get("envision_flight_id")
-            if fid not in (None, ""):
-                plan_id = state_plan_by_fid.get(str(fid))
+        # Do not fall back to SyncFlightState.apg_id without validating the
+        # plan's flight date/route.  A stale state record is worse than showing
+        # the flight as unlinked because it can open and submit to another
+        # aircraft's APG plan.
         r["apg_plan_id"] = plan_id
         r["apg_has_plan"] = bool(plan_id)
 
@@ -4392,6 +4386,76 @@ CHILD_MASS_KG = 46.0
 INFANT_MASS_KG = 15.0  # standard infant weight; lap infants get added to adult
 
 
+def _dcs_passenger_ssr_text(passenger: dict) -> str:
+    values: list[str] = []
+    raw = passenger.get("Ssrs") or passenger.get("SSRs") or passenger.get("SSR") or []
+    if isinstance(raw, dict):
+        raw = [raw]
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict):
+                values.extend(str(item.get(key) or "") for key in ("Code", "FreeText"))
+            else:
+                values.append(str(item or ""))
+    else:
+        values.append(str(raw or ""))
+    return " ".join(values).strip().upper()
+
+
+def _dcs_passenger_weight_type(passenger: dict) -> str:
+    """Use DCS SSR classification when PassengerType is incorrectly AD."""
+    ptype = normalise_pax_type(passenger.get("PassengerType")) or "AD"
+    if ptype != "AD":
+        return ptype
+    ssr_text = _dcs_passenger_ssr_text(passenger)
+    if re.search(r"\bUM(?:N|NR)?\b", ssr_text):
+        return "UMNR"
+    if re.search(r"\bCHLD\b", ssr_text):
+        return "CHD"
+    return ptype
+
+
+def _passenger_name_tokens(passenger: dict) -> set[str]:
+    raw = " ".join(
+        str(passenger.get(key) or "")
+        for key in ("GivenName", "Surname", "Name")
+    ).upper()
+    ignored = {"INF", "INFT", "INFANT", "MISS", "MASTER", "MSTR"}
+    return {
+        token for token in re.findall(r"[A-Z0-9]+", raw)
+        if len(token) > 1 and token not in ignored
+    }
+
+
+def _lap_infant_parent_seat(infant: dict, adults: list[dict]) -> str | None:
+    parents = [
+        adult for adult in adults
+        if _get_pax_seat_from_dcs(adult)
+        and re.search(r"\bINFT?\b|\bINFANT\b", _dcs_passenger_ssr_text(adult))
+    ]
+    if not parents:
+        return None
+
+    infant_pnr = str(infant.get("BookingReferenceID") or infant.get("PNR") or "").strip().upper()
+    infant_tokens = _passenger_name_tokens(infant)
+    scored: list[tuple[int, str]] = []
+    for parent in parents:
+        seat = _get_pax_seat_from_dcs(parent)
+        if not seat:
+            continue
+        parent_pnr = str(parent.get("BookingReferenceID") or parent.get("PNR") or "").strip().upper()
+        ssr_text = _dcs_passenger_ssr_text(parent)
+        name_matches = sum(1 for token in infant_tokens if token in ssr_text)
+        score = (10 if infant_pnr and infant_pnr == parent_pnr else 0) + name_matches
+        scored.append((score, seat))
+    if not scored:
+        return None
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    if scored[0][0] > 0 or len(scored) == 1:
+        return scored[0][1]
+    return None
+
+
 def apply_dcs_passengers_to_apg_rows(
     loading: list[dict],
     dcs_flight: dict,
@@ -4423,15 +4487,17 @@ def apply_dcs_passengers_to_apg_rows(
     seated_adults: list[str] = []        # seat codes with adult
     seated_children: list[str] = []      # seat codes with child
     seated_infants: list[str] = []       # seat codes with infant-in-seat (rare)
-    lap_infants_count = 0                # infants without seat
+    lap_infants: list[dict] = []         # infants without seat
+    included_adults: list[dict] = []
 
     for p in pax_list:
-        ptype = normalise_pax_type(p.get("PassengerType")) or "AD"
+        ptype = _dcs_passenger_weight_type(p)
         seat_code = _get_pax_seat_from_dcs(p)
 
         if ptype == "AD":
             if seat_code:
                 seated_adults.append(seat_code)
+                included_adults.append(p)
             # adult without seat is ignored for seat rows
         elif ptype in {"CHD", "UMNR"}:
             if seat_code:
@@ -4442,7 +4508,7 @@ def apply_dcs_passengers_to_apg_rows(
                 seated_infants.append(seat_code)
             else:
                 # Lap infant â€“ add 15 kg to an adult later
-                lap_infants_count += 1
+                lap_infants.append(p)
         else:
             # Unknown type â†’ treat as adult
             if seat_code:
@@ -4473,21 +4539,30 @@ def apply_dcs_passengers_to_apg_rows(
         }
 
     # --- Distribute lap infants across adult seats (86 + 15) ---
-    total_lap_infants = lap_infants_count  # keep original for logging
-    if lap_infants_count > 0 and seated_adults:
+    total_lap_infants = len(lap_infants)  # keep original for logging
+    unmatched_lap_infants = 0
+    for infant in lap_infants:
+        parent_seat = _lap_infant_parent_seat(infant, included_adults)
+        load = seat_to_load.get(parent_seat or "")
+        if load:
+            load["mass"] = float(load.get("mass", 0.0)) + INFANT_MASS_KG
+        else:
+            unmatched_lap_infants += 1
+
+    if unmatched_lap_infants > 0 and seated_adults:
         # Sort seats so assignment is stable (e.g. 1A, 1B, 2A...)
         sorted_adult_seats = sorted(set(seated_adults))
 
         # One lap infant per adult until we run out of infants or adults,
         # then round-robin if more infants than adults.
         idx = 0
-        while lap_infants_count > 0 and sorted_adult_seats:
+        while unmatched_lap_infants > 0 and sorted_adult_seats:
             seat = sorted_adult_seats[idx]
             load = seat_to_load.get(seat)
             if load:
                 load["mass"] = float(load.get("mass", 0.0)) + INFANT_MASS_KG
 
-            lap_infants_count -= 1
+            unmatched_lap_infants -= 1
             idx += 1
             if idx >= len(sorted_adult_seats):
                 idx = 0
