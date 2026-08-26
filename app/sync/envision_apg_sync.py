@@ -4004,10 +4004,7 @@ def _find_apg_plan_id_by_local_clock(
         return None
 
     tolerance_min = int(os.getenv("APG_GANTT_LINK_LOCAL_CLOCK_TOLERANCE_MIN", "75") or "75")
-    # Flight numbers and local departure times repeat daily.  Crossing a local
-    # calendar-day boundary can therefore attach tomorrow's plan to today's
-    # Gantt row (even when the registrations/aircraft types differ).
-    max_date_diff_days = int(os.getenv("APG_GANTT_LINK_LOCAL_DATE_DIFF_DAYS", "0") or "0")
+    max_date_diff_days = int(os.getenv("APG_GANTT_LINK_LOCAL_DATE_DIFF_DAYS", "1") or "1")
     scored: list[tuple[int, int, Optional[int]]] = []
     local_tz = _get_local_tz()
     for plan_dt, candidate_pid in candidates:
@@ -4046,23 +4043,6 @@ def _find_apg_plan_id_by_local_clock(
 
     return best_pid
 
-
-def _validated_persisted_apg_plan_id(row: dict, plan_id: int, plan: dict) -> Optional[int]:
-    """Accept a stored link only when its current APG plan still matches the row."""
-    key = _plan_key_from_apg_row(plan)
-    if not key:
-        return None
-    plan_dt = _utc_min_dt_from_key(key[3])
-    if not plan_dt:
-        return None
-    candidates = {(key[0], key[1], key[2]): [(plan_dt, plan_id)]}
-    matched = _find_apg_plan_id_for_row(row, {key: plan_id}, candidates)
-    if matched is not None:
-        return matched
-    return _find_apg_plan_id_by_local_clock(
-        row,
-        candidates.get((key[0], key[1], key[2])) or [],
-    )
 
 def attach_apg_presence_to_rows(
     rows: list[dict],
@@ -4123,8 +4103,6 @@ def attach_apg_presence_to_rows(
                 state_plan_by_fid[str(state.envision_flight_id)] = int(state.apg_id)
     except Exception:
         state_plan_by_fid = {}
-    persisted_plan_cache: dict[int, dict | None] = {}
-
     # 3) Attach APG plan ids
     for r in rows:
         plan_id = _find_apg_plan_id_for_row(r, existing_index, existing_candidates_by3)
@@ -4139,17 +4117,8 @@ def attach_apg_presence_to_rows(
                 plan_id = _find_apg_plan_id_by_local_clock(r, candidates)
         if plan_id is None:
             fid = r.get("envision_flight_id")
-            stored_id = state_plan_by_fid.get(str(fid)) if fid not in (None, "") else None
-            if stored_id:
-                if stored_id not in persisted_plan_cache:
-                    try:
-                        persisted_plan_cache[stored_id] = apg_plan_get(apg_bearer, stored_id)
-                    except Exception as exc:
-                        logging.warning("APG persisted plan validation failed for %s: %s", stored_id, exc)
-                        persisted_plan_cache[stored_id] = None
-                stored_plan = persisted_plan_cache.get(stored_id)
-                if stored_plan:
-                    plan_id = _validated_persisted_apg_plan_id(r, stored_id, stored_plan)
+            if fid not in (None, ""):
+                plan_id = state_plan_by_fid.get(str(fid))
         r["apg_plan_id"] = plan_id
         r["apg_has_plan"] = bool(plan_id)
 
