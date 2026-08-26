@@ -2522,7 +2522,12 @@
         freightRows.push({ rowNumber, leftSeats, rightSeats });
       });
     }
-    const isFreightPair = (seats) => freightPairs.some((pair) => pair.every((seat) => seats.includes(seat)) && seats.length === 2);
+    const selectedFreightPairs = (seats) => freightPairs.filter((pair) => pair.every((seat) => seats.includes(seat)));
+    const isCompleteFreightPairSelection = (seats) => {
+      if (!seats.length || seats.length % 2) return false;
+      const pairedSeats = new Set(selectedFreightPairs(seats).flat());
+      return pairedSeats.size === seats.length && seats.every((seat) => pairedSeats.has(seat));
+    };
     const renderFreightSeat = (seat) => {
       const occupied = occupiedSeats.has(seat);
       return `<button type="button" class="seat freight-seat ${occupied ? "seat-adult" : "seat-empty"}" data-freight-seat="${escapeHtml(seat)}" ${occupied || allocatedFreightSeats.has(seat) ? "disabled" : ""}>${escapeHtml(seat.replace(/^\d+/, ""))}</button>`;
@@ -2535,7 +2540,7 @@
         const warning = conflicts.length || (front.length && !allocation.override);
         return `<button type="button" class="freight-seatbag ${warning ? "has-conflict" : ""}" data-edit-seatbag="${escapeHtml(allocation.id)}">
           <span>${conflicts.length ? "⚠ Occupied" : front.length ? "⚠ In front" : "Seat Bag"}</span>
-          <strong>${Number(allocation.freight_kg || 0).toFixed(1)} kg</strong>
+          <strong>${Number(allocation.freight_kg || 0) > 0 ? `${Number(allocation.freight_kg).toFixed(1)} kg` : "Add weight"}</strong>
         </button>`;
       }
       return seats.map(renderFreightSeat).join("");
@@ -2604,7 +2609,7 @@
     const renderFreightPanel = () => cfg ? `
       <div class="freight-editor" data-freight-editor>
         <div class="cargo-editor-head">
-          <div><div class="card-title">Seat-bag Freight</div><div class="card-sub">Select two adjacent empty seats on the same side of the aisle, then convert them into a seat bag.</div></div>
+          <div><div class="card-title">Seat-bag Freight</div><div class="card-sub">Select one or more adjacent seat pairs, convert them together, then click each seat bag to enter its weight.</div></div>
           <button type="button" class="btn btn-ghost" data-freight-settings>Settings</button>
         </div>
         <div class="freight-aircraft">
@@ -2616,7 +2621,7 @@
           </div>
           <div class="freight-aircraft-tail" aria-hidden="true"></div>
         </div>
-        <div class="freight-convert-bar"><span data-freight-selection>Select another valid adjacent pair.</span><button type="button" class="btn btn-primary" data-convert-freight disabled>Convert to Seat Bag</button></div>
+        <div class="freight-convert-bar"><span data-freight-selection>Select one or more adjacent pairs.</span><button type="button" class="btn btn-primary" data-convert-freight disabled>Convert Selected to Seat Bags</button></div>
       </div>
     ` : '<div class="muted">A freight seat map is not available for this aircraft type.</div>';
     host.innerHTML = `
@@ -2722,18 +2727,16 @@
       const editor = host.querySelector("[data-freight-editor]");
       if (!editor) return;
       const seats = [...editor.querySelectorAll("[data-freight-seat].selected")].map((node) => node.dataset.freightSeat);
+      const pairs = selectedFreightPairs(seats);
       const selection = editor.querySelector("[data-freight-selection]");
       const convert = editor.querySelector("[data-convert-freight]");
-      if (selection) selection.textContent = seats.length ? `Selected: ${seats.join(" + ")}` : "Select a valid adjacent pair.";
-      if (convert) convert.disabled = !isFreightPair(seats);
+      if (selection) selection.textContent = seats.length ? `Selected: ${seats.join(" + ")} (${pairs.length} seat bag${pairs.length === 1 ? "" : "s"})` : "Select one or more adjacent pairs.";
+      if (convert) convert.disabled = !isCompleteFreightPairSelection(seats);
     };
     host.querySelectorAll("[data-freight-seat]:not(:disabled)").forEach((button) => button.addEventListener("click", () => {
       const selected = [...host.querySelectorAll("[data-freight-seat].selected")].map((node) => node.dataset.freightSeat);
-      const seat = button.dataset.freightSeat;
       if (button.classList.contains("selected")) button.classList.remove("selected");
-      else if (!selected.length) button.classList.add("selected");
-      else if (selected.length === 1 && isFreightPair([selected[0], seat])) button.classList.add("selected");
-      else alert("Choose the adjacent seat beside the selected seat on the same side of the aisle.");
+      else button.classList.add("selected");
       updateFreightCalculation();
     }));
     host.querySelector("[data-freight-settings]")?.addEventListener("click", async () => {
@@ -2742,10 +2745,29 @@
       seatBagTareKg.value = Number(data.seat_bag_tare_kg ?? 7).toFixed(1);
       freightSettingsDialog.showModal();
     });
-    host.querySelector("[data-convert-freight]")?.addEventListener("click", () => {
+    host.querySelector("[data-convert-freight]")?.addEventListener("click", async (event) => {
       const seats = [...host.querySelectorAll("[data-freight-seat].selected")].map((node) => node.dataset.freightSeat);
-      if (!isFreightPair(seats)) return;
-      openSeatBagWeightModal(f, seats);
+      if (!isCompleteFreightPairSelection(seats)) return;
+      const pairs = selectedFreightPairs(seats);
+      const frontSeats = [...new Set(pairs.flatMap((pair) => seatBagFrontConflicts(f, pair)))];
+      const override = frontSeats.length
+        ? confirm(`Passenger seated immediately in front at ${frontSeats.join(", ")}. Convert these seat bags with an override?`)
+        : false;
+      if (frontSeats.length && !override) return;
+      const convertButton = event.currentTarget;
+      convertButton.disabled = true;
+      try {
+        const allocations = (f.freightAllocation?.allocations || []).map((item) => ({ seats: item.seats, freight_kg: item.freight_kg, override: item.override }));
+        pairs.forEach((pair) => allocations.push({ seats: pair, freight_kg: 0, override }));
+        const resp = await fetch(freightUrl(f), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ allocations, aircraft_type: f.aircraft_type || "", reg: f.reg || "" }) });
+        const data = await resp.json();
+        if (!resp.ok || data.ok === false) throw new Error(data.error || "Unable to convert selected seats");
+        f.freightAllocation = data;
+        if (selectedFlight === f) renderCargoEditor(f);
+      } catch (err) {
+        alert(err.message || String(err));
+        convertButton.disabled = false;
+      }
     });
     host.querySelectorAll("[data-edit-seatbag]").forEach((button) => button.addEventListener("click", () => {
       const item = (f.freightAllocation?.allocations || []).find((row) => row.id === button.dataset.editSeatbag);
@@ -2792,7 +2814,7 @@
       return;
     }
     const summary = f.apgCargoWeightSummary;
-    if (f.apgCargoSummaryLoading) {
+    if (f.apgCargoSummaryLoading && !summary) {
       cargoWeightsSummary.innerHTML = '<div class="muted">Loading APG weight summary...</div>';
       return;
     }
@@ -2822,12 +2844,19 @@
       </div>
     ` : "";
     const overallState = summarizeWeightBalance(computed);
+    const detailsOpen = Boolean(f.apgCargoWeightDetailsOpen);
     cargoWeightsSummary.innerHTML = `
       <div class="cargo-safety-banner ${overallState.cls}">
         <div class="cargo-safety-title">${overallState.title}</div>
         <div class="cargo-safety-text">${overallState.text}</div>
         <div class="cargo-safety-focus">${overallState.subtext}</div>
       </div>
+      <details class="cargo-weight-accordion" ${detailsOpen ? "open" : ""}>
+        <summary>
+          <span>Weight and estimate details</span>
+          <small>${f.apgCargoSummaryLoading ? "Refreshing estimates..." : "Loaded, takeoff, landing and APG planning values"}</small>
+        </summary>
+        <div class="cargo-weight-accordion-body">
       <div class="cargo-weight-grid">
         ${computed.map((m) => `
           <div class="cargo-weight-card ${m.statusClass}">
@@ -2889,7 +2918,13 @@
       ${summary.aircraft_error ? `<div class="muted">Aircraft limits fallback warning: ${escapeHtml(summary.aircraft_error)}</div>` : ""}
       ${summary.ofp_error ? `<div class="muted">OFP warning: ${escapeHtml(summary.ofp_error)}</div>` : ""}
       ${summary.runway_analysis_error ? `<div class="muted">Runway analysis warning: ${escapeHtml(summary.runway_analysis_error)}</div>` : ""}
+        </div>
+      </details>
     `;
+    const accordion = cargoWeightsSummary.querySelector(".cargo-weight-accordion");
+    accordion?.addEventListener("toggle", () => {
+      f.apgCargoWeightDetailsOpen = accordion.open;
+    });
   }
 
   function renderDetailWeightBalanceSummary(f, summary) {

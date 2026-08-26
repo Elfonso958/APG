@@ -1178,6 +1178,49 @@ body {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
+.cargo-weight-accordion {
+  margin-bottom: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--panel) 96%, white 4%);
+  overflow: hidden;
+}
+.cargo-weight-accordion > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 14px;
+  cursor: pointer;
+  color: var(--text);
+  font-weight: 800;
+  list-style: none;
+  user-select: none;
+}
+.cargo-weight-accordion > summary::-webkit-details-marker {
+  display: none;
+}
+.cargo-weight-accordion > summary::after {
+  content: "Show";
+  color: var(--accent);
+  font-size: .78rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.cargo-weight-accordion[open] > summary::after {
+  content: "Hide";
+}
+.cargo-weight-accordion > summary small {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: .76rem;
+  font-weight: 600;
+}
+.cargo-weight-accordion-body {
+  display: grid;
+  gap: 14px;
+  padding: 2px 14px 14px;
+}
 
 .freight-editor { display: grid; gap: 16px; }
 .freight-aircraft { width: min(100%, 390px); margin: 0 auto; }
@@ -1200,9 +1243,13 @@ body {
 .seatbag-conflict-warning { padding: 10px 12px; border: 1px solid #dc2626; border-radius: 9px; background: color-mix(in srgb, #dc2626 10%, var(--panel)); color: #b91c1c; font-size: .78rem; font-weight: 800; }
 .freight-calculation { min-height: 42px; display: flex; align-items: center; padding: 10px 12px; border-radius: 10px; background: var(--panel-soft); color: var(--text-muted); font-weight: 700; }
 .freight-map-jump { display: grid; justify-items: center; gap: 3px; margin: 0 0 8px; padding-bottom: 8px; border-bottom: 1px dashed var(--line); color: var(--muted); font-size: .65rem; }
-.freight-hold-deck { width: 100%; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; align-items: stretch; padding: 9px 0; border-bottom: 1px dashed var(--line); }
+.freight-hold-deck { width: 100%; display: grid; grid-template-columns: 24px 72px 18px 72px; column-gap: 8px; row-gap: 6px; justify-content: start; align-items: stretch; padding: 9px 0; border-bottom: 1px dashed var(--line); }
 .freight-hold-deck-aft { margin-top: 7px; border-top: 1px dashed var(--line); border-bottom: 0; }
 .freight-hold-side, .freight-hold-centre { min-width: 0; display: grid; gap: 6px; }
+.freight-hold-deck > .freight-hold-side:first-child { grid-column: 2; grid-row: 1; }
+.freight-hold-deck > .freight-hold-side:last-child { grid-column: 4; grid-row: 1; }
+.freight-hold-deck > .freight-hold-centre { grid-column: 2 / 5; grid-row: 2; }
+.freight-hold-deck > .freight-hold-centre:empty { display: none; }
 .freight-map-hold { width: 100%; min-width: 0; box-sizing: border-box; display: grid; grid-template-rows: minmax(2.1em, auto) auto auto auto; align-content: start; gap: 3px; padding: 7px; border: 2px solid #64748b; border-radius: 9px; background: color-mix(in srgb, #64748b 12%, var(--panel)); }
 .freight-map-hold strong { color: var(--text); font-size: .65rem; line-height: 1.2; overflow-wrap: anywhere; }
 .freight-map-hold span, .freight-map-hold small { color: var(--muted); font-size: .58rem; }
