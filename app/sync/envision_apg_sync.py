@@ -4386,13 +4386,15 @@ def _is_atr_row_loading_layout(loading: list[dict], aircraft_reg: str | None = N
 
 def is_dcs_passenger_boarded_or_flown(p: dict) -> bool:
     """
-    Include all passengers except those in Booked status.
+    Include passengers represented in the operational seating configuration.
 
     Note:
       Function name is kept for compatibility with existing callers.
       Semantics now match ops requirement:
       - checked-in passengers ARE included
-      - booked-only passengers are excluded
+      - issued/ticketed passengers ARE included because their allocated seats
+        form part of the expected APG load
+      - booked-only, no-show and cancelled passengers are excluded
     """
     if not isinstance(p, dict):
         return False
@@ -4433,10 +4435,11 @@ def is_dcs_passenger_boarded_or_flown(p: dict) -> bool:
         return True
     if "CHECK" in s or s in {"CI", "CKI", "CKIN"}:
         return True
+    if "ISSUED" in s or "TICKET" in s:
+        return True
 
-    # Booked/not-checked-in states (excluded).
-    # Zenith may return "ISSUED" for passengers who are still not checked in.
-    if "BOOK" in s or s in {"R", "BKD", "ISSUED", "TICKETED"}:
+    # Explicitly non-carried/non-confirmed states.
+    if "BOOK" in s or "NO SHOW" in s or "NOSHOW" in s or "CANCEL" in s or s in {"R", "BKD"}:
         return False
 
     # Unknown status defaults to excluded to avoid including booked-like pax.
