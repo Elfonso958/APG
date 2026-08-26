@@ -1,6 +1,9 @@
 import unittest
 
-from app.sync.envision_apg_sync import apply_dcs_passengers_to_apg_rows
+from app.sync.envision_apg_sync import (
+    apply_dcs_passengers_to_apg_rows,
+    calculate_dcs_passenger_seat_loads,
+)
 
 
 def _station(seat):
@@ -31,6 +34,10 @@ class ApgPassengerSeatWeightTests(unittest.TestCase):
         masses = {row["label"]: row["customLoad"]["mass"] for row in loading}
         self.assertEqual(masses["Passenger 7C"], 101.0)
         self.assertEqual(masses["Passenger 10A"], 86.0)
+        self.assertEqual(
+            calculate_dcs_passenger_seat_loads(flight),
+            {"10A": 86.0, "7C": 101.0},
+        )
 
     def test_umnr_and_child_ssrs_override_incorrect_adult_type(self):
         loading = [_station("10A"), _station("2B")]

@@ -4460,6 +4460,7 @@ def apply_dcs_passengers_to_apg_rows(
     loading: list[dict],
     dcs_flight: dict,
     aircraft_reg: str | None = None,
+    log_loads: bool = True,
 ) -> None:
     """
     Take a Zenith DCS flight (with .Passengers list) and overwrite the APG
@@ -4479,6 +4480,9 @@ def apply_dcs_passengers_to_apg_rows(
         (if set > 0).
     """
     logger = logging.getLogger(__name__)
+    if not log_loads:
+        logger = logging.getLogger(f"{__name__}.seat_load_projection")
+        logger.disabled = True
 
     raw_pax_list = (dcs_flight or {}).get("Passengers") or []
     pax_list = [p for p in raw_pax_list if is_dcs_passenger_boarded_or_flown(p)]
@@ -4657,6 +4661,30 @@ def apply_dcs_passengers_to_apg_rows(
 
         # Make sure volume is at least present
         cl.setdefault("volume", 0.0)
+
+
+def calculate_dcs_passenger_seat_loads(dcs_flight: dict) -> dict[str, float]:
+    """Return the exact per-seat masses that the APG update function produces."""
+    station_seats = {
+        seat
+        for passenger in ((dcs_flight or {}).get("Passengers") or [])
+        if isinstance(passenger, dict)
+        for seat in [_get_pax_seat_from_dcs(passenger)]
+        if seat
+    }
+    loading = [
+        {
+            "label": f"Passenger {seat}",
+            "customLoad": {"mass": 0.0, "pob_count": 0.0, "volume": 0.0},
+        }
+        for seat in sorted(station_seats)
+    ]
+    apply_dcs_passengers_to_apg_rows(loading, dcs_flight, log_loads=False)
+    return {
+        row["label"].split(" ", 1)[1]: float((row.get("customLoad") or {}).get("mass") or 0.0)
+        for row in loading
+        if float((row.get("customLoad") or {}).get("mass") or 0.0) > 0
+    }
 
 
 def update_apg_plan_from_dcs_flight(

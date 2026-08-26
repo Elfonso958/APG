@@ -2263,14 +2263,9 @@
   }
 
   function estimateDcsPassengerMass(f) {
-    const pax = Array.isArray(f?.pax_list) ? f.pax_list : [];
-    let total = 0;
-    for (const p of pax) {
-      const status = classifyPaxStatus(p);
-      if (!["CHECKED", "BOARDED", "FLOWN"].includes(status)) continue;
-      total += estimatedPassengerMass(p);
-    }
-    return total;
+    return Object.values(f?.apg_passenger_seat_loads || {}).reduce(
+      (sum, mass) => sum + Math.max(0, Number(mass || 0)), 0
+    );
   }
 
   function estimatedPassengerMass(p) {
@@ -2930,11 +2925,10 @@
     loads.forEach((load, key) => {
       if (key.startsWith("passenger ") || /^row\s+\d+$/.test(key)) load.mass = 0;
     });
-    (f?.pax_list || []).forEach((pax) => {
-      if (!isOperationalCargoPax(pax)) return;
-      const seat = seatCodeForPax(pax);
-      if (!seat) return;
-      const passengerMass = estimatedPassengerMass(pax);
+    Object.entries(f?.apg_passenger_seat_loads || {}).forEach(([rawSeat, rawMass]) => {
+      const seat = normalizeSeatCode(rawSeat);
+      const passengerMass = Math.max(0, Number(rawMass || 0));
+      if (!seat || passengerMass <= 0) return;
       const individualLoad = loads.get(`passenger ${seat.toLowerCase()}`);
       if (individualLoad) {
         individualLoad.mass += passengerMass;

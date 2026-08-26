@@ -36,7 +36,8 @@ from .sync.envision_apg_sync import (
     APG_PASSWORD,                #add
     envision_get_flight_times,
     fetch_flights_for_day,       #add
-    envision_get_delays
+    envision_get_delays,
+    calculate_dcs_passenger_seat_loads,
 )
 
 # Simple in-memory cache for Envision flights per date window
@@ -1642,6 +1643,9 @@ def api_dcs_gantt_data():
             "pax_count": r.get("pax_count") or 0,
             "bags_kg": float(r.get("bags_kg") or 0),
             "pax_list": r.get("pax_list") or [],
+            "apg_passenger_seat_loads": calculate_dcs_passenger_seat_loads({
+                "Passengers": r.get("pax_list") or []
+            }),
             "charter_manifest_uploaded": bool(r.get("charter_manifest_uploaded")),
             "charter_manifest_filename": r.get("charter_manifest_filename") or "",
             "charter_manifest_updated_at": r.get("charter_manifest_updated_at"),
