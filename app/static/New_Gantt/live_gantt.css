@@ -1223,6 +1223,7 @@ body {
 }
 
 .freight-editor { display: grid; gap: 16px; }
+.freight-editor:not(.is-full-freighter) { padding-bottom: 84px; }
 .freight-aircraft { width: min(100%, 390px); margin: 0 auto; }
 .freight-aircraft-nose, .freight-aircraft-tail { width: 76%; height: 42px; margin: 0 auto; border: 2px solid var(--line); background: var(--panel); }
 .freight-aircraft-nose { border-bottom: 0; border-radius: 50% 50% 0 0 / 100% 100% 0 0; }
@@ -1233,7 +1234,7 @@ body {
 .freight-seat { min-width: 32px; min-height: 32px; border: 0; cursor: pointer; font-weight: 800; }
 .freight-seat.selected { outline: 3px solid var(--accent); outline-offset: 1px; background: color-mix(in srgb, var(--accent) 22%, white); }
 .freight-seat:disabled { cursor: not-allowed; opacity: .58; }
-.freight-convert-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; }
+.freight-convert-bar { position: fixed; left: 50%; bottom: max(18px, env(safe-area-inset-bottom)); z-index: 10020; width: min(620px, calc(100vw - 32px)); box-sizing: border-box; transform: translateX(-50%); display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: color-mix(in srgb, var(--panel) 96%, transparent); box-shadow: 0 18px 45px rgba(15, 23, 42, .28); backdrop-filter: blur(12px); }
 .freight-seatbag { width: 68px; height: 32px; min-width: 68px; min-height: 32px; padding: 2px 4px; border: 2px solid var(--accent); border-radius: 6px; background: color-mix(in srgb, var(--accent) 16%, var(--panel)); color: var(--text); display: grid; place-content: center; text-align: center; cursor: pointer; line-height: 1.05; }
 .freight-seatbag span { color: var(--accent); font-size: .48rem; font-weight: 800; }
 .freight-seatbag strong { font-size: .61rem; white-space: nowrap; }
@@ -1254,12 +1255,39 @@ body {
 .freight-map-hold strong { color: var(--text); font-size: .65rem; line-height: 1.2; overflow-wrap: anywhere; }
 .freight-map-hold span, .freight-map-hold small { color: var(--muted); font-size: .58rem; }
 .freight-map-hold input { width: 100%; min-width: 0; min-height: 31px; box-sizing: border-box; border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; background: var(--panel); color: var(--text); font: inherit; }
+.freight-editor.is-saab-map:not(.is-full-freighter) .freight-aircraft-map > .freight-map-hold {
+  width: 140px;
+  align-self: center;
+}
 .freight-saab-hold { width: 100%; display: grid; justify-items: center; margin-top: 4px; padding-top: 4px; }
 .freight-saab-hold .freight-map-hold { width: 100%; }
 .freight-map-hold-compact { width: 32px; height: 32px; min-width: 32px; min-height: 32px; padding: 2px; border: 1px solid #64748b; border-radius: 6px; background: #4b5563; color: #f9fafb; display: grid; place-content: center; text-align: center; cursor: pointer; line-height: 1; }
 .freight-map-hold-compact strong { font-size: .58rem; }
 .freight-map-hold-compact small { margin-top: 2px; font-size: .46rem; }
-@media (max-width: 760px) { .freight-convert-bar { align-items: stretch; flex-direction: column; } }
+.freight-editor.is-full-freighter .freight-saab-hold {
+  margin-top: 8px;
+  padding-top: 0;
+}
+.freight-editor.is-full-freighter .freight-map-hold-compact {
+  width: min(220px, calc(100% - 32px));
+  height: 64px;
+  min-width: 160px;
+  min-height: 64px;
+  padding: 8px 14px;
+  border-width: 2px;
+  border-radius: 10px;
+}
+.freight-editor.is-full-freighter .freight-map-hold-compact strong {
+  font-size: .82rem;
+}
+.freight-editor.is-full-freighter .freight-map-hold-compact small {
+  margin-top: 5px;
+  font-size: .7rem;
+}
+@media (max-width: 760px) {
+  .freight-editor:not(.is-full-freighter) { padding-bottom: 132px; }
+  .freight-convert-bar { bottom: max(10px, env(safe-area-inset-bottom)); width: calc(100vw - 20px); align-items: stretch; flex-direction: column; }
+}
 .cargo-hold-card {
   border: 1px solid var(--line);
   border-radius: 18px;

@@ -2615,7 +2615,7 @@
       ? atrHoldRow("aft")
       : `${saabZonesHtml}${holdsAt("aft-left")}${holdsAt("aft-center")}${holdsAt("aft-right")}`;
     const renderFreightPanel = () => cfg ? `
-      <div class="freight-editor" data-freight-editor>
+      <div class="freight-editor ${isFullFreighter ? "is-full-freighter" : ""} ${isSaabFreightMap ? "is-saab-map" : ""}" data-freight-editor>
         <div class="cargo-editor-head">
           <div><div class="card-title">${isFullFreighter ? "Freighter Cargo Zones" : "Seat-bag Freight"}</div><div class="card-sub">${isFullFreighter ? "This is a full freighter. Only the APG freight and cargo zones are shown." : "Select one or more adjacent seat pairs, convert them together, then click each seat bag to enter its weight."}</div></div>
           ${isFullFreighter ? "" : '<button type="button" class="btn btn-ghost" data-freight-settings>Settings</button>'}
