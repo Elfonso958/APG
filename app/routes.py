@@ -2116,6 +2116,35 @@ def _freight_payload(row: FlightFreightAllocation | None) -> dict:
     return {"seats": seats, "freight_kg": freight, "tare_kg": tare, "total_kg": freight + tare, "per_seat_kg": per_seat}
 
 
+def _valid_seat_bag_pair(seats: list[str], aircraft_type: str = "", reg: str = "") -> bool:
+    """A seat bag occupies exactly two adjacent seats on one side of the aisle."""
+    if len(seats) != 2:
+        return False
+    parsed = []
+    for seat in seats:
+        match = re.fullmatch(r"(\d+)([A-Z])", str(seat or "").strip().upper())
+        if not match:
+            return False
+        parsed.append((int(match.group(1)), match.group(2)))
+    if parsed[0][0] != parsed[1][0]:
+        return False
+    row_number = parsed[0][0]
+    letters = frozenset((parsed[0][1], parsed[1][1]))
+    type_code = str(aircraft_type or "").upper()
+    reg_code = str(reg or "").replace("-", "").upper()
+    is_atr = "ATR" in type_code or reg_code.startswith("ZKMC")
+    is_saab = any(code in type_code for code in ("SAAB", "SF3", "SF340")) or reg_code.startswith(("ZKCI", "ZKKR"))
+    if is_atr:
+        return letters in {frozenset(("A", "B")), frozenset(("C", "D"))}
+    if is_saab:
+        if reg_code == "ZKCIZ" and row_number == 11:
+            return letters in {frozenset(("A", "B")), frozenset(("C", "D"))}
+        if reg_code == "ZKCIT" and row_number == 11:
+            return letters == frozenset(("C", "D"))
+        return letters == frozenset(("B", "C"))
+    return False
+
+
 @api_bp.route("/dcs/freight/<string:flight_id>", methods=["GET", "PUT"])
 def api_dcs_freight(flight_id: str):
     row = FlightFreightAllocation.query.filter_by(envision_flight_id=flight_id).first()
@@ -2133,8 +2162,10 @@ def api_dcs_freight(flight_id: str):
         freight_kg = float(data.get("freight_kg") or 0.0)
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "Freight weight must be a number"}), 400
-    if freight_kg < 0 or (freight_kg > 0 and not seats):
-        return jsonify({"ok": False, "error": "Select at least one seat for a positive freight weight"}), 400
+    if freight_kg < 0:
+        return jsonify({"ok": False, "error": "Freight weight cannot be negative"}), 400
+    if freight_kg > 0 and not _valid_seat_bag_pair(seats, data.get("aircraft_type") or "", data.get("reg") or ""):
+        return jsonify({"ok": False, "error": "Select exactly two adjacent seats on the same side of the aisle"}), 400
     now = datetime.utcnow()
     if row is None:
         row = FlightFreightAllocation(envision_flight_id=flight_id, created_at=now)
@@ -2192,6 +2223,7 @@ def api_dcs_push_to_apg():
     dep          = (data.get("dep") or "").strip().upper()
     ades         = (data.get("ades") or "").strip().upper()     # NEW: for manifest + filename
     reg          = (data.get("reg") or "").strip().upper()      # NEW: for manifest
+    aircraft_type = (data.get("aircraft_type") or "").strip()
     flight_date  = data.get("date")               # "2025-11-21" (NZ-local string)
     designator   = (data.get("designator") or "").strip().upper()
     flight_no    = (data.get("flight_number") or "").strip()
@@ -2227,6 +2259,8 @@ def api_dcs_push_to_apg():
     if envision_flight_id is not None:
         freight_row = FlightFreightAllocation.query.filter_by(envision_flight_id=str(envision_flight_id)).first()
         freight_data = _freight_payload(freight_row)
+        if freight_data["freight_kg"] > 0 and not _valid_seat_bag_pair(freight_data["seats"], aircraft_type, reg):
+            return jsonify({"ok": False, "error": "Saved freight must use exactly two adjacent seats on the same side of the aisle. Update the freight allocation first."}), 409
         occupied = {
             str(p.get("Seat") or p.get("SeatNumber") or p.get("SeatNo") or "").strip().upper()
             for p in pax_list if isinstance(p, dict)
