@@ -1,8 +1,8 @@
-const CACHE_NAME = "crew-briefing-shell-v8";
+const CACHE_NAME = "crew-briefing-shell-v9";
 const SHELL_PATHS = [
   "/APG/dcs/crew-briefing",
-  "/APG/static/New_Gantt/live_gantt.css?v=crew-briefing-14",
-  "/APG/static/New_Gantt/live_gantt.js?v=crew-briefing-15",
+  "/APG/static/New_Gantt/live_gantt.css?v=crew-apg-1",
+  "/APG/static/New_Gantt/live_gantt.js?v=crew-apg-1",
   "/APG/static/New_Gantt/crew_briefing_icon.svg",
 ];
 

@@ -2027,8 +2027,10 @@ body[data-theme="dark"] .wb-inline-status.is-over {
 .briefing-flight-card { width: 100%; padding: 14px 16px 10px; border: 0; border-radius: 0; background: transparent; color: var(--text); text-align: left; font: inherit; cursor: pointer; }
 .briefing-flight-card:hover { border-color: var(--accent); transform: translateY(-1px); }
 .briefing-quick-actions { position: absolute; right: 48px; bottom: 8px; z-index: 2; display: flex; justify-content: flex-end; gap: 6px; margin: 0; }
-.briefing-mel-button, .briefing-seatmap-button { min-height: 30px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--accent); font: inherit; font-size: 10px; font-weight: 800; cursor: pointer; }
+.briefing-mel-button, .briefing-seatmap-button, .briefing-apg-button { display: inline-flex; align-items: center; justify-content: center; min-height: 30px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--accent); font: inherit; font-size: 10px; font-weight: 800; line-height: 1; text-decoration: none; cursor: pointer; }
 .briefing-mel-button { border-color: color-mix(in srgb, var(--danger) 55%, var(--line)); background: color-mix(in srgb, var(--danger) 12%, var(--panel)); color: var(--danger); }
+.briefing-apg-button { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); background: var(--accent-soft); }
+.briefing-apg-button:hover, .briefing-apg-button:focus-visible { border-color: var(--accent); background: var(--accent); color: #fff; }
 .briefing-mel-button:disabled { opacity: .65; cursor: wait; }
 .briefing-card-header { display: grid; grid-template-columns: auto minmax(150px, 1fr) auto; align-items: center; gap: 16px; }
 .briefing-schedule { display: grid; min-width: 72px; }
@@ -2087,7 +2089,7 @@ body[data-theme="dark"] .wb-inline-status.is-over {
   .briefing-day-heading { margin-top: 12px; font-size: .98rem; }
   .briefing-list-item { border-radius: 13px; }
   .briefing-flight-card { padding: 12px 12px 8px; }
-  .briefing-mel-button, .briefing-seatmap-button { min-height: 40px; padding-inline: 12px; }
+  .briefing-mel-button, .briefing-seatmap-button, .briefing-apg-button { min-height: 40px; padding-inline: 12px; }
   .briefing-card-header { grid-template-columns: auto 1fr; gap: 10px; }
   .briefing-status { grid-column: 1 / -1; justify-self: start; margin-top: -2px; }
   .briefing-route { font-size: 20px; }

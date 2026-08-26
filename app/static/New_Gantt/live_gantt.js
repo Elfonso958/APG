@@ -4195,7 +4195,7 @@
       "reg", "dep", "ades", "std_nz", "sta_nz", "std_sched_nz", "sta_sched_nz",
       "dep_actual_nz", "arr_actual_nz", "flight_number", "designator", "registration_id",
       "block_mins", "aircraft_type", "service_type", "flight_type", "flight_status", "adt",
-      "chd", "inf", "pax_count", "bags_kg", "envision_flight_id", "defect_count", "defect_total",
+      "chd", "inf", "pax_count", "bags_kg", "envision_flight_id", "apg_plan_id", "defect_count", "defect_total",
     ];
     const summary = {};
     allowed.forEach((key) => { summary[key] = f[key]; });
@@ -4303,6 +4303,7 @@
     briefingFlights.innerHTML = items.map((f, index) => {
       const counts = briefingPaxBreakdown(f);
       const defectCount = Number.isFinite(Number(f.defect_count)) ? Number(f.defect_count) : 0;
+      const apgPlanId = getApgPlanId(f.apg_plan_id);
       const crewMember = (f.crew || []).find((c) => String(c.employee_no || "").trim().toUpperCase() === crewCode);
       const operatingCrew = (f.crew || []).filter((c) => c.is_operating !== false);
       const crewOverview = operatingCrew.length
@@ -4358,6 +4359,7 @@
         <div class="briefing-quick-actions">
           <button class="briefing-seatmap-button" type="button" data-seatmap-flight-id="${escapeHtml(String(f.envision_flight_id || ""))}">Seatmap</button>
           ${defectCount > 0 ? `<button class="briefing-mel-button" type="button" data-mel-reg="${escapeHtml(String(f.reg || ""))}" data-mel-reg-id="${escapeHtml(String(f.registration_id || ""))}" aria-label="View ${defectCount} open aircraft defect${defectCount === 1 ? "" : "s"}">MEL ${defectCount}</button>` : ""}
+          ${apgPlanId ? `<a class="briefing-apg-button" href="https://fly.rocketroute.com/route/${encodeURIComponent(apgPlanId)}" target="_blank" rel="noopener noreferrer" aria-label="Open ${escapeHtml(flightCode(f))} in APG">APG</a>` : ""}
         </div>
         </article>`;
     }).join("");
