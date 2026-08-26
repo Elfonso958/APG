@@ -2688,6 +2688,21 @@
     const aftAircraftLoads = isAtrFreightMap
       ? atrHoldRow("aft")
       : `${saabZonesHtml}${holdsAt("aft-left")}${holdsAt("aft-center")}${holdsAt("aft-right")}`;
+    const cargoSummaryHtml = isFullFreighter ? `
+      <div class="cargo-summary-strip is-freighter">
+        <div class="cargo-summary-item cargo-summary-item-emphasis">
+          <span>Total cargo</span>
+          <strong id="cargoFreightKg">${totals.freightTotal.toFixed(1)} kg</strong>
+        </div>
+      </div>
+    ` : `
+      <div class="cargo-summary-strip">
+        <div class="cargo-summary-item"><span>DCS baggage total</span><strong>${totals.dcsBaggage.toFixed(1)} kg</strong></div>
+        <div class="cargo-summary-item"><span>Allocated baggage</span><strong id="cargoAllocatedKg">${totals.baggageTotal.toFixed(1)} kg</strong></div>
+        <div class="cargo-summary-item"><span>Cargo added</span><strong id="cargoFreightKg">${totals.freightTotal.toFixed(1)} kg</strong></div>
+        <div class="cargo-summary-item cargo-summary-item-emphasis"><span id="cargoRemainingStatus">Baggage remaining</span><strong id="cargoRemainingKg">${Math.abs(totals.remaining).toFixed(1)} kg</strong></div>
+      </div>
+    `;
     const renderFreightPanel = () => cfg ? `
       <div class="freight-editor ${isFullFreighter ? "is-full-freighter" : ""} ${isSaabFreightMap ? "is-saab-map" : ""}" data-freight-editor>
         <div class="cargo-editor-head freight-editor-head">
@@ -2703,6 +2718,7 @@
           </div>
           <div class="freight-aircraft-tail" aria-hidden="true"></div>
         </div>
+        ${cargoSummaryHtml}
       </div>
     ` : '<div class="muted">A freight seat map is not available for this aircraft type.</div>';
     host.innerHTML = `
@@ -2710,36 +2726,18 @@
         ${f.cargoAllocationStale ? `<div class="cargo-stale-warning"><div><strong>Out of date</strong><span>Cargo or seat-bag weights were updated on another device.</span></div><button type="button" class="btn btn-primary" data-refresh-saved-cargo>Refresh</button></div>` : ""}
         <div class="cargo-editor-head">
           <div>
-            <div class="card-title">Cargo Allocation</div>
-            <div class="card-sub">Split baggage and cargo by hold, then check the live limit warning above.</div>
+            <div class="card-title">${isFullFreighter ? "Freight Allocation" : "Cargo Allocation"}</div>
+            <div class="card-sub">${isFullFreighter ? "Allocate cargo by aircraft zone, then check the live limit warning above." : "Split baggage and cargo by hold, then check the live limit warning above."}</div>
           </div>
-          <div class="weight-status-pill ${Math.abs(totals.remaining) < 0.05 ? "is-ok" : totals.remaining > 0 ? "is-near" : "is-over"}" id="cargoRemainingBadge">
+          ${isFullFreighter ? "" : `<div class="weight-status-pill ${Math.abs(totals.remaining) < 0.05 ? "is-ok" : totals.remaining > 0 ? "is-near" : "is-over"}" id="cargoRemainingBadge">
             ${Math.abs(totals.remaining) < 0.05 ? "Baggage complete" : totals.remaining > 0 ? "Baggage remaining" : "Over allocated"}
-          </div>
+          </div>`}
           </div>
           <div class="cargo-editor-tabs" role="tablist" aria-label="Cargo allocation mode">
             <button type="button" class="cargo-editor-tab is-active" data-cargo-tab="freight">Freight</button>
           </div>
         <div class="cargo-editor-panel" data-cargo-panel="freight">
           ${renderFreightPanel()}
-        </div>
-        <div class="cargo-summary-strip">
-          <div class="cargo-summary-item">
-            <span>DCS baggage total</span>
-            <strong>${totals.dcsBaggage.toFixed(1)} kg</strong>
-          </div>
-          <div class="cargo-summary-item">
-            <span>Allocated baggage</span>
-            <strong id="cargoAllocatedKg">${totals.baggageTotal.toFixed(1)} kg</strong>
-          </div>
-          <div class="cargo-summary-item">
-            <span>Cargo added</span>
-            <strong id="cargoFreightKg">${totals.freightTotal.toFixed(1)} kg</strong>
-          </div>
-          <div class="cargo-summary-item cargo-summary-item-emphasis">
-            <span id="cargoRemainingStatus">Baggage remaining</span>
-            <strong id="cargoRemainingKg">${Math.abs(totals.remaining).toFixed(1)} kg</strong>
-          </div>
         </div>
       </div>
     `;
@@ -2858,7 +2856,10 @@
         }
         if (!resp.ok || data.ok === false) throw new Error(data.error || "Unable to convert selected seats");
         f.freightAllocation = data;
-        if (selectedFlight === f) renderCargoEditor(f);
+        if (selectedFlight === f) {
+          renderCargoEditor(f);
+          renderCargoWeightsSummary(f);
+        }
       } catch (err) {
         alert(err.message || String(err));
         convertButton.disabled = false;
@@ -2906,6 +2907,60 @@
     if (selectedFlight === f) renderCargoEditor(f);
   }
 
+  function projectedLoadedTrim(f, apgTrim) {
+    if (!apgTrim?.available || !Array.isArray(apgTrim.station_loads)) return apgTrim;
+    const loads = new Map(apgTrim.station_loads.map((row) => [String(row.label || "").trim().toLowerCase(), {
+      label: String(row.label || ""), mass: Number(row.mass || 0), arm: Number(row.arm),
+    }]));
+    (f?.apgCargoAllocations || []).forEach((row) => {
+      const load = loads.get(String(row.label || "").trim().toLowerCase());
+      if (load) load.mass = Math.max(0, Number(row.baggage_kg || 0) + Number(row.freight_kg || 0));
+    });
+    const atrSeatBagMassByRow = new Map();
+    (f?.freightAllocation?.allocations || []).forEach((allocation) => {
+      const seats = allocation.seats || [];
+      const perSeat = Number(allocation.per_seat_kg || 0);
+      let usedIndividualStations = false;
+      seats.forEach((seat) => {
+        const load = loads.get(`passenger ${String(seat).trim().toLowerCase()}`);
+        if (load) {
+          load.mass = perSeat;
+          usedIndividualStations = true;
+        }
+      });
+      if (!usedIndividualStations && seats.length) {
+        const match = String(seats[0]).match(/^(\d+)/);
+        if (match) atrSeatBagMassByRow.set(match[1], (atrSeatBagMassByRow.get(match[1]) || 0) + Number(allocation.total_kg || 0));
+      }
+    });
+    atrSeatBagMassByRow.forEach((mass, rowNumber) => {
+      const load = loads.get(`row ${rowNumber}`);
+      if (load) load.mass += mass;
+    });
+    let mass = 0;
+    let moment = 0;
+    loads.forEach((load) => {
+      if (!Number.isFinite(load.arm) || load.mass <= 0) return;
+      mass += load.mass;
+      moment += load.mass * load.arm;
+    });
+    if (mass <= 0) return apgTrim;
+    const cgArm = moment / mass;
+    const lemac = Number(apgTrim.lemac);
+    const mac = Number(apgTrim.mac);
+    const forwardArm = Number(apgTrim.scale_forward_arm);
+    const aftArm = Number(apgTrim.scale_aft_arm);
+    return {
+      ...apgTrim,
+      mass,
+      moment,
+      cg_arm: cgArm,
+      percent_mac: Number.isFinite(lemac) && mac > 0 ? ((cgArm - lemac) / mac) * 100 : apgTrim.percent_mac,
+      position_percent: aftArm > forwardArm ? Math.max(0, Math.min(100, ((cgArm - forwardArm) / (aftArm - forwardArm)) * 100)) : 50,
+      projected: true,
+    };
+  }
+
   function renderCargoWeightsSummary(f) {
     if (!cargoWeightsSummary) return;
     if (!getApgPlanId(f?.apg_plan_id)) {
@@ -2944,11 +2999,11 @@
     ` : "";
     const overallState = summarizeWeightBalance(computed);
     const detailsOpen = Boolean(f.apgCargoWeightDetailsOpen);
-    const trim = summary.loaded_trim || null;
+    const trim = projectedLoadedTrim(f, summary.loaded_trim || null);
     const trimHtml = trim?.available ? `
       <section class="cargo-trim-card" aria-label="Loaded aircraft trim">
         <div class="cargo-trim-heading">
-          <div><strong>Loaded Trim</strong><span>Calculated locally from APG station weights and arms</span></div>
+          <div><strong>Loaded Trim</strong><span>Live calculation from the weights entered below and APG station arms</span></div>
           <div class="cargo-trim-value">${Number(trim.percent_mac).toFixed(1)}% MAC</div>
         </div>
         <div class="cargo-trim-scale">
@@ -5449,7 +5504,10 @@
       if (!resp.ok || data.ok === false) throw new Error(data.error || "Unable to save seat bag");
       f.freightAllocation = data;
       seatBagWeightDialog.close();
-      if (selectedFlight === f) renderCargoEditor(f);
+      if (selectedFlight === f) {
+        renderCargoEditor(f);
+        renderCargoWeightsSummary(f);
+      }
     } catch (err) { alert(err.message || String(err)); }
     finally { saveSeatBagWeight.disabled = false; }
   });
@@ -5469,7 +5527,10 @@
       if (!resp.ok || data.ok === false) throw new Error(data.error || "Unable to remove seat bag");
       f.freightAllocation = data;
       seatBagWeightDialog.close();
-      if (selectedFlight === f) renderCargoEditor(f);
+      if (selectedFlight === f) {
+        renderCargoEditor(f);
+        renderCargoWeightsSummary(f);
+      }
     } catch (err) { alert(err.message || String(err)); }
     finally { removeSeatBag.disabled = false; }
   });

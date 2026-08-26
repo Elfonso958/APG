@@ -2598,6 +2598,7 @@ def _calculate_apg_loaded_trim(plan: dict, aircraft_mb: dict) -> dict:
     total_mass = 0.0
     total_moment = 0.0
     missing_stations = []
+    station_loads = []
     loading = ((plan.get("massAndBalance") or {}).get("loading") or [])
     for load in loading:
         label = str(load.get("label") or "").strip()
@@ -2605,15 +2606,16 @@ def _calculate_apg_loaded_trim(plan: dict, aircraft_mb: dict) -> dict:
             mass = float(((load.get("customLoad") or {}).get("mass")) or 0)
         except (TypeError, ValueError):
             continue
-        if mass <= 0:
-            continue
         key = label.casefold()
         arm = bem_arm if key in {"bew", "bem", str(bem.get("label") or "").strip().casefold()} else station_arms.get(key)
         if arm is None:
-            missing_stations.append(label)
+            if mass > 0:
+                missing_stations.append(label)
             continue
-        total_mass += mass
-        total_moment += mass * arm
+        station_loads.append({"label": label, "mass": mass, "arm": arm})
+        if mass > 0:
+            total_mass += mass
+            total_moment += mass * arm
     if total_mass <= 0:
         return {"available": False, "reason": "No APG loading mass with station arms was found"}
 
@@ -2628,6 +2630,7 @@ def _calculate_apg_loaded_trim(plan: dict, aircraft_mb: dict) -> dict:
     return {
         "available": True, "mass": total_mass, "moment": total_moment,
         "cg_arm": cg_arm, "percent_mac": percent_mac, "within_envelope": None,
+        "lemac": lemac, "mac": mac_length, "station_loads": station_loads,
         "scale_forward_arm": forward_arm, "scale_aft_arm": aft_arm,
         "position_percent": max(0.0, min(100.0, position)),
         "missing_stations": sorted(set(missing_stations)),
