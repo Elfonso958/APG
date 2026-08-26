@@ -2104,16 +2104,33 @@ def api_envision_passenger_sync_run():
 
 
 def _freight_payload(row: FlightFreightAllocation | None) -> dict:
-    seats = []
+    raw = []
     if row is not None:
         try:
-            seats = json.loads(row.seats_json or "[]")
+            raw = json.loads(row.seats_json or "[]")
         except (TypeError, ValueError):
-            seats = []
-    freight = float(row.freight_kg or 0.0) if row else 0.0
+            raw = []
     tare = float(row.tare_kg or 0.0) if row else 0.0
-    per_seat = (freight + tare) / len(seats) if seats else 0.0
-    return {"seats": seats, "freight_kg": freight, "tare_kg": tare, "total_kg": freight + tare, "per_seat_kg": per_seat}
+    if raw and all(isinstance(v, str) for v in raw):
+        raw = [{"seats": raw, "freight_kg": float(row.freight_kg or 0), "override": False}]
+    allocations = []
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict): continue
+        seats = sorted({str(v).strip().upper() for v in item.get("seats", []) if str(v).strip()})
+        freight = max(0.0, float(item.get("freight_kg") or 0))
+        total = freight + tare
+        allocations.append({"id": "+".join(seats), "seats": seats, "freight_kg": freight, "tare_kg": tare, "total_kg": total, "per_seat_kg": total / 2 if len(seats) == 2 else 0, "override": bool(item.get("override"))})
+    return {"allocations": allocations, "tare_kg": tare, "freight_kg": sum(v["freight_kg"] for v in allocations), "total_kg": sum(v["total_kg"] for v in allocations)}
+
+
+def _seat_bag_front_conflicts(seats: list[str], occupied: set[str]) -> list[str]:
+    conflicts = []
+    for seat in seats:
+        m = re.fullmatch(r"(\d+)([A-Z])", seat)
+        if m and int(m.group(1)) > 1:
+            front = f"{int(m.group(1)) - 1}{m.group(2)}"
+            if front in occupied: conflicts.append(front)
+    return sorted(set(conflicts))
 
 
 def _valid_seat_bag_pair(seats: list[str], aircraft_type: str = "", reg: str = "") -> bool:
@@ -2157,21 +2174,25 @@ def api_dcs_freight(flight_id: str):
         return jsonify({"ok": True, **payload})
 
     data = request.get_json(silent=True) or {}
-    seats = sorted({str(s).strip().upper() for s in (data.get("seats") or []) if str(s).strip()})
-    try:
-        freight_kg = float(data.get("freight_kg") or 0.0)
-    except (TypeError, ValueError):
-        return jsonify({"ok": False, "error": "Freight weight must be a number"}), 400
-    if freight_kg < 0:
-        return jsonify({"ok": False, "error": "Freight weight cannot be negative"}), 400
-    if freight_kg > 0 and not _valid_seat_bag_pair(seats, data.get("aircraft_type") or "", data.get("reg") or ""):
-        return jsonify({"ok": False, "error": "Select exactly two adjacent seats on the same side of the aisle"}), 400
+    incoming = data.get("allocations")
+    if incoming is None:
+        incoming = [{"seats": data.get("seats") or [], "freight_kg": data.get("freight_kg") or 0, "override": data.get("override", False)}] if data.get("seats") else []
+    if not isinstance(incoming, list): return jsonify({"ok": False, "error": "Bad allocations value"}), 400
+    allocations, used = [], set()
+    for item in incoming:
+        seats = sorted({str(s).strip().upper() for s in (item.get("seats") or []) if str(s).strip()})
+        try: freight_kg = float(item.get("freight_kg") or 0)
+        except (TypeError, ValueError): return jsonify({"ok": False, "error": "Freight weight must be a number"}), 400
+        if freight_kg < 0 or not _valid_seat_bag_pair(seats, data.get("aircraft_type") or "", data.get("reg") or ""):
+            return jsonify({"ok": False, "error": "Every seat bag must use two adjacent seats on the same side"}), 400
+        if used.intersection(seats): return jsonify({"ok": False, "error": "A seat can only belong to one seat bag"}), 400
+        used.update(seats); allocations.append({"seats": seats, "freight_kg": freight_kg, "override": bool(item.get("override"))})
     now = datetime.utcnow()
     if row is None:
         row = FlightFreightAllocation(envision_flight_id=flight_id, created_at=now)
-    row.seats_json = json.dumps(seats)
-    row.freight_kg = freight_kg
-    row.tare_kg = default_tare if seats else 0.0
+    row.seats_json = json.dumps(allocations)
+    row.freight_kg = sum(v["freight_kg"] for v in allocations)
+    row.tare_kg = default_tare
     row.updated_at = now
     db.session.add(row)
     db.session.commit()
@@ -2259,16 +2280,16 @@ def api_dcs_push_to_apg():
     if envision_flight_id is not None:
         freight_row = FlightFreightAllocation.query.filter_by(envision_flight_id=str(envision_flight_id)).first()
         freight_data = _freight_payload(freight_row)
-        if freight_data["freight_kg"] > 0 and not _valid_seat_bag_pair(freight_data["seats"], aircraft_type, reg):
-            return jsonify({"ok": False, "error": "Saved freight must use exactly two adjacent seats on the same side of the aisle. Update the freight allocation first."}), 409
         occupied = {
             str(p.get("Seat") or p.get("SeatNumber") or p.get("SeatNo") or "").strip().upper()
             for p in pax_list if isinstance(p, dict)
         }
-        conflicts = sorted(set(freight_data["seats"]) & occupied)
-        if conflicts:
-            return jsonify({"ok": False, "error": f"Freight seats are now occupied: {', '.join(conflicts)}. Update the freight allocation first."}), 409
-        seat_freight_loads = [{"seat": seat, "mass_kg": freight_data["per_seat_kg"]} for seat in freight_data["seats"]]
+        for allocation in freight_data["allocations"]:
+            conflicts = sorted(set(allocation["seats"]) & occupied)
+            if conflicts: return jsonify({"ok": False, "error": f"Freight seats are now occupied: {', '.join(conflicts)}. Update the freight allocation first."}), 409
+            front = _seat_bag_front_conflicts(allocation["seats"], occupied)
+            if front and not allocation["override"]: return jsonify({"ok": False, "error": f"Passenger seated immediately in front at {', '.join(front)}. Override or move the seat bag."}), 409
+            seat_freight_loads.extend({"seat": seat, "mass_kg": allocation["per_seat_kg"]} for seat in allocation["seats"])
 
     if not (dep and flight_date and designator and flight_no):
         return jsonify({

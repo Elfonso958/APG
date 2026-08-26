@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='New_Gantt/live_gantt.css') }}?v=hold-layout-1">
+  <link rel="stylesheet" href="{{ url_for('static', filename='New_Gantt/live_gantt.css') }}?v=multi-seatbag-1">
 </head>
 <body data-theme="light" class="view-{{ page_view or 'gantt' }}">
   <div id="new-gantt-app"
@@ -347,6 +347,7 @@
       <div class="status-body seatbag-weight-body">
         <div id="seatBagWeightSeats" class="card-sub"></div>
         <div id="seatBagConflictWarning" class="seatbag-conflict-warning" hidden></div>
+        <label id="seatBagOverrideWrap" class="switch" hidden><input id="seatBagOverride" type="checkbox"><span>Override passenger-in-front warning</span></label>
         <label class="cargo-field">
           <span>Freight weight (kg)</span>
           <input id="seatBagFreightKg" class="form-control" type="number" min="0" step="0.1" value="0">
@@ -629,6 +630,6 @@
     </form>
   </dialog>
 
-  <script src="{{ url_for('static', filename='New_Gantt/live_gantt.js') }}?v=seatbag-modal-1"></script>
+  <script src="{{ url_for('static', filename='New_Gantt/live_gantt.js') }}?v=multi-seatbag-1"></script>
 </body>
 </html>

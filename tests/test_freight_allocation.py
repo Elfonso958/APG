@@ -5,6 +5,7 @@ from unittest.mock import patch
 from app import create_app, db
 from app.config import Config
 from app.models import AppConfig, FlightFreightAllocation
+from app.routes import _seat_bag_front_conflicts
 from app.sync.envision_apg_sync import update_apg_plan_from_dcs_row
 
 
@@ -28,12 +29,12 @@ class FreightAllocationTest(unittest.TestCase):
         response = self.client.put("/api/dcs/freight/123", json={"seats": ["2B", "2A"], "freight_kg": 100, "aircraft_type": "ATR72"})
         self.assertEqual(response.status_code, 200)
         data = response.get_json()
-        self.assertEqual(data["seats"], ["2A", "2B"])
+        self.assertEqual(data["allocations"][0]["seats"], ["2A", "2B"])
         self.assertEqual(data["total_kg"], 107.0)
-        self.assertEqual(data["per_seat_kg"], 53.5)
+        self.assertEqual(data["allocations"][0]["per_seat_kg"], 53.5)
 
         saved = FlightFreightAllocation.query.filter_by(envision_flight_id="123").one()
-        self.assertEqual(json.loads(saved.seats_json), ["2A", "2B"])
+        self.assertEqual(json.loads(saved.seats_json)[0]["seats"], ["2A", "2B"])
 
     def test_setting_updates_saved_allocations(self):
         self.client.put("/api/dcs/freight/123", json={"seats": ["1A", "1B"], "freight_kg": 100, "aircraft_type": "ATR72"})
@@ -41,7 +42,19 @@ class FreightAllocationTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         data = self.client.get("/api/dcs/freight/123").get_json()
         self.assertEqual(data["total_kg"], 108.0)
-        self.assertEqual(data["per_seat_kg"], 54.0)
+        self.assertEqual(data["allocations"][0]["per_seat_kg"], 54.0)
+
+    def test_multiple_pairs_each_receive_tare(self):
+        response = self.client.put("/api/dcs/freight/123", json={"aircraft_type": "ATR72", "allocations": [
+            {"seats": ["9A", "9B"], "freight_kg": 50},
+            {"seats": ["10C", "10D"], "freight_kg": 100, "override": True},
+        ]})
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(len(data["allocations"]), 2)
+        self.assertEqual(data["total_kg"], 164.0)
+        self.assertEqual(data["allocations"][0]["per_seat_kg"], 28.5)
+        self.assertEqual(data["allocations"][1]["per_seat_kg"], 53.5)
 
     def test_rejects_seats_from_different_rows(self):
         response = self.client.put("/api/dcs/freight/123", json={"seats": ["2A", "10A"], "freight_kg": 100, "aircraft_type": "ATR72"})
@@ -50,6 +63,10 @@ class FreightAllocationTest(unittest.TestCase):
     def test_rejects_atr_seats_across_the_aisle(self):
         response = self.client.put("/api/dcs/freight/123", json={"seats": ["2B", "2C"], "freight_kg": 100, "aircraft_type": "ATR72"})
         self.assertEqual(response.status_code, 400)
+
+    def test_front_conflict_only_checks_same_columns_immediate_row(self):
+        occupied = {"9C", "9D", "9A", "8C"}
+        self.assertEqual(_seat_bag_front_conflicts(["10C", "10D"], occupied), ["9C", "9D"])
 
     @patch("app.sync.envision_apg_sync.apg_plan_get")
     def test_apg_individual_seats_receive_split_weight(self, plan_get):

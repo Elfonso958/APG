@@ -107,6 +107,8 @@
   const seatBagWeightTitle = document.getElementById("seatBagWeightTitle");
   const seatBagWeightSeats = document.getElementById("seatBagWeightSeats");
   const seatBagConflictWarning = document.getElementById("seatBagConflictWarning");
+  const seatBagOverrideWrap = document.getElementById("seatBagOverrideWrap");
+  const seatBagOverride = document.getElementById("seatBagOverride");
   const seatBagFreightKg = document.getElementById("seatBagFreightKg");
   const seatBagWeightCalculation = document.getElementById("seatBagWeightCalculation");
   const saveSeatBagWeight = document.getElementById("saveSeatBagWeight");
@@ -255,6 +257,9 @@
   let selectedFlight = null;
   let seatBagWeightFlight = null;
   let seatBagWeightSeatCodes = [];
+  let seatBagWeightMode = "seatbag";
+  let freightHoldWeightRow = null;
+  let seatBagEditingId = "";
   let charterManifestFlight = null;
   let charterManifestRows = [];
   let axisScrollEl = null;
@@ -2362,10 +2367,18 @@
     const occupied = new Set((f?.pax_list || []).map((p) => String(p.Seat || p.SeatNumber || p.SeatNo || "").trim().toUpperCase()).filter(Boolean));
     return (seats || []).filter((seat) => occupied.has(String(seat).toUpperCase()));
   }
+  function seatBagFrontConflicts(f, seats) {
+    const occupied = new Set((f?.pax_list || []).map((p) => String(p.Seat || p.SeatNumber || p.SeatNo || "").trim().toUpperCase()).filter(Boolean));
+    return seats.map((seat) => { const m = String(seat).match(/^(\d+)([A-Z])$/); return m && Number(m[1]) > 1 ? `${Number(m[1]) - 1}${m[2]}` : ""; }).filter((seat) => seat && occupied.has(seat));
+  }
 
   function updateSeatBagModalCalculation() {
     if (!seatBagWeightFlight) return;
     const freight = Math.max(0, Number(seatBagFreightKg?.value || 0));
+    if (seatBagWeightMode === "hold") {
+      if (seatBagWeightCalculation) seatBagWeightCalculation.textContent = `Hold freight: ${freight.toFixed(1)} kg`;
+      return;
+    }
     const tare = Number(seatBagWeightFlight.freightAllocation?.tare_kg ?? 7);
     const total = freight + tare;
     if (seatBagWeightCalculation) seatBagWeightCalculation.textContent = `${freight.toFixed(1)} kg freight + ${tare.toFixed(1)} kg tare = ${total.toFixed(1)} kg total, ${(total / 2).toFixed(1)} kg per seat`;
@@ -2374,17 +2387,42 @@
   function openSeatBagWeightModal(f, seats) {
     if (!f || !seatBagWeightDialog) return;
     seatBagWeightFlight = f;
+    seatBagWeightMode = "seatbag";
+    freightHoldWeightRow = null;
     seatBagWeightSeatCodes = [...seats];
-    const savedSeats = f.freightAllocation?.seats || [];
-    const editingSaved = savedSeats.length === 2 && savedSeats.every((seat) => seats.includes(seat));
+    const saved = (f.freightAllocation?.allocations || []).find((item) => item.seats.length === 2 && item.seats.every((seat) => seats.includes(seat)));
+    const editingSaved = Boolean(saved);
+    seatBagEditingId = saved?.id || "";
     const conflicts = seatBagPassengerConflicts(f, seats);
     seatBagWeightTitle.textContent = editingSaved ? "Edit Seat Bag Weight" : "Convert to Seat Bag";
     seatBagWeightSeats.textContent = `Seats ${seats.join(" + ")}`;
-    seatBagFreightKg.value = Number(editingSaved ? f.freightAllocation?.freight_kg || 0 : 0).toFixed(1);
+    seatBagFreightKg.value = Number(saved?.freight_kg || 0).toFixed(1);
     seatBagConflictWarning.hidden = !conflicts.length;
     seatBagConflictWarning.textContent = conflicts.length ? `Passenger assigned to ${conflicts.join(", ")}. Remove or move this seat bag before submitting to APG.` : "";
     saveSeatBagWeight.disabled = conflicts.length > 0;
+    const front = seatBagFrontConflicts(f, seats);
+    seatBagOverrideWrap.hidden = !front.length;
+    seatBagOverride.checked = Boolean(saved?.override);
+    if (!conflicts.length && front.length) { seatBagConflictWarning.hidden = false; seatBagConflictWarning.textContent = `Passenger seated immediately in front at ${front.join(", ")}. Override is required to save this position.`; }
     removeSeatBag.hidden = !editingSaved;
+    updateSeatBagModalCalculation();
+    seatBagWeightDialog.showModal();
+    queueMicrotask(() => seatBagFreightKg.focus());
+  }
+
+  function openFreightHoldWeightModal(f, row) {
+    if (!f || !row || !seatBagWeightDialog) return;
+    seatBagWeightFlight = f;
+    seatBagWeightMode = "hold";
+    freightHoldWeightRow = row;
+    seatBagWeightSeatCodes = [];
+    seatBagWeightTitle.textContent = `${row.label} Freight`;
+    seatBagWeightSeats.textContent = "Enter the freight carried in this hold.";
+    seatBagFreightKg.value = Number(row.freight_kg || 0).toFixed(1);
+    seatBagConflictWarning.hidden = true;
+    seatBagOverrideWrap.hidden = true;
+    saveSeatBagWeight.disabled = false;
+    removeSeatBag.hidden = true;
     updateSeatBagModalCalculation();
     seatBagWeightDialog.showModal();
     queueMicrotask(() => seatBagFreightKg.focus());
@@ -2464,8 +2502,8 @@
         `).join("")}
       </div>
     ` : '<div class="muted">Row freight is only available when APG exposes row loading stations.</div>';
-    const allocation = f.freightAllocation || { seats: [], freight_kg: 0, tare_kg: 7, total_kg: 0, per_seat_kg: 0 };
-    const selectedFreightSeats = new Set(allocation.seats || []);
+    const allocations = f.freightAllocation?.allocations || [];
+    const allocatedFreightSeats = new Set(allocations.flatMap((item) => item.seats || []));
     const occupiedSeats = new Set((f.pax_list || []).map((p) => String(p.Seat || p.SeatNumber || p.SeatNo || "").trim().toUpperCase()).filter(Boolean));
     const cfg = seatmapConfigForFlight(f);
     const freightPairs = [];
@@ -2485,17 +2523,18 @@
       });
     }
     const isFreightPair = (seats) => freightPairs.some((pair) => pair.every((seat) => seats.includes(seat)) && seats.length === 2);
-    const hasConvertedPair = isFreightPair([...selectedFreightSeats]);
     const renderFreightSeat = (seat) => {
       const occupied = occupiedSeats.has(seat);
-      return `<button type="button" class="seat freight-seat ${selectedFreightSeats.has(seat) ? "selected" : ""} ${occupied ? "seat-adult" : "seat-empty"}" data-freight-seat="${escapeHtml(seat)}" ${occupied ? "disabled title=\"Occupied seat\"" : ""}>${escapeHtml(seat.replace(/^\d+/, ""))}</button>`;
+      return `<button type="button" class="seat freight-seat ${occupied ? "seat-adult" : "seat-empty"}" data-freight-seat="${escapeHtml(seat)}" ${occupied || allocatedFreightSeats.has(seat) ? "disabled" : ""}>${escapeHtml(seat.replace(/^\d+/, ""))}</button>`;
     };
     const renderFreightBlock = (seats) => {
-      const converted = seats.length === 2 && seats.every((seat) => selectedFreightSeats.has(seat)) && selectedFreightSeats.size === 2;
-      if (converted) {
+      const allocation = allocations.find((item) => item.seats.length === 2 && item.seats.every((seat) => seats.includes(seat)));
+      if (allocation) {
         const conflicts = seatBagPassengerConflicts(f, seats);
-        return `<button type="button" class="freight-seatbag ${conflicts.length ? "has-conflict" : ""}" data-edit-seatbag title="${conflicts.length ? `Passenger assigned: ${escapeHtml(conflicts.join(", "))}` : `Edit seat bag ${escapeHtml(seats.join(" + "))}`}">
-          <span>${conflicts.length ? "⚠ Passenger" : "Seat Bag"}</span>
+        const front = seatBagFrontConflicts(f, seats);
+        const warning = conflicts.length || (front.length && !allocation.override);
+        return `<button type="button" class="freight-seatbag ${warning ? "has-conflict" : ""}" data-edit-seatbag="${escapeHtml(allocation.id)}">
+          <span>${conflicts.length ? "⚠ Occupied" : front.length ? "⚠ In front" : "Seat Bag"}</span>
           <strong>${Number(allocation.freight_kg || 0).toFixed(1)} kg</strong>
         </button>`;
       }
@@ -2510,8 +2549,9 @@
       </div>`).join("");
     const isAtrFreightMap = Boolean(cfg && (String(f.aircraft_type || "").toUpperCase().includes("ATR") || String(f.reg || "").toUpperCase().startsWith("ZK-MC")));
     const isSaabFreightMap = Boolean(cfg && !isAtrFreightMap);
-    const mapHold = (row) => {
+    const mapHold = (row, compact = false) => {
       const label = String(row.label || "");
+      if (compact) return `<button type="button" class="freight-map-hold-compact" data-compact-hold="${escapeHtml(label)}" title="${escapeHtml(label)} — ${Number(row.freight_kg || 0).toFixed(1)} kg freight"><strong>${escapeHtml(label.replace(/^HOLD\s*/i, ""))}</strong><small>${Number(row.freight_kg || 0).toFixed(0)}</small></button>`;
       return `<label class="freight-map-hold" title="${escapeHtml(label)}">
         <strong>${escapeHtml(label)}</strong>
         <span>Freight kg</span>
@@ -2521,19 +2561,30 @@
     };
     const holdLocation = (row) => {
       const label = String(row.label || "").trim().toUpperCase();
-      if (isSaabFreightMap && /(^|\s)C1($|\s)/.test(label)) return "saab-c1";
-      if (isSaabFreightMap && /(^|\s)C2($|\s)/.test(label)) return "saab-c2";
       const side = /(^|\s)(RH|RIGHT)($|\s)/.test(label) ? "right" : /(^|\s)(LH|LEFT)($|\s)/.test(label) ? "left" : "center";
-      const end = /FWD|FORWARD|FRONT/.test(label) ? "forward" : /AFT|REAR/.test(label) ? "aft" : "aft";
+      const end = /AFT|REAR/.test(label) ? "aft" : /FWD|FORWARD|FRONT/.test(label) ? "forward" : "aft";
       return `${end}-${side}`;
     };
     const holdsByLocation = new Map();
+    const saabZoneRows = [];
     rows.forEach((row) => {
+      const label = String(row.label || "").trim().toUpperCase();
+      if (isSaabFreightMap && (/^(?:CARGO\s*)?[BC]\s*\d+$/.test(label) || /^(?:CARGO\s*)?0$/.test(label))) {
+        saabZoneRows.push(row);
+        return;
+      }
       const key = holdLocation(row);
       if (!holdsByLocation.has(key)) holdsByLocation.set(key, []);
       holdsByLocation.get(key).push(row);
     });
-    const holdsAt = (key) => (holdsByLocation.get(key) || []).map(mapHold).join("");
+    const holdsAt = (key) => (holdsByLocation.get(key) || []).map((row) => mapHold(row)).join("");
+    const saabZoneSort = (row) => {
+      const label = String(row.label || "").toUpperCase();
+      const match = label.match(/^(?:CARGO\s*)?([BC])\s*(\d+)$/);
+      if (match) return (match[1] === "B" ? 0 : 2000) + Number(match[2]);
+      return 1000; // Cargo 0: after B zones and before C zones.
+    };
+    const saabZonesHtml = saabZoneRows.sort((a, b) => saabZoneSort(a) - saabZoneSort(b)).map((row) => `<div class="freight-saab-hold">${mapHold(row, true)}</div>`).join("");
     const atrHoldRow = (end) => {
       const left = holdsAt(`${end}-left`);
       const center = holdsAt(`${end}-center`);
@@ -2549,14 +2600,13 @@
     const forwardAircraftLoads = isAtrFreightMap ? `${jumpSeatHtml}${atrHoldRow("forward")}` : jumpSeatHtml;
     const aftAircraftLoads = isAtrFreightMap
       ? atrHoldRow("aft")
-      : `${holdsAt("saab-c1") ? `<div class="freight-saab-hold"><span>C1 — behind row 11</span>${holdsAt("saab-c1")}</div>` : ""}${holdsAt("saab-c2") ? `<div class="freight-saab-hold"><span>C2 — aft of C1</span>${holdsAt("saab-c2")}</div>` : ""}${holdsAt("aft-left")}${holdsAt("aft-center")}${holdsAt("aft-right")}`;
+      : `${saabZonesHtml}${holdsAt("aft-left")}${holdsAt("aft-center")}${holdsAt("aft-right")}`;
     const renderFreightPanel = () => cfg ? `
       <div class="freight-editor" data-freight-editor>
         <div class="cargo-editor-head">
           <div><div class="card-title">Seat-bag Freight</div><div class="card-sub">Select two adjacent empty seats on the same side of the aisle, then convert them into a seat bag.</div></div>
           <button type="button" class="btn btn-ghost" data-freight-settings>Settings</button>
         </div>
-        ${seatBagPassengerConflicts(f, [...selectedFreightSeats]).length ? `<div class="seatbag-conflict-warning">Passenger assigned to converted seat ${escapeHtml(seatBagPassengerConflicts(f, [...selectedFreightSeats]).join(", "))}. Resolve the seat bag before APG submission.</div>` : ""}
         <div class="freight-aircraft">
           <div class="freight-aircraft-nose" aria-hidden="true"></div>
           <div class="freight-aircraft-map seatmap-grid">
@@ -2566,7 +2616,7 @@
           </div>
           <div class="freight-aircraft-tail" aria-hidden="true"></div>
         </div>
-        ${hasConvertedPair ? "" : '<div class="freight-convert-bar"><span data-freight-selection>Select a valid adjacent pair.</span><button type="button" class="btn btn-primary" data-convert-freight disabled>Convert to Seat Bag</button></div>'}
+        <div class="freight-convert-bar"><span data-freight-selection>Select another valid adjacent pair.</span><button type="button" class="btn btn-primary" data-convert-freight disabled>Convert to Seat Bag</button></div>
       </div>
     ` : '<div class="muted">A freight seat map is not available for this aircraft type.</div>';
     host.innerHTML = `
@@ -2664,6 +2714,10 @@
         if (total) total.textContent = `Total ${((Number(row.baggage_kg) || 0) + row.freight_kg).toFixed(1)} kg`;
       });
     });
+    host.querySelectorAll("[data-compact-hold]").forEach((button) => button.addEventListener("click", () => {
+      const row = (f.apgCargoAllocations || []).find((item) => item.label === button.dataset.compactHold);
+      if (row) openFreightHoldWeightModal(f, row);
+    }));
     const updateFreightCalculation = () => {
       const editor = host.querySelector("[data-freight-editor]");
       if (!editor) return;
@@ -2693,7 +2747,10 @@
       if (!isFreightPair(seats)) return;
       openSeatBagWeightModal(f, seats);
     });
-    host.querySelector("[data-edit-seatbag]")?.addEventListener("click", () => openSeatBagWeightModal(f, [...(f.freightAllocation?.seats || [])]));
+    host.querySelectorAll("[data-edit-seatbag]").forEach((button) => button.addEventListener("click", () => {
+      const item = (f.freightAllocation?.allocations || []).find((row) => row.id === button.dataset.editSeatbag);
+      if (item) openSeatBagWeightModal(f, [...item.seats]);
+    }));
     updateFreightCalculation();
     updateCargoEditorSummary(f);
   }
@@ -2906,7 +2963,11 @@
     const planId = getApgPlanId(f.apg_plan_id);
     cargoTitle.textContent = `Cargo - ${flightCode(f)} ${f.dep || ""}-${f.ades || ""}${planId ? ` - APG ${planId}` : ""}`;
     renderCargoWeightsSummary(f);
-    renderCargoEditor(f);
+    if (f.apgCargoStationsLoaded) {
+      renderCargoEditor(f);
+    } else if (cargoEditor) {
+      cargoEditor.innerHTML = '<div class="muted">Loading APG cargo stations and freight allocation...</div>';
+    }
     cargoDialog.showModal();
     await populateFreightAllocation(f).catch((err) => { console.warn(err); });
     await Promise.allSettled([populateCargoWeightsSummary(f), populateCargoEditor(f)]);
@@ -4157,7 +4218,7 @@
         // A saved seat bag can become conflicted when the refreshed DCS data
         // assigns a passenger to one of its seats. Repaint saved allocations
         // immediately so the warning is visible without closing Cargo.
-        if (cargoDialog?.open && (refreshedSelected.freightAllocation?.seats || []).length === 2) {
+        if (cargoDialog?.open && (refreshedSelected.freightAllocation?.allocations || []).length) {
           renderCargoEditor(refreshedSelected);
           if (seatBagWeightDialog?.open && seatBagWeightFlight === refreshedSelected) {
             const conflicts = seatBagPassengerConflicts(refreshedSelected, seatBagWeightSeatCodes);
@@ -5200,13 +5261,30 @@
   if (seatBagFreightKg) seatBagFreightKg.addEventListener("input", updateSeatBagModalCalculation);
   if (saveSeatBagWeight) saveSeatBagWeight.addEventListener("click", async () => {
     const f = seatBagWeightFlight;
-    if (!f || seatBagWeightSeatCodes.length !== 2) return;
+    if (!f) return;
+    if (seatBagWeightMode === "hold") {
+      if (!freightHoldWeightRow) return;
+      freightHoldWeightRow.freight_kg = Math.max(0, Number(seatBagFreightKg.value || 0));
+      cacheCargoAllocationsForFlight(f);
+      seatBagWeightDialog.close();
+      if (selectedFlight === f) {
+        updateCargoEditorSummary(f);
+        renderCargoWeightsSummary(f);
+        renderCargoEditor(f);
+      }
+      return;
+    }
+    if (seatBagWeightSeatCodes.length !== 2) return;
     const conflicts = seatBagPassengerConflicts(f, seatBagWeightSeatCodes);
     if (conflicts.length) return alert(`Passenger assigned to ${conflicts.join(", ")}. Remove or move the seat bag first.`);
+    const front = seatBagFrontConflicts(f, seatBagWeightSeatCodes);
+    if (front.length && !seatBagOverride.checked) return alert(`Passenger seated immediately in front at ${front.join(", ")}. Tick the override to continue.`);
     saveSeatBagWeight.disabled = true;
     try {
       const freightKg = Math.max(0, Number(seatBagFreightKg.value || 0));
-      const resp = await fetch(freightUrl(f), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ seats: seatBagWeightSeatCodes, freight_kg: freightKg, aircraft_type: f.aircraft_type || "", reg: f.reg || "" }) });
+      const allocations = (f.freightAllocation?.allocations || []).filter((item) => item.id !== seatBagEditingId).map((item) => ({ seats: item.seats, freight_kg: item.freight_kg, override: item.override }));
+      allocations.push({ seats: seatBagWeightSeatCodes, freight_kg: freightKg, override: Boolean(seatBagOverride.checked) });
+      const resp = await fetch(freightUrl(f), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ allocations, aircraft_type: f.aircraft_type || "", reg: f.reg || "" }) });
       const data = await resp.json();
       if (!resp.ok || data.ok === false) throw new Error(data.error || "Unable to save seat bag");
       f.freightAllocation = data;
@@ -5220,7 +5298,8 @@
     if (!f) return;
     removeSeatBag.disabled = true;
     try {
-      const resp = await fetch(freightUrl(f), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ seats: [], freight_kg: 0, aircraft_type: f.aircraft_type || "", reg: f.reg || "" }) });
+      const allocations = (f.freightAllocation?.allocations || []).filter((item) => item.id !== seatBagEditingId).map((item) => ({ seats: item.seats, freight_kg: item.freight_kg, override: item.override }));
+      const resp = await fetch(freightUrl(f), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ allocations, aircraft_type: f.aircraft_type || "", reg: f.reg || "" }) });
       const data = await resp.json();
       if (!resp.ok || data.ok === false) throw new Error(data.error || "Unable to remove seat bag");
       f.freightAllocation = data;
