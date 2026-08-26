@@ -2268,12 +2268,16 @@
     for (const p of pax) {
       const status = classifyPaxStatus(p);
       if (!["CHECKED", "BOARDED", "FLOWN"].includes(status)) continue;
-      const t = String(p.PassengerType || p.passengerType || "").toUpperCase();
-      if (t === "INF" || t === "IN" || t === "INFANT") total += 15;
-      else if (t === "CHD" || t === "CH" || t === "C" || t === "CNN" || t === "CHILD") total += 46;
-      else total += 86;
+      total += estimatedPassengerMass(p);
     }
     return total;
+  }
+
+  function estimatedPassengerMass(p) {
+    const t = String(p?.PassengerType || p?.passengerType || "").toUpperCase();
+    if (t === "INF" || t === "IN" || t === "INFANT") return 15;
+    if (t === "CHD" || t === "CH" || t === "C" || t === "CNN" || t === "CHILD") return 46;
+    return 86;
   }
 
   function estimateOperationalWeights(f, summary) {
@@ -2636,11 +2640,21 @@
       </div>`).join("");
     const isAtrFreightMap = Boolean(cfg && (String(f.aircraft_type || "").toUpperCase().includes("ATR") || String(f.reg || "").toUpperCase().startsWith("ZK-MC")));
     const isSaabFreightMap = Boolean(cfg && !isAtrFreightMap);
+    const normalizedReg = String(f.reg || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const cargoDisplayLabel = (label) => {
+      const text = String(label || "");
+      if (normalizedReg === "ZKCIZ") {
+        if (/^HOLD\s*3\b/i.test(text)) return "C1";
+        if (/^HOLD\s*4\b/i.test(text)) return "C2";
+      }
+      return text;
+    };
     const mapHold = (row, compact = false) => {
       const label = String(row.label || "");
+      const displayLabel = cargoDisplayLabel(label);
       if (compact) return `<button type="button" class="freight-map-hold-compact" data-compact-hold="${escapeHtml(label)}" title="${escapeHtml(label)} — ${Number(row.freight_kg || 0).toFixed(1)} kg freight"><strong>${escapeHtml(label.replace(/^HOLD\s*/i, ""))}</strong><small>${Number(row.freight_kg || 0).toFixed(0)}</small></button>`;
-      return `<label class="freight-map-hold" title="${escapeHtml(label)}">
-        <strong>${escapeHtml(label)}</strong>
+      return `<label class="freight-map-hold" title="${escapeHtml(displayLabel)}">
+        <strong>${escapeHtml(displayLabel)}</strong>
         <span>Freight kg</span>
         <input type="number" min="0" step="0.1" class="freight-map-hold-input" data-label="${escapeHtml(label)}" value="${Number(row.freight_kg || 0).toFixed(1)}">
         <small>Total ${((Number(row.baggage_kg) || 0) + (Number(row.freight_kg) || 0)).toFixed(1)} kg</small>
@@ -2656,6 +2670,7 @@
     const saabZoneRows = [];
     rows.forEach((row) => {
       const label = String(row.label || "").trim().toUpperCase();
+      if (normalizedReg === "ZKCIZ" && /REAR\s+CARGO\s+IN\s+AFT\s+GALLEY/.test(label)) return;
       if (isSaabFreightMap && (/^(?:CARGO\s*)?[BC]\s*\d+$/.test(label) || /^(?:CARGO\s*)?0$/.test(label))) {
         saabZoneRows.push(row);
         return;
@@ -2912,6 +2927,23 @@
     const loads = new Map(apgTrim.station_loads.map((row) => [String(row.label || "").trim().toLowerCase(), {
       label: String(row.label || ""), mass: Number(row.mass || 0), arm: Number(row.arm),
     }]));
+    loads.forEach((load, key) => {
+      if (key.startsWith("passenger ") || /^row\s+\d+$/.test(key)) load.mass = 0;
+    });
+    (f?.pax_list || []).forEach((pax) => {
+      if (!isOperationalCargoPax(pax)) return;
+      const seat = seatCodeForPax(pax);
+      if (!seat) return;
+      const passengerMass = estimatedPassengerMass(pax);
+      const individualLoad = loads.get(`passenger ${seat.toLowerCase()}`);
+      if (individualLoad) {
+        individualLoad.mass += passengerMass;
+        return;
+      }
+      const rowMatch = seat.match(/^(\d+)/);
+      const rowLoad = rowMatch ? loads.get(`row ${rowMatch[1]}`) : null;
+      if (rowLoad) rowLoad.mass += passengerMass;
+    });
     (f?.apgCargoAllocations || []).forEach((row) => {
       const load = loads.get(String(row.label || "").trim().toLowerCase());
       if (load) load.mass = Math.max(0, Number(row.baggage_kg || 0) + Number(row.freight_kg || 0));
