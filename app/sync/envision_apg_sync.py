@@ -1563,6 +1563,53 @@ def build_existing_plan_index(
     return index
 
 
+def _sync_plan_id_for_key(
+    key: tuple[str, str, str, Optional[str]],
+    existing_index: dict[tuple[str, str, str, Optional[str]], Optional[int]],
+    cached_plan_id: Optional[int] = None,
+) -> Optional[int]:
+    """Find an APG plan for a sync flight without crossing its NZ operating date."""
+    exact_id = existing_index.get(key)
+    if exact_id is not None:
+        return exact_id
+
+    target_dt = _utc_min_dt_from_key(key[3])
+    if target_dt is None:
+        return None
+    target_local_date = target_dt.astimezone(_get_local_tz()).date()
+
+    candidates: list[tuple[float, int]] = []
+    for candidate_key, candidate_id in existing_index.items():
+        if candidate_id is None or candidate_key[:3] != key[:3]:
+            continue
+        candidate_dt = _utc_min_dt_from_key(candidate_key[3])
+        if candidate_dt is None:
+            continue
+        if candidate_dt.astimezone(_get_local_tz()).date() != target_local_date:
+            continue
+        delta_min = abs((candidate_dt - target_dt).total_seconds()) / 60
+        candidates.append((delta_min, int(candidate_id)))
+
+    if not candidates:
+        return None
+
+    # A cached id is safe only when APG currently reports it for this route and
+    # this NZ-local operating date.
+    if cached_plan_id is not None:
+        cached_id = int(cached_plan_id)
+        if any(candidate_id == cached_id for _, candidate_id in candidates):
+            return cached_id
+
+    tolerance_min = int(os.getenv("APG_SYNC_MATCH_TIME_TOLERANCE_MIN", "720") or "720")
+    candidates.sort(key=lambda item: item[0])
+    best_delta, best_id = candidates[0]
+    if best_delta > tolerance_min:
+        return None
+    if len(candidates) > 1 and candidates[1][0] == best_delta and candidates[1][1] != best_id:
+        return None
+    return best_id
+
+
 def choose_apg_aircraft_id_for_flight(envision_flight: dict) -> Optional[int]:
     reg_raw = (envision_flight.get("flightRegistrationDescription") or "")
     if not reg_raw:
@@ -2042,7 +2089,7 @@ def main(
     def _window_now():
         local_tz = _get_local_tz()
         now_local = datetime.now(local_tz)
-        date_from_local = now_local - timedelta(hours=WINDOW_PAST_HOURS)
+        date_from_local = now_local
         future_hours = WINDOW_FUTURE_HOURS if future_hours_override is None else min(max(int(future_hours_override), 1), 336)
         date_to_local   = now_local + timedelta(hours=future_hours)
         return (now_local, date_from_local, date_to_local,
@@ -2090,7 +2137,7 @@ def main(
         apply_past_filter = False
     else:
         _, window_from_local, window_to_local, window_from_utc, window_to_utc = _window_now()
-        apply_past_filter = True
+        apply_past_filter = False
 
     logging.info(
         "Fetching Envision flights (local NZ) %s â†’ %s | (UTC) %s â†’ %s",
@@ -2794,23 +2841,14 @@ def main(
             _canon_eobt_to_utc_min_str(payload.get("eobt")),
         )
 
-        # Presence (what APG tells us is there *now*), ignoring cache
-        plan_id_presence = None
-        if key in existing_index and existing_index[key] is not None:
-            plan_id_presence = existing_index[key]
-        elif (key[0], key[1], key[2]) in existing_index_by3 and existing_index_by3[(key[0], key[1], key[2])] is not None:
-            plan_id_presence = existing_index_by3[(key[0], key[1], key[2])]
-
-        # Cached mapping from last successful push (may be stale if plan was deleted manually)
-        plan_id_cache = prev_apg_id
+        # Presence must be on this NZ operating date. Route-only and stale cached
+        # matches must not suppress creation of a missing APG flight.
+        plan_id_presence = _sync_plan_id_for_key(key, existing_index, prev_apg_id)
 
         # Visible *now* means only what presence index says (not cache)
         visible_now = plan_id_presence is not None
 
-        # Pick an id to try updating with:
-        #  - prefer cache id (it's the original plan we created) so we keep continuity if it still exists
-        #  - else use presence id
-        plan_id_to_update = plan_id_cache if plan_id_cache is not None else plan_id_presence
+        plan_id_to_update = plan_id_presence
 
         # ---------- decide: skip / update / create ----------
         # Only skip if nothing changed *and* APG confirms the plan is visible now.
@@ -3154,7 +3192,7 @@ def run_sync_once_return_summary(
         else:
             local_tz = _get_local_tz()
             now_local = datetime.now(local_tz)
-            window_from_local = now_local - timedelta(hours=WINDOW_PAST_HOURS)
+            window_from_local = now_local
             future_hours = WINDOW_FUTURE_HOURS if future_hours_override is None else min(max(int(future_hours_override), 1), 336)
             window_to_local   = now_local + timedelta(hours=future_hours)
             window_from_utc = window_from_local.astimezone(timezone.utc)
