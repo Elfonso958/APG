@@ -3030,7 +3030,9 @@
     const type = String(f?.aircraft_type || "").toUpperCase();
     const isSaab = type.includes("SAAB") || type.includes("SF3") || reg.startsWith("ZKCI") || reg.startsWith("ZKKR");
     if (!isSaab) return null;
-    const is340B = reg === "ZKCIZ" || type.includes("340B");
+    // Registration is authoritative for our Saab fleet. Envision's generic
+    // type text can say 340B for ZK-CIT even though its loading sheet is 340A.
+    const is340B = reg === "ZKCIZ" || (!reg && type.includes("340B"));
     const forwardPercent = is340B ? 15.82592593 : 17.38719646;
     const landingForwardPercent = is340B ? 14.81759259 : 16.34048775;
     const aftPercent = is340B ? 37.4 : 33.52538774;
@@ -3054,20 +3056,20 @@
   function trimDisplayState(trim) {
     const envelope = trim?.envelope || {};
     if (!envelope.available) return { key: "unknown", label: "Envelope unavailable", detail: "Confirm trim in APG." };
+    const rangeLabel = envelope.source
+      ? `${envelope.source} ${Number(envelope.forwardPercent).toFixed(1)}-${Number(envelope.aftPercent).toFixed(1)}% MAC. `
+      : "";
     if (!envelope.massInRange) return {
       key: "outside", label: "Outside trim envelope",
-      detail: `Loaded mass is outside the APG envelope range ${Number(envelope.minMass).toFixed(0)}-${Number(envelope.maxMass).toFixed(0)} kg.`,
+      detail: `${rangeLabel}Loaded mass is outside the APG envelope range ${Number(envelope.minMass).toFixed(0)}-${Number(envelope.maxMass).toFixed(0)} kg.`,
     };
     const cg = Number(trim.cg_arm);
     const forward = Number(envelope.forwardArm);
     const aft = Number(envelope.aftArm);
-    if (cg < forward) return { key: "outside", label: "Outside trim - nose heavy", detail: `${(forward - cg).toFixed(1)} cm forward of the limit.` };
-    if (cg > aft) return { key: "outside", label: "Outside trim - tail heavy", detail: `${(cg - aft).toFixed(1)} cm aft of the limit.` };
+    if (cg < forward) return { key: "outside", label: "Outside trim - nose heavy", detail: `${rangeLabel}${(forward - cg).toFixed(1)} cm forward of the limit.` };
+    if (cg > aft) return { key: "outside", label: "Outside trim - tail heavy", detail: `${rangeLabel}${(cg - aft).toFixed(1)} cm aft of the limit.` };
     const nearest = Math.min(cg - forward, aft - cg);
     const span = Math.max(0.1, aft - forward);
-    const rangeLabel = envelope.source
-      ? `${envelope.source} ${Number(envelope.forwardPercent).toFixed(1)}-${Number(envelope.aftPercent).toFixed(1)}% MAC. `
-      : "";
     if (nearest / span <= 0.1) return { key: "near", label: "Near trim limit", detail: `${rangeLabel}${nearest.toFixed(1)} cm to the nearest limit.` };
     return { key: "within", label: "Within trim envelope", detail: `${rangeLabel}${nearest.toFixed(1)} cm to the nearest limit.` };
   }
