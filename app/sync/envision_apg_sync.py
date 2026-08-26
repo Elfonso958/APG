@@ -4004,7 +4004,10 @@ def _find_apg_plan_id_by_local_clock(
         return None
 
     tolerance_min = int(os.getenv("APG_GANTT_LINK_LOCAL_CLOCK_TOLERANCE_MIN", "75") or "75")
-    max_date_diff_days = int(os.getenv("APG_GANTT_LINK_LOCAL_DATE_DIFF_DAYS", "1") or "1")
+    # A flight may move substantially within its operating day, but a plan on an
+    # adjacent local date is a different sector even when flight number/route and
+    # wall-clock time are identical.
+    max_date_diff_days = 0
     scored: list[tuple[int, int, Optional[int]]] = []
     local_tz = _get_local_tz()
     for plan_dt, candidate_pid in candidates:
@@ -4118,7 +4121,22 @@ def attach_apg_presence_to_rows(
         if plan_id is None:
             fid = r.get("envision_flight_id")
             if fid not in (None, ""):
-                plan_id = state_plan_by_fid.get(str(fid))
+                saved_plan_id = state_plan_by_fid.get(str(fid))
+                if saved_plan_id is not None:
+                    raw_flight = (r.get("flight") or r.get("Flight") or "").strip()
+                    flight_no = normalize_flight_no(raw_flight)
+                    adep_icao = to_icao(r.get("dep") or r.get("Dep"))
+                    dest_raw = r.get("dest") or r.get("Dest") or r.get("ades") or r.get("arr") or r.get("Arr")
+                    ades_icao = to_icao(dest_raw)
+                    route_candidates = existing_candidates_by3.get((flight_no, adep_icao, ades_icao)) or []
+                    saved_candidates = [
+                        candidate for candidate in route_candidates
+                        if candidate[1] == saved_plan_id
+                    ]
+                    # Never revive a persisted link unless the plan still belongs
+                    # to this route and the same NZ-local operating date.
+                    if _find_apg_plan_id_by_local_clock(r, saved_candidates) == saved_plan_id:
+                        plan_id = saved_plan_id
         r["apg_plan_id"] = plan_id
         r["apg_has_plan"] = bool(plan_id)
 
