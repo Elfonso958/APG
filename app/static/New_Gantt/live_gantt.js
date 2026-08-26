@@ -539,6 +539,11 @@
     return text.includes("charter");
   }
 
+  function isFullFreighterFlight(f) {
+    const text = `${f?.service_type || ""} ${f?.flight_type || ""}`.trim().toLowerCase();
+    return /\bfreight(?:er)?\b/.test(text);
+  }
+
   function canUseCharterManifest(f) {
     return Boolean(f?.envision_flight_id) && isCharterFlight(f);
   }
@@ -2441,9 +2446,12 @@
     }
     const rows = Array.isArray(f.apgCargoAllocations) ? f.apgCargoAllocations : [];
     const atrRows = Array.isArray(f.apgAtrRowFreightAllocations) ? f.apgAtrRowFreightAllocations : [];
+    const isFullFreighter = isFullFreighterFlight(f);
     normalizeAtrRowFreightForOccupancy(f);
-    const showAtrRows = isAtrRowFreightFlight(f) && atrRows.length > 0;
-    if (!f.apgCargoEditorTab || (f.apgCargoEditorTab === "rowFreight" && !showAtrRows)) {
+    const showAtrRows = !isFullFreighter && isAtrRowFreightFlight(f) && atrRows.length > 0;
+    if (isFullFreighter) {
+      f.apgCargoEditorTab = "freight";
+    } else if (!f.apgCargoEditorTab || (f.apgCargoEditorTab === "rowFreight" && !showAtrRows)) {
       f.apgCargoEditorTab = rows.length ? "holds" : showAtrRows ? "rowFreight" : "freight";
     }
     const activeTab = f.apgCargoEditorTab;
@@ -2602,26 +2610,26 @@
       </div>`;
     };
     const jumpSeatHtml = cfg?.jumpSeat ? `<div class="freight-map-jump"><span class="seat seat-jump">JS</span><small>Jump Seat</small></div>` : "";
-    const forwardAircraftLoads = isAtrFreightMap ? `${jumpSeatHtml}${atrHoldRow("forward")}` : jumpSeatHtml;
+    const forwardAircraftLoads = isAtrFreightMap ? `${isFullFreighter ? "" : jumpSeatHtml}${atrHoldRow("forward")}` : (isFullFreighter ? "" : jumpSeatHtml);
     const aftAircraftLoads = isAtrFreightMap
       ? atrHoldRow("aft")
       : `${saabZonesHtml}${holdsAt("aft-left")}${holdsAt("aft-center")}${holdsAt("aft-right")}`;
     const renderFreightPanel = () => cfg ? `
       <div class="freight-editor" data-freight-editor>
         <div class="cargo-editor-head">
-          <div><div class="card-title">Seat-bag Freight</div><div class="card-sub">Select one or more adjacent seat pairs, convert them together, then click each seat bag to enter its weight.</div></div>
-          <button type="button" class="btn btn-ghost" data-freight-settings>Settings</button>
+          <div><div class="card-title">${isFullFreighter ? "Freighter Cargo Zones" : "Seat-bag Freight"}</div><div class="card-sub">${isFullFreighter ? "This is a full freighter. Only the APG freight and cargo zones are shown." : "Select one or more adjacent seat pairs, convert them together, then click each seat bag to enter its weight."}</div></div>
+          ${isFullFreighter ? "" : '<button type="button" class="btn btn-ghost" data-freight-settings>Settings</button>'}
         </div>
         <div class="freight-aircraft">
           <div class="freight-aircraft-nose" aria-hidden="true"></div>
           <div class="freight-aircraft-map seatmap-grid">
             ${forwardAircraftLoads}
-            ${freightAircraftMap}
+            ${isFullFreighter ? "" : freightAircraftMap}
             ${aftAircraftLoads}
           </div>
           <div class="freight-aircraft-tail" aria-hidden="true"></div>
         </div>
-        <div class="freight-convert-bar"><span data-freight-selection>Select one or more adjacent pairs.</span><button type="button" class="btn btn-primary" data-convert-freight disabled>Convert Selected to Seat Bags</button></div>
+        ${isFullFreighter ? "" : '<div class="freight-convert-bar"><span data-freight-selection>Select one or more adjacent pairs.</span><button type="button" class="btn btn-primary" data-convert-freight disabled>Convert Selected to Seat Bags</button></div>'}
       </div>
     ` : '<div class="muted">A freight seat map is not available for this aircraft type.</div>';
     host.innerHTML = `
@@ -2634,15 +2642,13 @@
           <div class="weight-status-pill ${Math.abs(totals.remaining) < 0.05 ? "is-ok" : totals.remaining > 0 ? "is-near" : "is-over"}" id="cargoRemainingBadge">
             ${Math.abs(totals.remaining) < 0.05 ? "Baggage complete" : totals.remaining > 0 ? "Baggage remaining" : "Over allocated"}
           </div>
-        </div>
+          </div>
           <div class="cargo-editor-tabs" role="tablist" aria-label="Cargo allocation mode">
-            <button type="button" class="cargo-editor-tab ${activeTab === "holds" ? "is-active" : ""}" data-cargo-tab="holds">Holds</button>
+            ${isFullFreighter ? "" : `<button type="button" class="cargo-editor-tab ${activeTab === "holds" ? "is-active" : ""}" data-cargo-tab="holds">Holds</button>`}
             ${showAtrRows ? `<button type="button" class="cargo-editor-tab ${activeTab === "rowFreight" ? "is-active" : ""}" data-cargo-tab="rowFreight">Row Freight</button>` : ""}
             <button type="button" class="cargo-editor-tab ${activeTab === "freight" ? "is-active" : ""}" data-cargo-tab="freight">Freight</button>
           </div>
-        <div class="cargo-editor-panel" data-cargo-panel="holds" ${activeTab === "holds" ? "" : "hidden"}>
-          ${renderHoldPanel()}
-        </div>
+        ${isFullFreighter ? "" : `<div class="cargo-editor-panel" data-cargo-panel="holds" ${activeTab === "holds" ? "" : "hidden"}>${renderHoldPanel()}</div>`}
         <div class="cargo-editor-panel" data-cargo-panel="rowFreight" ${activeTab === "rowFreight" ? "" : "hidden"}>
           ${renderRowFreightPanel()}
         </div>
