@@ -18,6 +18,12 @@ import time as _time
 import re
 from zoneinfo import ZoneInfo
 NZ = ZoneInfo("Pacific/Auckland")
+
+
+def _nz_today() -> date:
+    """Return the current operational date in New Zealand time."""
+    return datetime.now(NZ).date()
+
 # ✅ use your existing Envision helpers
 
 from .sync.envision_apg_sync import (
@@ -1239,9 +1245,9 @@ def dcs_new_live_gantt():
         try:
             day = date.fromisoformat(day_str)
         except ValueError:
-            day = date.today()
+            day = _nz_today()
     else:
-        day = date.today()
+        day = _nz_today()
     env = get_envision_environment()
     return render_template(
         "New_Gantt/live_gantt.html",
@@ -1260,9 +1266,9 @@ def dcs_crew_briefing():
         try:
             day = date.fromisoformat(day_str)
         except ValueError:
-            day = date.today()
+            day = _nz_today()
     else:
-        day = date.today()
+        day = _nz_today()
     env = get_envision_environment()
     return render_template(
         "New_Gantt/live_gantt.html",
@@ -1315,9 +1321,9 @@ def api_dcs_gantt_data():
     """
     dstr = request.args.get("date")
     try:
-        day = date.fromisoformat(dstr) if dstr else date.today()
+        day = date.fromisoformat(dstr) if dstr else _nz_today()
     except ValueError:
-        day = date.today()
+        day = _nz_today()
 
     # ---- NZ-local window → UTC for Envision API ----
     start_nz = datetime.combine(day, time(0, 0, tzinfo=NZ))
