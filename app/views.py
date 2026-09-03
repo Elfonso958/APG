@@ -1478,25 +1478,25 @@ def api_dcs_gantt_data():
 
     rows.sort(key=lambda r: r["std_nz"] or _dt.min.replace(tzinfo=NZ))
 
-    # 4) Envision registration defects (open + total) per aircraft
+    # 4) Envision registration defects (open + total) per aircraft.
+    #
+    # The Gantt refreshes in the browser background.  Refresh defect snapshots
+    # along with it so a defect closed in Envision is not left on the board by
+    # an old in-memory cache.  The cached snapshot remains a fallback only if
+    # Envision is temporarily unavailable.
     reg_ids = sorted({int(r["registration_id"]) for r in rows if r.get("registration_id")})
     if reg_ids:
-        defect_ttl = int(current_app.config.get("ENVISION_DEFECT_CACHE_TTL", 180))
-        now_ts = _time.time()
         defect_counts: dict[int, tuple[int, int]] = {}
-        to_fetch: list[int] = []
 
         for reg_id in reg_ids:
             cached = _ENVISION_DEFECT_CACHE.get(reg_id)
-            if cached and (now_ts - cached.get("ts", 0) <= defect_ttl):
+            if cached:
                 defect_counts[reg_id] = (
                     int(cached.get("open", 0)),
                     int(cached.get("total", 0)),
                 )
-            else:
-                to_fetch.append(reg_id)
 
-        if to_fetch:
+        if reg_ids:
             if token is None:
                 try:
                     auth = envision_authenticate()
@@ -1505,35 +1505,33 @@ def api_dcs_gantt_data():
                     current_app.logger.warning(
                         "api_dcs_gantt_data: Envision auth failed for defects: %s", e
                     )
-                    to_fetch = []
 
-            if to_fetch and token:
+            if token:
                 max_workers = int(current_app.config.get("ENVISION_DEFECT_MAX_WORKERS", 6))
                 with ThreadPoolExecutor(max_workers=max_workers) as ex:
                     future_map = {
-                        ex.submit(_fetch_defect_count_for_registration, token, reg_id): reg_id
-                        for reg_id in to_fetch
+                        ex.submit(_fetch_defect_snapshot_for_registration, token, reg_id): reg_id
+                        for reg_id in reg_ids
                     }
                     for fut in as_completed(future_map):
                         reg_id = future_map[fut]
                         try:
-                            open_count, total_count = fut.result()
+                            open_count, total_count, details = fut.result()
                         except Exception as e:
                             current_app.logger.warning(
                                 "api_dcs_gantt_data: defects fetch failed reg_id=%s: %s",
                                 reg_id,
                                 e,
                             )
-                            open_count, total_count = 0, 0
+                            # Retain the last known result rather than briefly
+                            # showing a misleading zero while Envision is down.
+                            continue
                         defect_counts[reg_id] = (open_count, total_count)
-                        old_details = None
-                        if reg_id in _ENVISION_DEFECT_CACHE:
-                            old_details = _ENVISION_DEFECT_CACHE[reg_id].get("details")
                         _ENVISION_DEFECT_CACHE[reg_id] = {
                             "ts": _time.time(),
                             "open": open_count,
                             "total": total_count,
-                            "details": old_details if isinstance(old_details, list) else None,
+                            "details": details,
                         }
 
         for r in rows:
@@ -1888,6 +1886,15 @@ def _fetch_defect_count_for_registration(token: str, registration_id: int) -> tu
     """
     defects = _fetch_defects_for_registration(token, registration_id)
     return _count_open_defects(defects), len(defects)
+
+
+def _fetch_defect_snapshot_for_registration(
+    token: str, registration_id: int
+) -> tuple[int, int, list[dict]]:
+    """Fetch current counts and modal-ready unresolved defects for a Gantt refresh."""
+    defects = _fetch_defects_for_registration(token, registration_id)
+    active_details = [d for d in defects if _is_open_or_deferred_defect(d)]
+    return len(active_details), len(defects), active_details
 
 
 def _fetch_defects_for_registration(token: str, registration_id: int) -> list[dict]:
