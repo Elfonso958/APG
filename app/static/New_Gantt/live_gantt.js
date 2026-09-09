@@ -2648,12 +2648,18 @@
       const label = String(row.label || "");
       const displayLabel = cargoDisplayLabel(label);
       if (compact) return `<button type="button" class="freight-map-hold-compact" data-compact-hold="${escapeHtml(label)}" title="${escapeHtml(label)} — ${Number(row.freight_kg || 0).toFixed(1)} kg freight"><strong>${escapeHtml(label.replace(/^HOLD\s*/i, ""))}</strong><small>${Number(row.freight_kg || 0).toFixed(0)}</small></button>`;
-      return `<label class="freight-map-hold" title="${escapeHtml(displayLabel)}">
+      return `<div class="freight-map-hold" title="${escapeHtml(displayLabel)}">
         <strong>${escapeHtml(displayLabel)}</strong>
-        <span>Freight kg</span>
-        <input type="number" min="0" step="0.1" class="freight-map-hold-input" data-label="${escapeHtml(label)}" value="${Number(row.freight_kg || 0).toFixed(1)}">
+        <label>
+          <span>Freight kg</span>
+          <input type="number" min="0" step="0.1" class="freight-map-hold-input" data-label="${escapeHtml(label)}" value="${Number(row.freight_kg || 0).toFixed(1)}">
+        </label>
+        <label>
+          <span>Baggage kg</span>
+          <input type="number" min="0" step="0.1" class="freight-map-baggage-input" data-label="${escapeHtml(label)}" value="${Number(row.baggage_kg || 0).toFixed(1)}">
+        </label>
         <small>Total ${((Number(row.baggage_kg) || 0) + (Number(row.freight_kg) || 0)).toFixed(1)} kg</small>
-      </label>`;
+      </div>`;
     };
     const holdLocation = (row) => {
       const label = String(row.label || "").trim().toUpperCase();
@@ -2801,6 +2807,23 @@
         const card = input.closest(".freight-map-hold");
         const total = card?.querySelector("small");
         if (total) total.textContent = `Total ${((Number(row.baggage_kg) || 0) + row.freight_kg).toFixed(1)} kg`;
+      });
+      input.addEventListener("change", () => persistCargoAllocation(f).catch((err) => alert(err.message || String(err))));
+    });
+    host.querySelectorAll(".freight-map-baggage-input").forEach((input) => {
+      input.addEventListener("input", () => {
+        const label = input.getAttribute("data-label") || "";
+        const row = (f.apgCargoAllocations || []).find((item) => item.label === label);
+        if (!row) return;
+        row.baggage_kg = Math.max(0, Number(input.value || 0));
+        const holdsTabInput = host.querySelector(`.cargo-baggage-input[data-label="${CSS.escape(label)}"]`);
+        if (holdsTabInput) holdsTabInput.value = row.baggage_kg.toFixed(1);
+        cacheCargoAllocationsForFlight(f);
+        updateCargoEditorSummary(f);
+        renderCargoWeightsSummary(f);
+        const card = input.closest(".freight-map-hold");
+        const total = card?.querySelector("small");
+        if (total) total.textContent = `Total ${(row.baggage_kg + (Number(row.freight_kg) || 0)).toFixed(1)} kg`;
       });
       input.addEventListener("change", () => persistCargoAllocation(f).catch((err) => alert(err.message || String(err))));
     });
