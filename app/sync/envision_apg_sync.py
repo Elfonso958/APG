@@ -204,6 +204,12 @@ IATA_TO_ICAO = {
     "WSZ": "NZWS",  # Westport
     "GBZ": "NZGB",  # Great Barrier Island
     "TEU": "NZMO",  # Coromandel
+    "ALR": "NZLX",  # Alexandra
+    "WKA": "NZWF",  # Wanaka
+    "MON": "NZGT",  # Mount Cook / Aoraki
+    "ASG": "NZAS",  # Ashburton
+    "AMZ": "NZAR",  # Ardmore
+
 
     # Chatham Islands
     "CHT": "NZCI",  # Chatham Islands Tuuta Airport
