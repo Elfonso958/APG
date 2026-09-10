@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b6178">
+  <title>Charter Check-in</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='charter_checkin.css') }}?v=9">
+</head>
+<body>
+  <main id="charterCheckinApp"
+        data-gantt-url="{{ url_for('ui.api_dcs_gantt_data') }}"
+        data-manifest-url="{{ url_for('api.api_charter_manifest_get') }}"
+        data-upload-url="{{ url_for('api.api_charter_manifest_upload') }}"
+        data-passenger-url="{{ url_for('api.api_charter_manifest_update_passenger') }}"
+        data-passenger-add-url="{{ url_for('api.api_charter_manifest_add_passenger') }}"
+        data-boarding-qr-url="{{ url_for('api.api_charter_manifest_boarding_qr') }}"
+        data-board-scan-url="{{ url_for('api.api_charter_manifest_board_scan') }}"
+        data-close-flight-url="{{ url_for('api.api_charter_manifest_close_flight') }}"
+        data-reopen-flight-url="{{ url_for('api.api_charter_manifest_reopen_flight') }}"
+        data-template-url="{{ url_for('api.api_charter_manifest_template') }}"
+        data-day="{{ day.isoformat() }}">
+    <header class="topbar">
+      <div class="brand-lockup">
+        <img class="charter-main-logo" src="{{ url_for('ui.charter_brand_asset', asset='main-logo') }}" alt="ACCharters — An Air Chathams Service">
+        <span class="parent-brand">Air Chathams · Charter Operations</span>
+      </div>
+      <div class="top-actions">
+        <label>Date <input id="dayInput" type="date" value="{{ day.isoformat() }}"></label>
+        <button id="refreshBtn" class="button secondary" type="button">Refresh flights</button>
+      </div>
+    </header>
+
+    <p id="notice" class="notice" hidden></p>
+    <section class="workspace">
+      <aside class="flight-panel">
+        <div class="section-heading"><h2>Charter flights</h2><span id="flightCount" class="pill">0</span></div>
+        <div id="flightList" class="flight-list"><p class="empty">Loading charter flights…</p></div>
+      </aside>
+
+      <section class="checkin-panel">
+        <div id="emptyState" class="empty-state">
+          <h2>Select a charter flight</h2>
+          <p>Choose a flight to upload its passenger list and begin check-in.</p>
+        </div>
+        <div id="checkinContent" hidden>
+          <div class="flight-title-row">
+            <div><p class="eyebrow">Selected flight</p><h2 id="selectedFlightTitle"></h2><p id="selectedFlightMeta" class="muted"></p></div>
+            <div class="manifest-actions">
+              <button id="toggleFlightPanel" class="button secondary" type="button">Hide charter flights</button>
+              <button id="closeFlightBtn" class="button danger" type="button">Close flight</button>
+              <button id="reopenFlightBtn" class="button secondary" type="button" hidden>Reopen flight</button>
+              <a id="templateLink" class="button secondary" href="#" download>Download template</a>
+              <label class="button secondary upload-label">Upload passenger list<input id="manifestFile" type="file" accept=".xlsx,.xlsm,.xltx,.xltm"></label>
+            </div>
+          </div>
+          <div id="summary" class="summary"></div>
+          <div class="toolbar">
+            <label class="search"><span>Search</span><input id="searchInput" type="search" placeholder="Name, seat, PNR or SSR"></label>
+            <label>Status <select id="statusFilter"><option value="">All statuses</option><option>Booked</option><option>Checked In</option><option>Boarded</option><option>Flown</option></select></label>
+            <button id="addPassenger" class="button secondary" type="button">Add passenger</button>
+            <button id="scanBoardingPass" class="button" type="button">Scan QR to board</button>
+            <span id="manifestMeta" class="muted"></span>
+          </div>
+          <div class="table-wrap">
+            <table class="passenger-table">
+              <thead><tr><th>Passenger</th><th>Type</th><th>Seat</th><th>Bag kg</th><th>Pieces</th><th>SSR</th><th>Status</th><th>Actions</th></tr></thead>
+              <tbody id="passengerRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </section>
+  </main>
+  <dialog id="seatmapDialog" class="seatmap-dialog">
+    <div class="seatmap-shell">
+      <header><div><p class="eyebrow">Assign seat</p><h2 id="seatmapTitle">Aircraft seatmap</h2></div><button id="seatmapClose" class="button secondary" type="button">Close</button></header>
+      <p id="seatmapHelp" class="muted"></p>
+      <div id="seatmapGrid" class="seatmap-grid"></div>
+    </div>
+  </dialog>
+  <dialog id="boardingScanDialog" class="seatmap-dialog">
+    <div class="seatmap-shell">
+      <header><div><p class="eyebrow">Board passenger</p><h2>Scan boarding-pass QR code</h2></div><button id="boardingScanClose" class="button secondary" type="button">Close</button></header>
+      <p id="boardingScanStatus" class="muted">Allow camera access to scan a QR code, or scan/type the code below.</p>
+      <video id="boardingScanVideo" class="boarding-video" playsinline muted></video>
+      <label class="scan-code-label">Scanner code<input id="boardingScanCode" type="text" autocomplete="off" placeholder="Scan QR code or paste its value"></label>
+      <button id="processBoardingCode" class="button" type="button">Board passenger</button>
+    </div>
+  </dialog>
+  <dialog id="checkinDialog" class="seatmap-dialog">
+    <div class="seatmap-shell checkin-shell">
+      <header><div><p class="eyebrow">Passenger check-in</p><h2 id="checkinTitle">Check in passenger</h2></div><button id="checkinClose" class="button secondary" type="button">Close</button></header>
+      <div class="checkin-layout">
+        <aside class="checkin-seatmap-panel"><h3>Seat map</h3><p class="muted">Click an available seat to select it.</p><div id="checkinSeatmapGrid" class="checkin-seatmap-grid"></div></aside>
+        <div class="checkin-form">
+      <p id="checkinPassengerMeta" class="muted"></p>
+      <div id="checkinIdentity" class="checkin-fields identity-fields">
+        <label>Given name<input id="checkinGivenName" type="text" autocomplete="given-name"></label>
+        <label>Surname<input id="checkinSurname" type="text" autocomplete="family-name"></label>
+        <label>Passenger type<select id="checkinPassengerType"><option value="AD">Adult</option><option value="CHD">Child</option><option value="INF">Infant</option><option value="UMNR">Unaccompanied minor</option></select></label>
+        <label>Booking reference<input id="checkinPnr" type="text" autocapitalize="characters"></label>
+      </div>
+      <div class="checkin-fields">
+        <label>Seat<input id="checkinSeat" type="text" maxlength="5" autocapitalize="characters"></label>
+        <label>Baggage kg<input id="checkinBagKg" type="number" min="0" step="0.1"></label>
+        <label>Bag pieces<input id="checkinBagPieces" type="number" min="0" step="1"></label>
+      </div>
+      <section class="checkin-section"><div class="section-heading"><h3>Special service requests</h3><span class="muted">IATA SSR codes</span></div><div class="ssr-add"><select id="checkinSsrCode"></select><input id="checkinSsrText" type="text" placeholder="Optional SSR detail"><button id="addCheckinSsr" class="button secondary" type="button">Add SSR</button></div><div id="checkinSsrList" class="ssr-list"></div></section>
+      <label class="comments-label">Agent comments<textarea id="checkinComments" rows="3" placeholder="Internal operational note — not an SSR"></textarea></label>
+      <div class="checkin-actions"><button id="confirmCheckin" class="button" type="button">Check in</button><button id="confirmCheckinPrint" class="button secondary" type="button">Check in & print</button></div>
+        </div>
+      </div>
+    </div>
+  </dialog>
+  <script src="{{ url_for('static', filename='charter_checkin.js') }}?v=9"></script>
+</body>
+</html>

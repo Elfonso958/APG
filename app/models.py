@@ -103,6 +103,8 @@ class CharterManifest(db.Model):
     ades = db.Column(db.String(8), nullable=True)
     pax_json = db.Column(db.Text, nullable=False, default="[]")
     uploaded_filename = db.Column(db.String(255), nullable=True)
+    closed_at = db.Column(db.DateTime, nullable=True)
+    closure_email_sent_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 

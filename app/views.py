@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime as _dt
 from datetime import date as _date
 import io
+import os
 from io import BytesIO
 
 import json, requests
@@ -701,8 +702,10 @@ def _apply_charter_manifests(rows: list[dict]) -> None:
             pax = []
 
         r["charter_manifest_uploaded"] = True
+        r["charter_manifest_linked"] = True
         r["charter_manifest_filename"] = manifest.uploaded_filename or ""
         r["charter_manifest_updated_at"] = manifest.updated_at.isoformat() if manifest.updated_at else None
+        r["charter_flight_closed_at"] = manifest.closed_at.isoformat() if manifest.closed_at else None
         if _is_charter_service(r):
             counts = _count_pax_types(pax)
             r["pax_list"] = pax
@@ -717,7 +720,6 @@ def _apply_charter_manifests(rows: list[dict]) -> None:
                 except (TypeError, ValueError):
                     pass
             r["bags_kg"] = bags_kg
-            r["dcs_linked"] = True
             r["error"] = None
 
 @ui_bp.route("/sync/runs/<int:rid>")
@@ -1259,6 +1261,28 @@ def dcs_new_live_gantt():
     )
 
 
+@ui_bp.route("/dcs/charter-checkin")
+def dcs_charter_checkin():
+    day_str = request.args.get("date")
+    try:
+        day = date.fromisoformat(day_str) if day_str else _nz_today()
+    except ValueError:
+        day = _nz_today()
+    return render_template("charter_checkin.html", day=day)
+
+
+@ui_bp.get("/dcs/charter-brand/<asset>")
+def charter_brand_asset(asset: str):
+    filenames = {
+        "main-logo": "ACCharter Main Logo.png",
+        "brand-banner": "ACCharter.jpg",
+    }
+    filename = filenames.get(asset)
+    if not filename:
+        abort(404)
+    return send_file(os.path.join(current_app.root_path, "..", filename), conditional=True)
+
+
 @ui_bp.route("/dcs/crew-briefing")
 def dcs_crew_briefing():
     day_str = request.args.get("date")
@@ -1653,6 +1677,7 @@ def api_dcs_gantt_data():
             "charter_manifest_uploaded": bool(r.get("charter_manifest_uploaded")),
             "charter_manifest_filename": r.get("charter_manifest_filename") or "",
             "charter_manifest_updated_at": r.get("charter_manifest_updated_at"),
+            "charter_flight_closed_at": r.get("charter_flight_closed_at"),
             "dcs_linked": bool(r.get("dcs_linked")),
             "envision_flight_id": r.get("envision_flight_id"),
             "delays": r.get("delays") or [],   # <-- NEW: ship delays to JS

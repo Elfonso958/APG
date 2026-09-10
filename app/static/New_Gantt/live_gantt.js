@@ -4627,8 +4627,9 @@
       PassengerType: normalizeCharterPaxType(p.PassengerType || p.passengerType),
       Gender: String(p.Gender || p.gender || "").toUpperCase(),
       BaggageWeight: Number(p.BaggageWeight || p.baggageWeight || 0),
+      BaggagePieces: Number(p.BaggagePieces || 0),
       BookingReferenceID: String(p.BookingReferenceID || p.PNR || p.RecordLocator || ""),
-      Status: status === "FLOWN" ? "Flown" : "Boarded",
+      Status: status === "FLOWN" ? "Flown" : status === "BOARDED" ? "Boarded" : status === "CHECKED" ? "Checked In" : "Booked",
       SSR: String(p.SSR || p.SsrsText || ssrText(p) || ""),
     };
   }
@@ -4636,7 +4637,7 @@
   function newEmptyCharterRow(f = selectedFlight) {
     return editableCharterRowFromPax({
       PassengerType: "AD",
-      Status: "Boarded",
+      Status: "Booked",
       __manifest_origin: f?.dep || "",
       __manifest_dest: f?.ades || "",
     }, f);
@@ -4653,8 +4654,9 @@
       PassengerType: normalizeCharterPaxType(row.PassengerType),
       Gender: String(row.Gender || "").trim().toUpperCase(),
       BaggageWeight: Number(row.BaggageWeight || 0),
+      BaggagePieces: Number(row.BaggagePieces || 0),
       BookingReferenceID: String(row.BookingReferenceID || "").trim(),
-      Status: String(row.Status || "Boarded").trim() || "Boarded",
+      Status: String(row.Status || "Booked").trim() || "Booked",
       SSR: String(row.SSR || "").trim(),
     })).filter((row) => row.GivenName || row.Surname);
   }
@@ -4689,10 +4691,10 @@
     }
     el.value = row[field] ?? "";
     el.addEventListener("input", () => {
-      charterManifestRows[rowIndex][field] = field === "BaggageWeight" ? Number(el.value || 0) : el.value;
+      charterManifestRows[rowIndex][field] = ["BaggageWeight", "BaggagePieces"].includes(field) ? Number(el.value || 0) : el.value;
     });
     el.addEventListener("change", () => {
-      charterManifestRows[rowIndex][field] = field === "BaggageWeight" ? Number(el.value || 0) : el.value;
+      charterManifestRows[rowIndex][field] = ["BaggageWeight", "BaggagePieces"].includes(field) ? Number(el.value || 0) : el.value;
     });
     return el;
   }
@@ -4702,7 +4704,7 @@
     charterManifestTbody.innerHTML = "";
     if (!charterManifestRows.length) {
       const tr = document.createElement("tr");
-      tr.innerHTML = '<td colspan="13">No passengers uploaded yet. Download the template or add rows manually.</td>';
+      tr.innerHTML = '<td colspan="14">No passengers uploaded yet. Download the template or add rows manually.</td>';
       charterManifestTbody.appendChild(tr);
       return;
     }
@@ -4731,9 +4733,12 @@
           ],
         }),
         charterManifestInput(idx, "BaggageWeight", { type: "number", step: "0.1" }),
+        charterManifestInput(idx, "BaggagePieces", { type: "number", step: "1" }),
         charterManifestInput(idx, "BookingReferenceID"),
         charterManifestInput(idx, "Status", {
           select: [
+            { value: "Booked", label: "Booked" },
+            { value: "Checked In", label: "Checked In" },
             { value: "Boarded", label: "Boarded" },
             { value: "Flown", label: "Flown" },
           ],

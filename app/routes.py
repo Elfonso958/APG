@@ -2,6 +2,9 @@
 import csv
 import io
 import json
+import uuid
+import smtplib
+from email.message import EmailMessage
 from flask import Blueprint, request, abort, send_file, make_response, current_app, jsonify, Response, render_template, session, url_for
 from datetime import datetime, timezone, timedelta, date
 from . import db, _normalise_sync_result
@@ -1729,6 +1732,7 @@ CHARTER_MANIFEST_COLUMNS = [
     "PassengerType",
     "Gender",
     "BaggageWeight",
+    "BaggagePieces",
     "BookingReferenceID",
     "Status",
     "SSR",
@@ -1746,12 +1750,49 @@ def _require_openpyxl():
 def _normalise_charter_status(value: str | None) -> str:
     s = str(value or "").strip().upper()
     if not s:
-        return "Boarded"
+        return "Booked"
     if "FLOWN" in s:
         return "Flown"
     if "BOARD" in s or s in {"BD", "BRD"}:
         return "Boarded"
-    return str(value or "").strip()
+    if "CHECK" in s or s in {"CKIN", "CKI", "CI"}:
+        return "Checked In"
+    if "BOOK" in s or s in {"BK", "BKG"}:
+        return "Booked"
+    return "Booked"
+
+
+def _charter_ssrs_from_row(row: dict) -> list[dict]:
+    raw_ssrs = row.get("Ssrs")
+    ssr_text = str(row.get("SSR") or "").strip()
+    if not ssr_text and isinstance(raw_ssrs, list):
+        return [
+            {
+                "Code": str(item.get("Code") or "OTHS").strip().upper() or "OTHS",
+                "FreeText": str(item.get("FreeText") or "").strip(),
+            }
+            for item in raw_ssrs
+            if isinstance(item, dict)
+        ]
+
+    if not ssr_text:
+        ssr_text = str(raw_ssrs or "").strip()
+    ssrs = []
+    if ssr_text:
+        for part in [p.strip() for p in ssr_text.split(",") if p.strip()]:
+            m = re.match(r"^([A-Z0-9]{2,5})(?:\s*\((.*)\))?$", part, re.IGNORECASE)
+            if m:
+                ssrs.append({"Code": m.group(1).upper(), "FreeText": (m.group(2) or "").strip()})
+            else:
+                ssrs.append({"Code": "OTHS", "FreeText": part})
+    return ssrs
+
+
+def _charter_number(value, default: float = 0.0) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return default
 
 
 def _charter_pax_from_row(row: dict, default_dep: str = "", default_ades: str = "") -> dict | None:
@@ -1761,15 +1802,8 @@ def _charter_pax_from_row(row: dict, default_dep: str = "", default_ades: str = 
     if not (given or surname):
         return None
 
-    ssr_text = str(row.get("SSR") or row.get("Ssrs") or "").strip()
-    ssrs = []
-    if ssr_text:
-        for part in [p.strip() for p in ssr_text.split(",") if p.strip()]:
-            m = re.match(r"^([A-Z0-9]{2,5})(?:\s*\((.*)\))?$", part, re.IGNORECASE)
-            if m:
-                ssrs.append({"Code": m.group(1).upper(), "FreeText": (m.group(2) or "").strip()})
-            else:
-                ssrs.append({"Code": "OTHS", "FreeText": part})
+    ssrs = _charter_ssrs_from_row(row)
+    status = _normalise_charter_status(row.get("Status"))
 
     return {
         "Seat": str(row.get("Seat") or "").strip().upper(),
@@ -1780,11 +1814,16 @@ def _charter_pax_from_row(row: dict, default_dep: str = "", default_ades: str = 
         "__manifest_dest": str(row.get("Destination") or default_ades or "").strip().upper(),
         "PassengerType": str(row.get("PassengerType") or "AD").strip().upper() or "AD",
         "Gender": str(row.get("Gender") or "").strip().upper(),
-        "BaggageWeight": float(row.get("BaggageWeight") or 0),
+        "BaggageWeight": _charter_number(row.get("BaggageWeight")),
+        "BaggagePieces": max(0, int(_charter_number(row.get("BaggagePieces"), 0))),
         "BookingReferenceID": str(row.get("BookingReferenceID") or "").strip(),
-        "Status": _normalise_charter_status(row.get("Status")),
-        "Boarded": _normalise_charter_status(row.get("Status")).upper() == "BOARDED",
-        "Flown": _normalise_charter_status(row.get("Status")).upper() == "FLOWN",
+        "PassengerId": str(row.get("PassengerId") or row.get("passenger_id") or uuid.uuid4().hex).strip(),
+        "Status": status,
+        "Boarded": status.upper() in {"BOARDED", "FLOWN"},
+        "Flown": status.upper() == "FLOWN",
+        "CheckedInAt": str(row.get("CheckedInAt") or "").strip() or None,
+        "BoardedAt": str(row.get("BoardedAt") or "").strip() or None,
+        "Comments": str(row.get("Comments") or row.get("AgentComments") or "").strip(),
         "Ssrs": ssrs,
         "__manual_manifest": True,
     }
@@ -1797,7 +1836,22 @@ def _serialize_charter_manifest(manifest: CharterManifest | None) -> list[dict]:
         data = json.loads(manifest.pax_json or "[]")
     except Exception:
         data = []
-    return data if isinstance(data, list) else []
+    if not isinstance(data, list):
+        return []
+    # Older saved manifests pre-date per-passenger updates. Give each row a
+    # persistent identifier so check-in actions do not overwrite other agents'
+    # work on the same flight.
+    changed = False
+    for passenger in data:
+        if isinstance(passenger, dict) and not passenger.get("PassengerId"):
+            passenger["PassengerId"] = uuid.uuid4().hex
+            changed = True
+    if changed:
+        manifest.pax_json = json.dumps(data)
+        manifest.updated_at = datetime.utcnow()
+        db.session.add(manifest)
+        db.session.commit()
+    return data
 
 
 def _upsert_charter_manifest(
@@ -1828,30 +1882,88 @@ def _upsert_charter_manifest(
     return manifest
 
 
+def _charter_closure_recipients() -> list[str]:
+    return [address.strip() for address in os.getenv("FLIGHT_OPERATIONS_EMAIL", "").split(",") if address.strip()]
+
+
+def _send_charter_flight_closure_email(manifest: CharterManifest, closed_at: datetime) -> None:
+    """Send the close-out manifest before the flight is marked closed."""
+    recipients = _charter_closure_recipients()
+    smtp_host = os.getenv("SMTP_HOST", "").strip()
+    sender = os.getenv("SMTP_FROM", "").strip()
+    missing = []
+    if not recipients:
+        missing.append("FLIGHT_OPERATIONS_EMAIL")
+    if not smtp_host:
+        missing.append("SMTP_HOST")
+    if not sender:
+        missing.append("SMTP_FROM")
+    if missing:
+        raise RuntimeError("Flight closure email is not configured. Set " + ", ".join(missing) + ".")
+
+    closed_local = closed_at.replace(tzinfo=timezone.utc).astimezone(NZ_TZ)
+    passengers = _serialize_charter_manifest(manifest)
+    lines = [
+        "Air Chathams Charter Flight Closure",
+        "",
+        f"Flight: {manifest.flight_no or 'Charter flight'}",
+        f"Route: {(manifest.dep or '---').upper()} - {(manifest.ades or '---').upper()}",
+        f"Closed: {closed_local.strftime('%d %b %Y %H:%M %Z')}",
+        f"Passenger records: {len(passengers)}",
+        "",
+        "Passenger manifest",
+        "------------------",
+    ]
+    for index, passenger in enumerate(passengers, start=1):
+        name = " ".join(str(passenger.get(key) or "").strip() for key in ("GivenName", "Surname")).strip() or "Unnamed passenger"
+        ssr_values = []
+        for item in passenger.get("Ssrs", []):
+            if not isinstance(item, dict):
+                continue
+            code = str(item.get("Code") or "").strip()
+            detail = str(item.get("FreeText") or "").strip()
+            ssr_values.append(f"{code} ({detail})" if detail else code)
+        ssrs = ", ".join(value for value in ssr_values if value) or str(passenger.get("SSR") or "-")
+        lines.extend([
+            f"{index}. {name} | {passenger.get('PassengerType') or 'AD'} | Seat {passenger.get('Seat') or '-'} | {passenger.get('Status') or 'Booked'}",
+            f"   Bags: {passenger.get('BaggageWeight') or 0} kg / {passenger.get('BaggagePieces') or 0} pieces | SSR: {ssrs}",
+        ])
+        if passenger.get("Comments"):
+            lines.append(f"   Comments: {passenger['Comments']}")
+
+    message = EmailMessage()
+    message["Subject"] = f"Charter flight closed — {manifest.flight_no or manifest.envision_flight_id} {(manifest.dep or '').upper()}-{(manifest.ades or '').upper()}"
+    message["From"] = sender
+    message["To"] = ", ".join(recipients)
+    message.set_content("\n".join(lines))
+    try:
+        smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    except ValueError as exc:
+        raise RuntimeError("SMTP_PORT must be a number") from exc
+    try:
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as client:
+            client.ehlo()
+            if os.getenv("SMTP_STARTTLS", "true").strip().lower() not in {"0", "false", "no"}:
+                client.starttls()
+                client.ehlo()
+            username = os.getenv("SMTP_USERNAME", "").strip()
+            if username:
+                client.login(username, os.getenv("SMTP_PASSWORD", ""))
+            client.send_message(message)
+    except Exception as exc:
+        raise RuntimeError(f"Unable to send the Flight Operations closure email: {exc}") from exc
+
+
 @api_bp.get("/dcs/charter_manifest/template")
 def api_charter_manifest_template():
-    template_path = os.path.join(
-        current_app.root_path,
-        "static",
-        "templates",
-        "charter-passenger-manifest-template.xlsx",
-    )
-    if os.path.exists(template_path):
-        return send_file(
-            template_path,
-            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            as_attachment=True,
-            download_name="charter-passenger-manifest-template.xlsx",
-        )
-
     Workbook, _load_workbook = _require_openpyxl()
     wb = Workbook()
     ws = wb.active
     ws.title = "Passengers"
     ws.append(CHARTER_MANIFEST_COLUMNS)
-    ws.append(["1A", "Mr", "Example", "Passenger", "CHT", "AKL", "AD", "M", 0, "CHARTER1", "Boarded", ""])
-    ws.append(["", "Infant", "Example", "Infant", "CHT", "AKL", "INF", "", 0, "CHARTER1", "Boarded", ""])
-    for idx, width in enumerate([10, 12, 18, 20, 12, 14, 16, 10, 16, 20, 14, 36], start=1):
+    ws.append(["1A", "Mr", "Example", "Passenger", "CHT", "AKL", "AD", "M", 0, 0, "CHARTER1", "Booked", ""])
+    ws.append(["", "Infant", "Example", "Infant", "CHT", "AKL", "INF", "", 0, 0, "CHARTER1", "Booked", ""])
+    for idx, width in enumerate([10, 12, 18, 20, 12, 14, 16, 10, 16, 14, 20, 14, 36], start=1):
         ws.column_dimensions[ws.cell(row=1, column=idx).column_letter].width = width
     bio = io.BytesIO()
     wb.save(bio)
@@ -1876,6 +1988,7 @@ def api_charter_manifest_get():
         passengers=_serialize_charter_manifest(manifest),
         uploaded_filename=manifest.uploaded_filename if manifest else "",
         updated_at=manifest.updated_at.isoformat() if manifest and manifest.updated_at else None,
+        closed_at=manifest.closed_at.isoformat() if manifest and manifest.closed_at else None,
     )
 
 
@@ -1884,12 +1997,15 @@ def api_charter_manifest_upload():
     flight_id = request.form.get("flight_id") or request.form.get("envision_flight_id")
     if not flight_id:
         return jsonify(ok=False, error="Missing flight_id"), 400
+    existing_manifest = CharterManifest.query.filter_by(envision_flight_id=str(flight_id)).first()
+    if existing_manifest and existing_manifest.closed_at:
+        return jsonify(ok=False, error="This flight is closed. Reopen it before replacing the passenger list."), 409
     file = request.files.get("file")
     if not file or not file.filename:
         return jsonify(ok=False, error="Missing Excel file"), 400
 
-    _Workbook, load_workbook = _require_openpyxl()
     try:
+        _Workbook, load_workbook = _require_openpyxl()
         wb = load_workbook(file, data_only=True)
         ws = wb.active
         headers = [str(c.value or "").strip() for c in ws[1]]
@@ -1905,7 +2021,7 @@ def api_charter_manifest_upload():
                 rows.append(pax)
     except Exception as exc:
         current_app.logger.exception("Charter manifest upload parse failed")
-        return jsonify(ok=False, error=f"Unable to parse Excel manifest: {exc}"), 400
+        return jsonify(ok=False, error=f"Unable to import the Excel manifest: {exc}"), 400
 
     manifest = _upsert_charter_manifest(
         str(flight_id),
@@ -1925,6 +2041,9 @@ def api_charter_manifest_save():
     flight_id = data.get("flight_id") or data.get("envision_flight_id")
     if not flight_id:
         return jsonify(ok=False, error="Missing flight_id"), 400
+    existing_manifest = CharterManifest.query.filter_by(envision_flight_id=str(flight_id)).first()
+    if existing_manifest and existing_manifest.closed_at:
+        return jsonify(ok=False, error="This flight is closed. Reopen it before saving the passenger list."), 409
     passengers = []
     for row in data.get("passengers") or []:
         if isinstance(row, dict):
@@ -1944,6 +2063,212 @@ def api_charter_manifest_save():
     )
     _clear_live_gantt_cache()
     return jsonify(ok=True, passengers=_serialize_charter_manifest(manifest), count=len(passengers))
+
+
+@api_bp.patch("/dcs/charter_manifest/passenger")
+def api_charter_manifest_update_passenger():
+    """Persist one charter passenger check-in action without overwriting other agents' work."""
+    data = request.get_json(force=True) or {}
+    flight_id = str(data.get("flight_id") or data.get("envision_flight_id") or "").strip()
+    passenger_id = str(data.get("passenger_id") or data.get("PassengerId") or "").strip()
+    if not flight_id or not passenger_id:
+        return jsonify(ok=False, error="Missing flight_id or passenger_id"), 400
+
+    manifest = CharterManifest.query.filter_by(envision_flight_id=flight_id).first()
+    if not manifest:
+        return jsonify(ok=False, error="No charter manifest has been uploaded for this flight"), 404
+    if manifest.closed_at:
+        return jsonify(ok=False, error="This flight is closed. Reopen it before changing passenger details."), 409
+
+    passengers = _serialize_charter_manifest(manifest)
+    allowed_fields = {"Seat", "BaggageWeight", "BaggagePieces", "Status", "CheckedInAt", "BoardedAt", "SSR", "Comments"}
+    changes = {key: data[key] for key in allowed_fields if key in data}
+    for index, existing in enumerate(passengers):
+        if str(existing.get("PassengerId") or "") != passenger_id:
+            continue
+        merged = dict(existing)
+        merged.update(changes)
+        requested_seat = str(merged.get("Seat") or "").strip().upper()
+        if requested_seat:
+            for other_index, other in enumerate(passengers):
+                if other_index == index or not isinstance(other, dict):
+                    continue
+                other_seat = str(other.get("Seat") or other.get("SeatNumber") or "").strip().upper()
+                if other_seat == requested_seat:
+                    return jsonify(ok=False, error=f"Seat {requested_seat} is already assigned to another passenger"), 409
+        if "Status" in changes:
+            status = _normalise_charter_status(changes["Status"])
+            if status == "Checked In" and not merged.get("CheckedInAt"):
+                merged["CheckedInAt"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            if status in {"Boarded", "Flown"} and not merged.get("BoardedAt"):
+                merged["BoardedAt"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        passenger = _charter_pax_from_row(merged, manifest.dep or "", manifest.ades or "")
+        if not passenger:
+            return jsonify(ok=False, error="Passenger details are invalid"), 400
+        passengers[index] = passenger
+        saved = _upsert_charter_manifest(
+            flight_id,
+            passengers,
+            flight_no=manifest.flight_no or "",
+            dep=manifest.dep or "",
+            ades=manifest.ades or "",
+            filename=manifest.uploaded_filename,
+        )
+        _clear_live_gantt_cache()
+        return jsonify(ok=True, passenger=passenger, updated_at=saved.updated_at.isoformat())
+
+    return jsonify(ok=False, error="Passenger not found. Reload the charter manifest and try again."), 404
+
+
+@api_bp.post("/dcs/charter_manifest/passenger")
+def api_charter_manifest_add_passenger():
+    data = request.get_json(force=True) or {}
+    flight_id = str(data.get("flight_id") or data.get("envision_flight_id") or "").strip()
+    if not flight_id:
+        return jsonify(ok=False, error="Missing flight_id"), 400
+    manifest = CharterManifest.query.filter_by(envision_flight_id=flight_id).first()
+    if not manifest:
+        return jsonify(ok=False, error="No charter manifest has been uploaded for this flight"), 404
+    if manifest.closed_at:
+        return jsonify(ok=False, error="This flight is closed. Reopen it before adding passengers."), 409
+    passenger = _charter_pax_from_row(data, manifest.dep or "", manifest.ades or "")
+    if not passenger:
+        return jsonify(ok=False, error="Given name or surname is required"), 400
+    passengers = _serialize_charter_manifest(manifest)
+    requested_seat = str(passenger.get("Seat") or "").strip().upper()
+    if requested_seat and any(str(p.get("Seat") or "").strip().upper() == requested_seat for p in passengers if isinstance(p, dict)):
+        return jsonify(ok=False, error=f"Seat {requested_seat} is already assigned to another passenger"), 409
+    passengers.append(passenger)
+    _upsert_charter_manifest(
+        flight_id,
+        passengers,
+        flight_no=manifest.flight_no or "",
+        dep=manifest.dep or "",
+        ades=manifest.ades or "",
+        filename=manifest.uploaded_filename,
+    )
+    _clear_live_gantt_cache()
+    return jsonify(ok=True, passenger=passenger, count=len(passengers)), 201
+
+
+def _charter_boarding_code(flight_id: str, passenger_id: str) -> str:
+    return f"ACCI|{flight_id}|{passenger_id}"
+
+
+@api_bp.get("/dcs/charter_manifest/boarding-qr")
+def api_charter_manifest_boarding_qr():
+    flight_id = str(request.args.get("flight_id") or "").strip()
+    passenger_id = str(request.args.get("passenger_id") or "").strip()
+    if not flight_id or not passenger_id:
+        return jsonify(ok=False, error="Missing flight_id or passenger_id"), 400
+    manifest = CharterManifest.query.filter_by(envision_flight_id=flight_id).first()
+    if not manifest or not any(str(p.get("PassengerId") or "") == passenger_id for p in _serialize_charter_manifest(manifest) if isinstance(p, dict)):
+        return jsonify(ok=False, error="Passenger not found"), 404
+    try:
+        from reportlab.graphics.barcode import qr
+        from reportlab.graphics.shapes import Drawing
+        from reportlab.graphics import renderPM
+        widget = qr.QrCodeWidget(_charter_boarding_code(flight_id, passenger_id))
+        x0, y0, x1, y1 = widget.getBounds()
+        drawing = Drawing(x1 - x0, y1 - y0)
+        drawing.add(widget)
+        png = io.BytesIO(renderPM.drawToString(drawing, fmt="PNG"))
+        response = send_file(png, mimetype="image/png", download_name="boarding-pass-qr.png")
+        response.headers["Cache-Control"] = "no-store"
+        return response
+    except Exception as exc:
+        current_app.logger.exception("Unable to generate charter boarding QR code")
+        return jsonify(ok=False, error=f"Unable to generate boarding QR code: {exc}"), 500
+
+
+@api_bp.post("/dcs/charter_manifest/board-scan")
+def api_charter_manifest_board_scan():
+    data = request.get_json(force=True) or {}
+    code = str(data.get("code") or "").strip()
+    parts = code.split("|")
+    if len(parts) != 3 or parts[0] != "ACCI" or not parts[1] or not parts[2]:
+        return jsonify(ok=False, error="This is not a valid Air Chathams charter boarding-pass QR code"), 400
+    flight_id, passenger_id = parts[1], parts[2]
+    manifest = CharterManifest.query.filter_by(envision_flight_id=flight_id).first()
+    if not manifest:
+        return jsonify(ok=False, error="The flight for this boarding pass was not found"), 404
+    if manifest.closed_at:
+        return jsonify(ok=False, error="This flight is closed. Reopen it before boarding passengers."), 409
+    passengers = _serialize_charter_manifest(manifest)
+    for index, existing in enumerate(passengers):
+        if not isinstance(existing, dict) or str(existing.get("PassengerId") or "") != passenger_id:
+            continue
+        merged = dict(existing)
+        merged["Status"] = "Boarded"
+        merged["BoardedAt"] = merged.get("BoardedAt") or datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        passenger = _charter_pax_from_row(merged, manifest.dep or "", manifest.ades or "")
+        passengers[index] = passenger
+        _upsert_charter_manifest(
+            flight_id,
+            passengers,
+            flight_no=manifest.flight_no or "",
+            dep=manifest.dep or "",
+            ades=manifest.ades or "",
+            filename=manifest.uploaded_filename,
+        )
+        _clear_live_gantt_cache()
+        return jsonify(ok=True, flight_id=flight_id, passenger=passenger, message=f"{passenger['GivenName']} {passenger['Surname']} boarded")
+    return jsonify(ok=False, error="The passenger for this boarding pass was not found"), 404
+
+
+@api_bp.post("/dcs/charter_manifest/flight-close")
+def api_charter_manifest_close_flight():
+    data = request.get_json(force=True) or {}
+    flight_id = str(data.get("flight_id") or data.get("envision_flight_id") or "").strip()
+    if not flight_id:
+        return jsonify(ok=False, error="Missing flight_id"), 400
+    manifest = CharterManifest.query.filter_by(envision_flight_id=flight_id).first()
+    if not manifest:
+        return jsonify(ok=False, error="No charter manifest has been uploaded for this flight"), 404
+    if manifest.closed_at:
+        return jsonify(ok=True, closed_at=manifest.closed_at.isoformat(), message="This flight is already closed.")
+
+    closed_at = datetime.utcnow()
+    email_configured = bool(
+        _charter_closure_recipients()
+        and os.getenv("SMTP_HOST", "").strip()
+        and os.getenv("SMTP_FROM", "").strip()
+    )
+    if email_configured:
+        try:
+            _send_charter_flight_closure_email(manifest, closed_at)
+        except RuntimeError as exc:
+            current_app.logger.warning("Unable to close charter flight %s: %s", flight_id, exc)
+            return jsonify(ok=False, error=str(exc)), 503
+
+    manifest.closed_at = closed_at
+    manifest.closure_email_sent_at = closed_at
+    manifest.updated_at = closed_at
+    db.session.add(manifest)
+    db.session.commit()
+    _clear_live_gantt_cache()
+    message = "Flight closed and manifest emailed to Flight Operations." if email_configured else "Flight closed. Flight Operations email is not configured yet."
+    return jsonify(ok=True, closed_at=closed_at.isoformat(), email_sent=email_configured, message=message)
+
+
+@api_bp.post("/dcs/charter_manifest/flight-reopen")
+def api_charter_manifest_reopen_flight():
+    data = request.get_json(force=True) or {}
+    flight_id = str(data.get("flight_id") or data.get("envision_flight_id") or "").strip()
+    if not flight_id:
+        return jsonify(ok=False, error="Missing flight_id"), 400
+    manifest = CharterManifest.query.filter_by(envision_flight_id=flight_id).first()
+    if not manifest:
+        return jsonify(ok=False, error="No charter manifest has been uploaded for this flight"), 404
+    if not manifest.closed_at:
+        return jsonify(ok=True, closed_at=None, message="This flight is already open.")
+    manifest.closed_at = None
+    manifest.closure_email_sent_at = None
+    manifest.updated_at = datetime.utcnow()
+    db.session.add(manifest)
+    db.session.commit()
+    _clear_live_gantt_cache()
+    return jsonify(ok=True, closed_at=None, message="Flight reopened for check-in.")
 
 
 @api_bp.route("/envision/environment", methods=["GET", "POST"])

@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='New_Gantt/live_gantt.css') }}?v=crew-apg-2">
+  <link rel="stylesheet" href="{{ url_for('static', filename='New_Gantt/live_gantt.css') }}?v=crew-apg-3">
 </head>
 <body data-theme="light" class="view-{{ page_view or 'gantt' }}">
   <div id="new-gantt-app"
@@ -62,6 +62,7 @@
         <a class="btn btn-ghost view-link" href="{{ url_for('ui.dcs_new_live_gantt', date=day.isoformat()) }}">Gantt View</a>
         {% else %}
         <a class="btn btn-ghost view-link" href="{{ url_for('ui.dcs_crew_briefing', date=day.isoformat()) }}">Crew Briefing</a>
+        <a class="btn btn-ghost view-link" href="{{ url_for('ui.dcs_charter_checkin', date=day.isoformat()) }}">Charter Check-in</a>
         {% endif %}
         <label class="ctrl">
           <span>{{ "Starting date" if page_view == "briefing" else "Date" }}</span>
@@ -255,6 +256,7 @@
               <th>Type</th>
               <th>Gender</th>
               <th>Bag Kg</th>
+              <th>Pieces</th>
               <th>PNR</th>
               <th>Status</th>
               <th>SSR</th>
