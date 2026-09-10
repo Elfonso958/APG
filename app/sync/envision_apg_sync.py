@@ -189,6 +189,7 @@ IATA_TO_ICAO = {
     "BHE": "NZWB",  # Blenheim / Woodbourne
     "TUO": "NZAP",  # Taupo
     "WRE": "NZWR",  # Whangarei
+    "OAM": "NZOU",  # Oamaru
 
     # Regionals / Smaller Commercial Airports
     "PPQ": "NZPP",  # Paraparaumu
