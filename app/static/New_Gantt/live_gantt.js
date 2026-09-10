@@ -2687,7 +2687,7 @@
       if (match) return (match[1] === "B" ? 0 : 2000) + Number(match[2]);
       return 1000; // Cargo 0: after B zones and before C zones.
     };
-    const saabZonesHtml = saabZoneRows.sort((a, b) => saabZoneSort(a) - saabZoneSort(b)).map((row) => `<div class="freight-saab-hold">${mapHold(row, true)}</div>`).join("");
+    const saabZonesHtml = saabZoneRows.sort((a, b) => saabZoneSort(a) - saabZoneSort(b)).map((row) => `<div class="freight-saab-hold">${mapHold(row, isFullFreighter)}</div>`).join("");
     const atrHoldRow = (end) => {
       const left = holdsAt(`${end}-left`);
       const center = holdsAt(`${end}-center`);
