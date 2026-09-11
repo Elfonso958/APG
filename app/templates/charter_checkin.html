@@ -88,10 +88,10 @@
   <dialog id="boardingScanDialog" class="seatmap-dialog">
     <div class="seatmap-shell">
       <header><div><p class="eyebrow">Board passenger</p><h2>Scan boarding-pass QR code</h2></div><button id="boardingScanClose" class="button secondary" type="button">Close</button></header>
-      <p id="boardingScanStatus" class="muted">Allow camera access to scan a QR code, or scan/type the code below.</p>
+      <p id="boardingScanStatus" class="muted">Allow camera access, then point it at the boarding-pass QR code.</p>
       <video id="boardingScanVideo" class="boarding-video" playsinline muted></video>
-      <label class="scan-code-label">Scanner code<input id="boardingScanCode" type="text" autocomplete="off" placeholder="Scan QR code or paste its value"></label>
-      <button id="processBoardingCode" class="button" type="button">Board passenger</button>
+      <label class="scan-code-label" hidden>Scanner code<input id="boardingScanCode" type="text" autocomplete="off"></label>
+      <button id="processBoardingCode" type="button" hidden></button>
     </div>
   </dialog>
   <dialog id="checkinDialog" class="seatmap-dialog">
