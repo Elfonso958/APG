@@ -4,6 +4,7 @@ import io
 import json
 import uuid
 import smtplib
+import html
 from email.message import EmailMessage
 from flask import Blueprint, request, abort, send_file, make_response, current_app, jsonify, Response, render_template, session, url_for
 from datetime import datetime, timezone, timedelta, date
@@ -1821,6 +1822,8 @@ def _charter_pax_from_row(row: dict, default_dep: str = "", default_ades: str = 
         "BaggageWeight": _charter_number(row.get("BaggageWeight")),
         "BaggagePieces": max(0, int(_charter_number(row.get("BaggagePieces"), 0))),
         "BookingReferenceID": str(row.get("BookingReferenceID") or "").strip(),
+        "Email": str(row.get("Email") or "").strip().lower(),
+        "PhoneNumber": str(row.get("PhoneNumber") or row.get("MobilePhoneNumber") or "").strip(),
         "PassengerId": str(row.get("PassengerId") or row.get("passenger_id") or uuid.uuid4().hex).strip(),
         "Status": status,
         "Boarded": status.upper() in {"BOARDED", "FLOWN"},
@@ -2191,7 +2194,7 @@ def api_charter_manifest_update_passenger():
         return jsonify(ok=False, error="This flight is closed. Reopen it before changing passenger details."), 409
 
     passengers = _serialize_charter_manifest(manifest)
-    allowed_fields = {"Seat", "NamePrefix", "GivenName", "Surname", "PassengerType", "PassengerWeight", "BaggageWeight", "BaggagePieces", "Status", "CheckedInAt", "BoardedAt", "SSR", "Comments"}
+    allowed_fields = {"Seat", "NamePrefix", "GivenName", "Surname", "PassengerType", "PassengerWeight", "BaggageWeight", "BaggagePieces", "Status", "CheckedInAt", "BoardedAt", "SSR", "Comments", "Email", "PhoneNumber"}
     changes = {key: data[key] for key in allowed_fields if key in data}
     for index, existing in enumerate(passengers):
         if str(existing.get("PassengerId") or "") != passenger_id:

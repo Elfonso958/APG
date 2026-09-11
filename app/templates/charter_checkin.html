@@ -147,6 +147,8 @@
         <label>Surname<input id="checkinSurname" type="text" autocomplete="family-name"></label>
         <label>Passenger type<select id="checkinPassengerType"><option value="AD">Adult</option><option value="T">T — Adult (96 kg)</option><option value="CHD">Child</option><option value="INF">Infant</option><option value="UMNR">Unaccompanied minor</option></select></label>
         <label>Booking reference<input id="checkinPnr" type="text" autocapitalize="characters"></label>
+        <label>Email<input id="checkinEmail" type="email" autocomplete="email" placeholder="boarding pass email"></label>
+        <label>Phone number<input id="checkinPhone" type="tel" autocomplete="tel" placeholder="optional"></label>
       </div>
       <p id="checkinPassengerWeight" class="muted"></p>
       <div class="checkin-fields">
@@ -162,6 +164,6 @@
     </div>
   </dialog>
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
-  <script src="{{ url_for('static', filename='charter_checkin.js') }}?v=22"></script>
+  <script src="{{ url_for('static', filename='charter_checkin.js') }}?v=23"></script>
 </body>
 </html>
