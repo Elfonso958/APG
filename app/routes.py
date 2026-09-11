@@ -2070,8 +2070,28 @@ def _charter_departure_label(value: object) -> str:
         return raw
 
 
+def _charter_wallet_passenger_data(manifest: CharterManifest, passenger: dict) -> dict:
+    """Fill legacy passenger records from Envision before creating a wallet pass."""
+    enriched = dict(passenger)
+    if enriched.get("FlightDeparture") and enriched.get("AircraftRegistration"):
+        return enriched
+    try:
+        token = envision_authenticate()["token"]
+        flight = envision_get_flight_times(token, manifest.envision_flight_id)
+        if not enriched.get("FlightDeparture"):
+            enriched["FlightDeparture"] = flight.get("departureEstimate") or flight.get("departureScheduled") or ""
+        if not enriched.get("AircraftRegistration"):
+            enriched["AircraftRegistration"] = flight.get("flightRegistrationDescription") or flight.get("aircraftRegistration") or ""
+        if not enriched.get("AircraftType"):
+            enriched["AircraftType"] = flight.get("aircraftType") or flight.get("aircraftDescription") or ""
+    except Exception:
+        current_app.logger.warning("Unable to enrich charter wallet pass from Envision for flight %s", manifest.envision_flight_id, exc_info=True)
+    return enriched
+
+
 def _send_charter_boarding_pass_email(manifest: CharterManifest, passenger: dict) -> bool:
     """Email a checked-in passenger their branded pass. Delivery errors never undo check-in."""
+    passenger = _charter_wallet_passenger_data(manifest, passenger)
     recipient = str(passenger.get("Email") or "").strip().lower()
     if "@" not in recipient:
         return False
@@ -2345,6 +2365,7 @@ def api_charter_wallet_apple(token: str):
     if not manifest or not passenger:
         return jsonify(ok=False, error="Boarding pass not found"), 404
     try:
+        passenger = _charter_wallet_passenger_data(manifest, passenger)
         pass_file = io.BytesIO(apple_wallet_pass(flight_id=str(manifest.envision_flight_id), passenger=passenger, flight_no=manifest.flight_no or "Charter", dep=(manifest.dep or "---").upper(), ades=(manifest.ades or "---").upper(), gate=manifest.gate or "AS DIRECTED", departure=_charter_departure_label(passenger.get("FlightDeparture"))))
         return send_file(pass_file, mimetype="application/vnd.apple.pkpass", as_attachment=True, download_name="accharters-boarding-pass.pkpass")
     except Exception as exc:
