@@ -9,7 +9,7 @@
   els.saveGate = $("saveGateBtn");
   const workspace = document.querySelector(".workspace");
   const state = { flights: [], flight: null, passengers: [] };
-  let scanStream = null, scanTimer = null, scanProcessing = false, scanAudioContext = null;
+  let scanStream = null, scanTimer = null, scanProcessing = false, scanAudioContext = null, manifestRefreshInFlight = false;
   let checkinPassenger = null, checkinSsrs = [];
   const gateWarningShown = new Set();
   const ssrOptions = [["", "Choose an SSR code"], ["WCHR", "Wheelchair — ramp / distance"], ["WCHS", "Wheelchair — steps assistance"], ["WCHC", "Wheelchair — cabin seat transfer"], ["BLND", "Blind or low-vision passenger"], ["DEAF", "Deaf or hard-of-hearing passenger"], ["MAAS", "Meet and assist"], ["DPNA", "Disability / non-visible assistance"], ["UMNR", "Unaccompanied minor"], ["MEDA", "Medical case — clearance may be needed"], ["OXYG", "Supplementary oxygen"], ["EXST", "Extra seat"], ["STCR", "Stretcher"], ["PETC", "Pet in cabin"], ["AVIH", "Animal in hold"], ["WEAP", "Weapon handling"], ["INFT", "Infant accompanying passenger"], ["OTHS", "Other special service"]];
@@ -120,6 +120,32 @@
   async function selectFlight(flight) {
     state.flight = flight; state.passengers = []; renderFlight(); showNotice("Loading passenger list…");
     try { const u = new URL(app.dataset.manifestUrl, location.href); u.searchParams.set("flight_id", flight.envision_flight_id); const r = await fetch(u); const d = await r.json(); if (!r.ok || d.ok === false) throw Error(d.error || "Unable to load manifest"); state.passengers = d.passengers || []; els.manifestMeta.textContent = d.uploaded_filename ? `${d.uploaded_filename} · ${state.passengers.length} passengers` : `${state.passengers.length} passenger records`; showNotice(""); renderFlight(); } catch (e) { showNotice(e.message, true); }
+  }
+  async function refreshOpenFlight() {
+    if (!state.flight || document.hidden || manifestRefreshInFlight || els.checkinDialog.open) return;
+    manifestRefreshInFlight = true;
+    try {
+      const url = new URL(app.dataset.manifestUrl, location.href);
+      url.searchParams.set("flight_id", state.flight.envision_flight_id);
+      const response = await fetch(url, { cache:"no-store" });
+      const data = await responseJson(response, "Live passenger refresh");
+      if (!response.ok || data.ok === false) return;
+      const nextPassengers = data.passengers || [];
+      const changed = JSON.stringify(nextPassengers) !== JSON.stringify(state.passengers)
+        || (data.closed_at || null) !== (state.flight.charter_flight_closed_at || null)
+        || (data.gate || "") !== (state.flight.charter_gate || "");
+      state.passengers = nextPassengers;
+      state.flight.charter_flight_closed_at = data.closed_at || null;
+      state.flight.charter_gate = data.gate || "";
+      if (changed) {
+        renderFlight();
+        showNotice("Passenger list updated from another check-in station.");
+      }
+    } catch (_) {
+      // Background refresh is intentionally quiet; normal user actions show errors.
+    } finally {
+      manifestRefreshInFlight = false;
+    }
   }
   async function loadFlights() {
     els.refresh.disabled = true; showNotice("Loading charter flights…");
@@ -253,4 +279,6 @@
   els.saveGate.addEventListener("click", () => saveGate().catch((err) => showNotice(err.message, true)));
   els.search.addEventListener("input", renderPassengerActions);
   els.filter.addEventListener("change", renderPassengerActions);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshOpenFlight(); });
+  window.setInterval(refreshOpenFlight, 5000);
 })();
