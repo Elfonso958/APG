@@ -2546,6 +2546,36 @@ def api_charter_manifest_update_passenger():
     return jsonify(ok=False, error="Passenger not found. Reload the charter manifest and try again."), 404
 
 
+@api_bp.delete("/dcs/charter_manifest/passenger")
+def api_charter_manifest_delete_passenger():
+    """Permanently remove a passenger who has not boarded from a charter manifest."""
+    data = request.get_json(force=True) or {}
+    flight_id = str(data.get("flight_id") or data.get("envision_flight_id") or "").strip()
+    passenger_id = str(data.get("passenger_id") or data.get("PassengerId") or "").strip()
+    if not flight_id or not passenger_id:
+        return jsonify(ok=False, error="Missing flight_id or passenger_id"), 400
+    manifest = CharterManifest.query.filter_by(envision_flight_id=flight_id).first()
+    if not manifest:
+        return jsonify(ok=False, error="No charter manifest has been uploaded for this flight"), 404
+    if manifest.closed_at:
+        return jsonify(ok=False, error="This flight is closed. Reopen it before removing a passenger."), 409
+
+    passengers = _serialize_charter_manifest(manifest)
+    for index, passenger in enumerate(passengers):
+        if str(passenger.get("PassengerId") or "") != passenger_id:
+            continue
+        if _normalise_charter_status(passenger.get("Status")) in {"Boarded", "Flown"}:
+            return jsonify(ok=False, error="A boarded passenger cannot be removed. Reverse their boarding status first."), 409
+        removed = passengers.pop(index)
+        saved = _upsert_charter_manifest(
+            flight_id, passengers, flight_no=manifest.flight_no or "", dep=manifest.dep or "",
+            ades=manifest.ades or "", filename=manifest.uploaded_filename,
+        )
+        _clear_live_gantt_cache()
+        return jsonify(ok=True, removed_passenger_id=passenger_id, removed_name=" ".join(filter(None, [removed.get("GivenName"), removed.get("Surname")])), updated_at=saved.updated_at.isoformat())
+    return jsonify(ok=False, error="Passenger not found. Reload the charter manifest and try again."), 404
+
+
 @api_bp.post("/dcs/charter_manifest/passenger")
 def api_charter_manifest_add_passenger():
     data = request.get_json(force=True) or {}
