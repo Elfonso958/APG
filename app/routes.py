@@ -2325,10 +2325,28 @@ def api_charter_self_checkin(token: str):
     passenger["Seat"] = seat
     passenger["BagToWeigh"] = bool(data.get("BagToWeigh"))
     passenger["DangerousGoodsDeclared"] = bool(data.get("DangerousGoodsDeclared"))
+    passenger["Status"] = "Checked In"
+    passenger["CheckedInAt"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
     passenger["SelfCheckinCompletedAt"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
     passengers[index] = _charter_pax_from_row(passenger, manifest.dep or "", manifest.ades or "")
-    _upsert_charter_manifest(str(manifest.envision_flight_id), passengers, flight_no=manifest.flight_no or "", dep=manifest.dep or "", ades=manifest.ades or "", gate=manifest.gate or "", filename=manifest.uploaded_filename)
-    return jsonify(ok=True, message="Your pre-check-in has been saved.")
+    saved_manifest = _upsert_charter_manifest(str(manifest.envision_flight_id), passengers, flight_no=manifest.flight_no or "", dep=manifest.dep or "", ades=manifest.ades or "", gate=manifest.gate or "", filename=manifest.uploaded_filename)
+    wallet_passenger = _charter_wallet_passenger_data(saved_manifest, passengers[index])
+    wallet_token = make_wallet_token(str(saved_manifest.envision_flight_id), str(wallet_passenger["PassengerId"]))
+    apple_url = url_for("api.api_charter_wallet_apple", token=wallet_token, _external=True)
+    google_url = None
+    try:
+        google_url = google_wallet_link(
+            issuer_id=os.getenv("GOOGLE_WALLET_ISSUER_ID", ""),
+            service_account_file=os.getenv("GOOGLE_WALLET_SERVICE_ACCOUNT_FILE", "/opt/apg-importer/wallet-secrets/google-wallet-service-account.json"),
+            origin=request.url_root.rstrip("/"),
+            flight_id=str(saved_manifest.envision_flight_id), passenger=wallet_passenger,
+            flight_no=saved_manifest.flight_no or "Charter", dep=(saved_manifest.dep or "---").upper(), ades=(saved_manifest.ades or "---").upper(),
+            gate=saved_manifest.gate or "AS DIRECTED", departure=_charter_departure_label(wallet_passenger.get("FlightDeparture")),
+            logo_url=url_for("ui.charter_brand_asset", asset="main-logo", _external=True),
+        )
+    except Exception:
+        current_app.logger.exception("Unable to create Google Wallet link for charter pre-check-in")
+    return jsonify(ok=True, message="Your pre-check-in has been saved.", wallet={"apple_url": apple_url, "google_url": google_url})
 
 
 @api_bp.post("/dcs/charter_manifest/upload")
