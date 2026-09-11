@@ -149,7 +149,7 @@
       const quickCheckin = status === "Booked" ? `<button class="button" data-action="quick-checkin" data-id="${id}">Quick check in</button>` : "";
       const checkin = status === "Booked" ? `<button class="button secondary" data-action="checkin" data-id="${id}">Check in</button>` : "";
       const board = status === "Checked In" ? `<button class="button" data-action="board" data-id="${id}">Board</button>` : "";
-      const unallocate = p.Seat && status !== "Flown" ? `<button class="button secondary" data-action="unallocate-seat" data-id="${id}">Unallocate seat</button>` : "";
+      const unallocate = p.Seat && status === "Booked" ? `<button class="button secondary" data-action="unallocate-seat" data-id="${id}">Unallocate seat</button>` : "";
       const noShow = !["Boarded", "Flown", "No Show"].includes(status) ? `<button class="button secondary" data-action="no-show" data-id="${id}">No show</button>` : "";
       const reverse = status !== "Booked" ? `<button class="button secondary" data-action="${status === "Boarded" ? "unboard" : "booked"}" data-id="${id}">${status === "Boarded" ? "Unboard" : "Reverse"}</button>` : "";
       const seatmap = `<button class="button secondary" data-action="seatmap" data-id="${id}">Seat map</button>`;
