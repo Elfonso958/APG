@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='charter_checkin.css') }}?v=17">
+  <link rel="stylesheet" href="{{ url_for('static', filename='charter_checkin.css') }}?v=18">
 </head>
 <body>
   <main id="charterCheckinApp"
@@ -98,7 +98,7 @@
     <div class="seatmap-shell gate-shell">
       <header><div><p class="eyebrow">Flight gate</p><h2>Assign departure gate</h2></div><button id="gateDialogClose" class="button secondary" type="button">Close</button></header>
       <p class="muted">Choose the gate displayed on boarding passes.</p>
-      <label class="gate-select-label">Gate<select id="flightGate"></select></label>
+      <label class="gate-select-label">Gate<input id="flightGate" type="text" maxlength="16" placeholder="e.g. 4A" autocapitalize="characters"></label>
       <div class="checkin-actions"><button id="clearGateBtn" class="button secondary" type="button">Clear gate</button><button id="saveGateBtn" class="button" type="button">Save gate</button></div>
     </div>
   </dialog>
@@ -128,6 +128,6 @@
     </div>
   </dialog>
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
-  <script src="{{ url_for('static', filename='charter_checkin.js') }}?v=17"></script>
+  <script src="{{ url_for('static', filename='charter_checkin.js') }}?v=18"></script>
 </body>
 </html>

@@ -17,7 +17,6 @@
   let scanStream = null, scanTimer = null, scanProcessing = false, scanAudioContext = null, manifestRefreshInFlight = false;
   let checkinPassenger = null, checkinSsrs = [];
   const gateWarningShown = new Set();
-  const gateOptions = ["", "AS DIRECTED", "TARMAC", ...Array.from({ length:40 }, (_, index) => String(index + 1)), ...Array.from({ length:20 }, (_, index) => `A${index + 1}`)];
   const ssrOptions = [["", "Choose an SSR code"], ["WCHR", "Wheelchair — ramp / distance"], ["WCHS", "Wheelchair — steps assistance"], ["WCHC", "Wheelchair — cabin seat transfer"], ["BLND", "Blind or low-vision passenger"], ["DEAF", "Deaf or hard-of-hearing passenger"], ["MAAS", "Meet and assist"], ["DPNA", "Disability / non-visible assistance"], ["UMNR", "Unaccompanied minor"], ["MEDA", "Medical case — clearance may be needed"], ["OXYG", "Supplementary oxygen"], ["EXST", "Extra seat"], ["STCR", "Stretcher"], ["PETC", "Pet in cabin"], ["AVIH", "Animal in hold"], ["WEAP", "Weapon handling"], ["INFT", "Infant accompanying passenger"], ["OTHS", "Other special service"]];
   const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "'":"&#39;", '"':"&quot;" }[c]));
   const statusOf = (p) => p.Flown || String(p.Status || "").toLowerCase() === "flown" ? "Flown" : p.Boarded || String(p.Status || "").toLowerCase() === "boarded" ? "Boarded" : /check/i.test(String(p.Status || "")) ? "Checked In" : "Booked";
@@ -25,10 +24,7 @@
   const isCharter = (f) => /charter/.test(`${f.service_type || ""} ${f.flight_type || ""}`.toLowerCase());
   function showNotice(text, error = false) { els.notice.textContent = text; els.notice.hidden = !text; els.notice.classList.toggle("error", error); }
   function setGateSelection(value = "") {
-    const gate = String(value || "").trim().toUpperCase();
-    const choices = gate && !gateOptions.includes(gate) ? [...gateOptions, gate] : gateOptions;
-    els.gate.innerHTML = choices.map((choice) => `<option value="${esc(choice)}">${choice ? esc(choice) : "No gate assigned"}</option>`).join("");
-    els.gate.value = gate;
+    els.gate.value = String(value || "").trim().toUpperCase();
   }
   function openGateDialog() {
     if (!state.flight) return;
@@ -77,6 +73,13 @@
       return Array.from({ length:11 }, (_, i) => [i + 1, ["A"], ["B", "C"]]);
     }
     return [];
+  }
+  function boardingAircraftLabel(f) {
+    const aircraftType = String(f?.aircraft_type || "").toUpperCase();
+    const registration = String(f?.reg || "").replace(/-/g, "").toUpperCase();
+    if (aircraftType.includes("ATR") || registration.startsWith("ZKMC")) return "ATR 72";
+    if (aircraftType.includes("SAAB") || aircraftType.includes("SF3") || aircraftType.includes("SF340") || registration.startsWith("ZKCI") || registration.startsWith("ZKKR")) return "Saab 340";
+    return String(f?.aircraft_type || "Aircraft TBC");
   }
   function availableSeatFor(p) {
     if (String(p.PassengerType || "").toUpperCase() === "INF") return "";
@@ -287,7 +290,7 @@
     const f = state.flight, w = window.open("", "_blank", "width=900,height=450");
     if (!w) { showNotice("Allow pop-ups to print a boarding pass.", true); return; }
     const travelDate = f.std_nz ? new Intl.DateTimeFormat("en-NZ", { weekday:"short", day:"2-digit", month:"short", year:"numeric" }).format(new Date(f.std_nz)) : "Date TBC";
-    const route = `${esc(f.dep)} - ${esc(f.ades || f.dest)}`, passenger = esc(nameOf(p)), flight = esc(f.flight_number || f.flight), seat = esc(p.Seat || "GATE"), gate = esc(f.charter_gate || "AS DIRECTED"), aircraft = esc(f.aircraft_type || f.reg || "Aircraft TBC"), qr = esc(boardingQrUrl(p));
+    const route = `${esc(f.dep)} - ${esc(f.ades || f.dest)}`, passenger = esc(nameOf(p)), flight = esc(f.flight_number || f.flight), seat = esc(p.Seat || "GATE"), gate = esc(f.charter_gate || "AS DIRECTED"), aircraft = esc(boardingAircraftLabel(f)), qr = esc(boardingQrUrl(p));
     w.document.write(`<!doctype html><html><head><title>Boarding Pass</title><style>@page{size:200mm 80mm;margin:0}*{box-sizing:border-box}html,body{width:200mm;height:80mm;margin:0;background:#fff;font-family:Arial,sans-serif;color:#111}.pass{display:grid;grid-template-columns:150mm 50mm;width:200mm;height:80mm;overflow:hidden;border:1px solid #111}.main{padding:6mm 7mm}.brand{font-size:9pt;font-weight:700;letter-spacing:1.4px;color:#075985}.title{font-size:7pt;letter-spacing:1px;margin-top:1mm;color:#555}.route{font-size:28pt;font-weight:800;letter-spacing:1px;line-height:1;margin:4mm 0}.grid{display:grid;grid-template-columns:1.6fr .75fr .8fr;gap:4mm}.label{font-size:6.5pt;font-weight:700;letter-spacing:.7px;color:#555}.value{font-size:12pt;font-weight:700;margin-top:1mm}.seat .value{font-size:25pt;line-height:.85}.footer{margin-top:4mm;padding-top:3mm;border-top:1px solid #222;font-size:7pt}.stub{padding:6mm 4mm;border-left:1px dashed #111;text-align:center}.stub .route{font-size:16pt;margin:3mm 0}.stub .seat{margin:4mm 0}.qr{width:32mm;height:32mm;display:block;margin:2mm auto 1mm}.scan{font-size:6.5pt;color:#444}@media screen{body{padding:15px;background:#e5e7eb}.pass{box-shadow:0 3px 15px #0003;margin:auto}}</style></head><body><section class="pass"><div class="main"><div class="brand">AIR CHATHAMS</div><div class="title">CHARTER BOARDING PASS</div><div class="route">${route}</div><div class="grid"><div><div class="label">PASSENGER</div><div class="value">${passenger}</div></div><div><div class="label">FLIGHT</div><div class="value">${flight}</div></div><div class="seat"><div class="label">SEAT</div><div class="value">${seat}</div></div><div><div class="label">DATE</div><div class="value">${esc(travelDate)}</div></div><div><div class="label">DEPARTURE</div><div class="value">${esc(fmtTime(f.std_nz))}</div></div><div><div class="label">BOOKING REF</div><div class="value">${esc(p.BookingReferenceID || "-")}</div></div></div><div class="footer">Boarding pass valid for this charter sector only. Present QR code at the gate.</div></div><aside class="stub"><div class="brand">AIR CHATHAMS</div><div class="route">${route}</div><div class="label">FLIGHT</div><div class="value">${flight}</div><div class="seat"><div class="label">SEAT</div><div class="value">${seat}</div></div><img class="qr" src="${qr}" alt="Boarding QR code"><div class="scan">SCAN AT BOARDING</div></aside></section><script>window.onload=()=>window.print()<\/script></body></html>`);
     const printStyle = w.document.createElement("style");
     printStyle.textContent = ".stub{padding:4mm 3mm}.stub .brand{font-size:7pt}.stub .route{font-size:12pt;margin:2mm 0}.stub .value{font-size:10pt}.stub .seat{margin:2mm 0}.stub .seat .value{font-size:18pt;line-height:.9}.stub .qr{width:26mm;height:26mm;margin:1.5mm auto 1mm}.stub .scan{font-size:6pt}";
