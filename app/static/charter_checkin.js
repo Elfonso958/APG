@@ -198,7 +198,7 @@
       const checkin = status === "Booked" ? `<button class="button secondary" data-action="checkin" data-id="${id}">Check in</button>` : "";
       const dangerousGoodsPending = p.DangerousGoodsDeclared && !p.DangerousGoodsConfirmedAt;
       const actionRequired = dangerousGoodsPending ? `<button class="button" data-action="confirm-dangerous-goods" data-id="${id}">Action required</button>` : "";
-      const weighBag = p.BagToWeigh && !["Boarded", "Flown", "No Show"].includes(status) ? `<button class="button" data-action="weigh-bag" data-id="${id}">Weigh bag</button>` : "";
+      const weighBag = p.BagToWeigh && !["Boarded", "Flown", "No Show"].includes(status) ? `<button class="button" data-action="weigh-bag" data-id="${id}">Weigh bag / print tag</button>` : "";
       const board = status === "Checked In" ? `<button class="button" data-action="board" data-id="${id}">Board</button>` : "";
       const unallocate = p.Seat && status === "Booked" ? `<button class="button secondary" data-action="unallocate-seat" data-id="${id}">Unallocate seat</button>` : "";
       const noShow = !["Boarded", "Flown", "No Show"].includes(status) ? `<button class="button secondary" data-action="no-show" data-id="${id}">No show</button>` : "";
@@ -385,11 +385,11 @@
     els.checkinSeat.value = String(passenger.Seat || availableSeatFor(passenger) || "").toUpperCase(); els.checkinBagKg.value = Number(passenger.BaggageWeight || 0); els.checkinBagPieces.value = Number(passenger.BaggagePieces || 0); els.checkinComments.value = passenger.Comments || "";
     els.checkinSsrCode.innerHTML = ssrOptions.map(([value, label]) => `<option value="${value}">${esc(label)}</option>`).join(""); els.checkinSsrText.value = ""; renderCheckinSsrs(); renderCheckinSeatmap(); els.checkinDialog.showModal();
   }
-  async function completeCheckin() {
+  async function completeCheckin(printAfter = false) {
     const originalStatus = checkinPassenger ? statusOf(checkinPassenger) : "Booked";
     const originalSeat = String(checkinPassenger?.Seat || "").trim().toUpperCase();
     const isNewCheckin = originalStatus === "Booked";
-    if (isNewCheckin) await ensureGateBeforePrinting();
+    if (isNewCheckin && printAfter) await ensureGateBeforePrinting();
     const seat = els.checkinSeat.value.trim().toUpperCase();
     const passengerType = els.checkinPassengerType.value;
     const values = { Status:isNewCheckin ? "Checked In" : originalStatus, NamePrefix:els.checkinNamePrefix.value, GivenName:els.checkinGivenName.value.trim(), Surname:els.checkinSurname.value.trim(), PassengerType:passengerType, PassengerWeight:passengerWeightForType(passengerType), Seat:seat, BaggageWeight:Number(els.checkinBagKg.value || 0), BaggagePieces:Number(els.checkinBagPieces.value || 0), Email:els.checkinEmail.value.trim(), PhoneNumber:els.checkinPhone.value.trim(), FlightDeparture:state.flight?.std_nz || "", AircraftRegistration:state.flight?.reg || "", AircraftType:state.flight?.aircraft_type || "", SSR:ssrTextValue(), Comments:els.checkinComments.value.trim() };
@@ -399,7 +399,7 @@
     els.checkinDialog.close();
     if (isNewCheckin) {
       showNotice(`${nameOf(passenger)} checked in${seat ? ` in seat ${seat}` : ""}.`);
-      printPass(passenger);
+      if (printAfter) printPass(passenger);
     } else if (originalSeat !== seat) {
       showNotice(`${nameOf(passenger)} moved from ${originalSeat || "an unassigned seat"} to ${seat || "an unassigned seat"}. Collect the existing boarding pass.`);
       if (window.confirm(`Seat changed from ${originalSeat || "unassigned"} to ${seat || "unassigned"}. Collect the existing boarding pass. Print a replacement now?`)) printPass(passenger);
