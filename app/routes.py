@@ -1893,18 +1893,80 @@ def _charter_closure_recipients() -> list[str]:
     return [address.strip() for address in os.getenv("FLIGHT_OPERATIONS_EMAIL", "").split(",") if address.strip()]
 
 
+def _email_env(*names: str, default: str = "") -> str:
+    """Read either APG's SMTP variables or the shared LMS mail variables."""
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return default
+
+
+def _send_email_via_graph(sender: str, recipients: list[str], subject: str, body: str) -> bool:
+    """Use the LMS Microsoft Graph setup when it is present; return False when unavailable."""
+    tenant_id = _email_env("GRAPH_TENANT_ID", "MS_TENANT_ID")
+    client_id = _email_env("GRAPH_CLIENT_ID", "MS_CLIENT_ID")
+    client_secret = _email_env("GRAPH_CLIENT_SECRET", "MS_CLIENT_SECRET")
+    mailbox = _email_env("GRAPH_MAILBOX_UPN", "TEAMS_ORGANIZER_UPN", default=sender)
+    if not all((tenant_id, client_id, client_secret, mailbox)):
+        return False
+
+    try:
+        token_response = requests.post(
+            f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "scope": "https://graph.microsoft.com/.default",
+                "grant_type": "client_credentials",
+            },
+            timeout=30,
+        )
+        token_response.raise_for_status()
+        access_token = token_response.json()["access_token"]
+        response = requests.post(
+            f"https://graph.microsoft.com/v1.0/users/{mailbox}/sendMail",
+            headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+            json={
+                "message": {
+                    "subject": subject,
+                    "body": {"contentType": "Text", "content": body},
+                    "toRecipients": [{"emailAddress": {"address": address}} for address in recipients],
+                },
+                "saveToSentItems": True,
+            },
+            timeout=60,
+        )
+        response.raise_for_status()
+        return True
+    except requests.HTTPError as exc:
+        status_code = getattr(exc.response, "status_code", None)
+        if status_code in {401, 403, 404}:
+            current_app.logger.warning("Microsoft Graph mail delivery failed with status %s; falling back to SMTP.", status_code)
+            return False
+        raise RuntimeError(f"Unable to send Flight Operations email through Microsoft Graph: {exc}") from exc
+    except (KeyError, requests.RequestException) as exc:
+        current_app.logger.warning("Microsoft Graph mail delivery unavailable; falling back to SMTP: %s", exc)
+        return False
+
+
 def _send_charter_flight_closure_email(manifest: CharterManifest, closed_at: datetime) -> None:
     """Send the close-out manifest before the flight is marked closed."""
     recipients = _charter_closure_recipients()
-    smtp_host = os.getenv("SMTP_HOST", "").strip()
-    sender = os.getenv("SMTP_FROM", "").strip()
+    smtp_host = _email_env("SMTP_HOST", "MAIL_SERVER", default="send.xtra.co.nz")
+    sender = _email_env("SMTP_FROM", "MAIL_FROM", "MAIL_DEFAULT_SENDER")
+    graph_available = bool(
+        _email_env("GRAPH_TENANT_ID", "MS_TENANT_ID")
+        and _email_env("GRAPH_CLIENT_ID", "MS_CLIENT_ID")
+        and _email_env("GRAPH_CLIENT_SECRET", "MS_CLIENT_SECRET")
+    )
     missing = []
     if not recipients:
         missing.append("FLIGHT_OPERATIONS_EMAIL")
-    if not smtp_host:
-        missing.append("SMTP_HOST")
     if not sender:
-        missing.append("SMTP_FROM")
+        missing.append("SMTP_FROM (or MAIL_FROM)")
+    if not graph_available and not smtp_host:
+        missing.append("SMTP_HOST")
     if missing:
         raise RuntimeError("Flight closure email is not configured. Set " + ", ".join(missing) + ".")
 
@@ -1938,27 +2000,46 @@ def _send_charter_flight_closure_email(manifest: CharterManifest, closed_at: dat
         if passenger.get("Comments"):
             lines.append(f"   Comments: {passenger['Comments']}")
 
+    subject = f"Charter flight closed — {manifest.flight_no or manifest.envision_flight_id} {(manifest.dep or '').upper()}-{(manifest.ades or '').upper()}"
+    body = "\n".join(lines)
+    if graph_available and _send_email_via_graph(sender, recipients, subject, body):
+        return
+
     message = EmailMessage()
-    message["Subject"] = f"Charter flight closed — {manifest.flight_no or manifest.envision_flight_id} {(manifest.dep or '').upper()}-{(manifest.ades or '').upper()}"
+    message["Subject"] = subject
     message["From"] = sender
     message["To"] = ", ".join(recipients)
-    message.set_content("\n".join(lines))
+    message.set_content(body)
     try:
-        smtp_port = int(os.getenv("SMTP_PORT", "587"))
+        smtp_port = int(_email_env("SMTP_PORT", "MAIL_PORT", default="587"))
     except ValueError as exc:
-        raise RuntimeError("SMTP_PORT must be a number") from exc
+        raise RuntimeError("SMTP_PORT or MAIL_PORT must be a number") from exc
     try:
         with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as client:
             client.ehlo()
-            if os.getenv("SMTP_STARTTLS", "true").strip().lower() not in {"0", "false", "no"}:
+            if _email_env("SMTP_STARTTLS", "MAIL_USE_TLS", default="true").lower() not in {"0", "false", "no"}:
                 client.starttls()
                 client.ehlo()
-            username = os.getenv("SMTP_USERNAME", "").strip()
+            username = _email_env("SMTP_USERNAME", "MAIL_USERNAME")
             if username:
-                client.login(username, os.getenv("SMTP_PASSWORD", ""))
+                client.login(username, _email_env("SMTP_PASSWORD", "MAIL_PASSWORD"))
             client.send_message(message)
     except Exception as exc:
         raise RuntimeError(f"Unable to send the Flight Operations closure email: {exc}") from exc
+
+
+def _charter_email_is_configured() -> bool:
+    """Whether either the LMS Graph route or compatible SMTP settings are available."""
+    graph_available = bool(
+        _email_env("GRAPH_TENANT_ID", "MS_TENANT_ID")
+        and _email_env("GRAPH_CLIENT_ID", "MS_CLIENT_ID")
+        and _email_env("GRAPH_CLIENT_SECRET", "MS_CLIENT_SECRET")
+    )
+    smtp_available = bool(
+        _email_env("SMTP_HOST", "MAIL_SERVER")
+        or _email_env("SMTP_USERNAME", "MAIL_USERNAME")
+    )
+    return bool(_charter_closure_recipients() and _email_env("SMTP_FROM", "MAIL_FROM", "MAIL_DEFAULT_SENDER") and (graph_available or smtp_available))
 
 
 @api_bp.get("/dcs/charter_manifest/template")
@@ -2260,11 +2341,7 @@ def api_charter_manifest_close_flight():
         return jsonify(ok=True, closed_at=manifest.closed_at.isoformat(), message="This flight is already closed.")
 
     closed_at = datetime.utcnow()
-    email_configured = bool(
-        _charter_closure_recipients()
-        and os.getenv("SMTP_HOST", "").strip()
-        and os.getenv("SMTP_FROM", "").strip()
-    )
+    email_configured = _charter_email_is_configured()
     if email_configured:
         try:
             _send_charter_flight_closure_email(manifest, closed_at)

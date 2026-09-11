@@ -19,7 +19,7 @@
   els.checkinPassengerWeight = $("checkinPassengerWeight");
   const workspace = document.querySelector(".workspace");
   const state = { flights: [], flight: null, passengers: [] };
-  let scanStream = null, scanTimer = null, scanProcessing = false, scanAudioContext = null, manifestRefreshInFlight = false, pendingSeatChangeCode = "";
+  let scanStream = null, scanTimer = null, scanProcessing = false, scanAudioContext = null, manifestRefreshInFlight = false, pendingSeatChangeCode = "", ignoredScanCode = "", ignoreScanUntil = 0;
   let checkinPassenger = null, checkinSsrs = [];
   const gateWarningShown = new Set();
   const ssrOptions = [["", "Choose an SSR code"], ["WCHR", "Wheelchair — ramp / distance"], ["WCHS", "Wheelchair — steps assistance"], ["WCHC", "Wheelchair — cabin seat transfer"], ["BLND", "Blind or low-vision passenger"], ["DEAF", "Deaf or hard-of-hearing passenger"], ["MAAS", "Meet and assist"], ["DPNA", "Disability / non-visible assistance"], ["UMNR", "Unaccompanied minor"], ["MEDA", "Medical case — clearance may be needed"], ["OXYG", "Supplementary oxygen"], ["EXST", "Extra seat"], ["STCR", "Stretcher"], ["PETC", "Pet in cabin"], ["AVIH", "Animal in hold"], ["WEAP", "Weapon handling"], ["INFT", "Infant accompanying passenger"], ["OTHS", "Other special service"]];
@@ -226,10 +226,10 @@
   async function ensureScannerOpen() {
     if (!els.scanDialog.open || !scanStream?.active) await openScanner();
   }
-  async function processScanCode(acknowledgeSeatChange = false) { const code = acknowledgeSeatChange ? pendingSeatChangeCode : els.scanCode.value.trim(); if (!code || scanProcessing || (!els.seatChangeAlert.hidden && !acknowledgeSeatChange)) return; scanProcessing = true; els.scanProcess.disabled = true; try { const data = await boardScannedCode(code, acknowledgeSeatChange); if (data.seat_changed) { pendingSeatChangeCode = code; stopScanner(); els.seatChangeMessage.textContent = `${nameOf(data.passenger || {})}: boarding pass shows seat ${data.printed_seat || "unassigned"}; current seat is ${data.current_seat || "unassigned"}.`; els.seatChangeAlert.hidden = false; els.acknowledgeSeatChange.focus(); scanFeedback(false, "STOP — SEAT CHANGED"); els.scanStatus.textContent = "Seat change requires acknowledgement before boarding."; return; } pendingSeatChangeCode = ""; els.seatChangeAlert.hidden = true; els.scanCode.value = ""; const passengerName = nameOf(data.passenger || {}); els.scanLastPassenger.textContent = `Last boarded: ${passengerName}`; scanFeedback(true, data.message || "PASSENGER BOARDED"); els.scanStatus.textContent = `${data.message || "Passenger boarded."} Ready for the next boarding pass.`; showNotice(data.message || "Passenger boarded."); await ensureScannerOpen(); } catch (err) { els.scanCode.value = ""; scanFeedback(false, "SCAN NOT ACCEPTED"); els.scanStatus.textContent = err.message; showNotice(err.message, true); } finally { scanProcessing = false; els.scanProcess.disabled = false; } }
+  async function processScanCode(acknowledgeSeatChange = false) { const code = acknowledgeSeatChange ? pendingSeatChangeCode : els.scanCode.value.trim(); if (!code || scanProcessing || (!els.seatChangeAlert.hidden && !acknowledgeSeatChange)) return; scanProcessing = true; els.scanProcess.disabled = true; try { const data = await boardScannedCode(code, acknowledgeSeatChange); if (data.seat_changed) { pendingSeatChangeCode = code; stopScanner(); els.seatChangeMessage.textContent = `${nameOf(data.passenger || {})}: boarding pass shows seat ${data.printed_seat || "unassigned"}; current seat is ${data.current_seat || "unassigned"}.`; els.seatChangeAlert.hidden = false; els.acknowledgeSeatChange.focus(); scanFeedback(false, "STOP — SEAT CHANGED"); els.scanStatus.textContent = "Seat change requires acknowledgement before boarding."; return; } pendingSeatChangeCode = ""; ignoredScanCode = code; ignoreScanUntil = Date.now() + 3000; els.seatChangeAlert.hidden = true; els.scanCode.value = ""; const passengerName = nameOf(data.passenger || {}); els.scanLastPassenger.textContent = `Last boarded: ${passengerName}`; scanFeedback(true, data.message || "PASSENGER BOARDED"); els.scanStatus.textContent = `${data.message || "Passenger boarded."} Ready for the next boarding pass.`; showNotice(data.message || "Passenger boarded."); await ensureScannerOpen(); } catch (err) { els.scanCode.value = ""; scanFeedback(false, "SCAN NOT ACCEPTED"); els.scanStatus.textContent = err.message; showNotice(err.message, true); } finally { scanProcessing = false; els.scanProcess.disabled = false; } }
   async function openScanner() {
     unlockScanAudio();
-    els.scanCode.value = ""; pendingSeatChangeCode = ""; els.seatChangeAlert.hidden = true; els.scanLastPassenger.textContent = "Last boarded: —"; els.scanStatus.textContent = "Allow camera access, then point it at the boarding-pass QR code."; if (!els.scanDialog.open) els.scanDialog.showModal();
+    els.scanCode.value = ""; pendingSeatChangeCode = ""; ignoredScanCode = ""; ignoreScanUntil = 0; els.seatChangeAlert.hidden = true; els.scanLastPassenger.textContent = "Last boarded: —"; els.scanStatus.textContent = "Allow camera access, then point it at the boarding-pass QR code."; if (!els.scanDialog.open) els.scanDialog.showModal();
     if (!navigator.mediaDevices?.getUserMedia) { els.scanStatus.textContent = "Camera access is not available in this browser."; return; }
     if (!("BarcodeDetector" in window) && typeof window.jsQR !== "function") { els.scanStatus.textContent = "QR decoding is unavailable in this browser."; return; }
     try {
@@ -243,6 +243,7 @@
       els.scanStatus.textContent = detector ? "Point the camera at the boarding-pass QR code." : "Safari camera scanner ready. Point the camera at the boarding-pass QR code.";
       scanTimer = setInterval(async () => {
         try {
+          if (scanProcessing || !els.seatChangeAlert.hidden) return;
           let code = "";
           if (detector) {
             code = (await detector.detect(els.scanVideo))[0]?.rawValue || "";
@@ -251,7 +252,7 @@
             context.drawImage(els.scanVideo, 0, 0, canvas.width, canvas.height);
             code = window.jsQR(context.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height, { inversionAttempts:"dontInvert" })?.data || "";
           }
-          if (code) { els.scanCode.value = code; await processScanCode(); }
+          if (code && !(code === ignoredScanCode && Date.now() < ignoreScanUntil)) { els.scanCode.value = code; await processScanCode(); }
         } catch (_) {}
       }, 500);
     } catch (err) { els.scanStatus.textContent = `Camera unavailable: ${err.message}.`; }

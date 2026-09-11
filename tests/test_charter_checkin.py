@@ -234,6 +234,22 @@ class CharterCheckinTest(unittest.TestCase):
         self.assertFalse(closed.get_json()["email_sent"])
         self.assertTrue(closed.get_json()["closed_at"])
 
+    @patch("app.routes._send_charter_flight_closure_email")
+    def test_lms_mail_environment_names_enable_charter_closure_email(self, send_closure_email):
+        self.client.put("/api/dcs/charter_manifest", json={
+            "flight_id": "charter-lms-email", "passengers": [{"GivenName": "LMS", "Surname": "Mail"}],
+        })
+        with patch.dict("app.routes.os.environ", {
+            "FLIGHT_OPERATIONS_EMAIL": "flightops@example.test",
+            "MAIL_USERNAME": "mailer@example.test",
+            "MAIL_PASSWORD": "not-used-in-test",
+            "MAIL_FROM": "mailer@example.test",
+        }, clear=True):
+            closed = self.client.post("/api/dcs/charter_manifest/flight-close", json={"flight_id": "charter-lms-email"})
+        self.assertEqual(closed.status_code, 200)
+        self.assertTrue(closed.get_json()["email_sent"])
+        send_closure_email.assert_called_once()
+
     def test_agent_can_assign_a_gate_to_an_open_charter_flight(self):
         self.client.put("/api/dcs/charter_manifest", json={
             "flight_id": "charter-gate-1",
