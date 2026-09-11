@@ -1732,16 +1732,8 @@ CHARTER_MANIFEST_COLUMNS = [
     "Surname",
     "Email",
     "PhoneNumber",
-    "Origin",
-    "Destination",
     "PassengerType",
-    "PassengerWeight",
     "Gender",
-    "BaggageWeight",
-    "BaggagePieces",
-    "BookingReferenceID",
-    "Status",
-    "SSR",
 ]
 
 
@@ -2249,9 +2241,9 @@ def api_charter_manifest_template():
     ws = wb.active
     ws.title = "Passengers"
     ws.append(CHARTER_MANIFEST_COLUMNS)
-    ws.append(["1A", "Mr", "Example", "Passenger", "example.passenger@email.com", "+64 21 123 4567", "CHT", "AKL", "AD", 86, "M", 0, 0, "CHARTER1", "Booked", ""])
-    ws.append(["", "Infant", "Example", "Infant", "parent@email.com", "+64 21 123 4567", "CHT", "AKL", "INF", 15, "", 0, 0, "CHARTER1", "Booked", ""])
-    for idx, width in enumerate([10, 12, 18, 20, 30, 20, 12, 14, 16, 18, 10, 16, 14, 20, 14, 36], start=1):
+    ws.append(["1A", "Mr", "Example", "Passenger", "example.passenger@email.com", "+64 21 123 4567", "AD", "M"])
+    ws.append(["", "Infant", "Example", "Infant", "parent@email.com", "+64 21 123 4567", "INF", ""])
+    for idx, width in enumerate([10, 12, 18, 20, 30, 20, 16, 10], start=1):
         ws.column_dimensions[ws.cell(row=1, column=idx).column_letter].width = width
     bio = io.BytesIO()
     wb.save(bio)
