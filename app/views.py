@@ -1486,6 +1486,11 @@ def dcs_charter_checkin():
     return render_template("charter_checkin.html", day=day)
 
 
+@ui_bp.get("/charter/check-in/<token>")
+def charter_self_checkin(token: str):
+    return render_template("charter_self_checkin.html", token=token)
+
+
 @ui_bp.get("/dcs/charter-brand/<asset>")
 def charter_brand_asset(asset: str):
     filenames = {

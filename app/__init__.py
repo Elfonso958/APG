@@ -361,6 +361,10 @@ def create_app():
                 app.logger.info("Skipping scheduler init: tables not created yet.")
                 return
             global _scheduler
+            def _send_charter_precheckin_invites():
+                with app.app_context():
+                    from .routes import send_due_charter_self_checkin_invites
+                    send_due_charter_self_checkin_invites()
             cfg = _ensure_config_row()
             interval = max(int((cfg.interval_sec if cfg else 300)), 60)
             if _scheduler is None:
@@ -378,6 +382,7 @@ def create_app():
                     id="envision_pax_sync_daily",
                     replace_existing=True,
                 )
+                _scheduler.add_job(_send_charter_precheckin_invites, "interval", minutes=15, id="charter_precheckin_invites", replace_existing=True, max_instances=1)
                 _ensure_otp_cache_job()
                 if _should_start_scheduler(app):
                     _scheduler.start()
@@ -402,6 +407,8 @@ def create_app():
                         id="envision_pax_sync_daily",
                         replace_existing=True,
                     )
+                if _scheduler.get_job("charter_precheckin_invites") is None:
+                    _scheduler.add_job(_send_charter_precheckin_invites, "interval", minutes=15, id="charter_precheckin_invites", replace_existing=True, max_instances=1)
                 _ensure_otp_cache_job()
 
         _start_or_reschedule_scheduler()

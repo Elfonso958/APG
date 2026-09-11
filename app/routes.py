@@ -16,6 +16,7 @@ from .models import SyncRun, SyncFlightLog, SyncFlightState, AppConfig, Manifest
 from .kmh_auth import get_kmh_session
 from .helpers_manifest import _seat_sort_key, _format_ssrs, _calc_age, _parse_dcs_dob, generate_manifest_pdf_from_html, generate_pdf_modern
 from .charter_wallet import apple_wallet_pass, google_wallet_link, make_wallet_token, parse_wallet_token
+from itsdangerous import URLSafeTimedSerializer
 
 from .sync.envision_apg_sync import (
     run_sync_once_return_summary,
@@ -1879,6 +1880,9 @@ def _charter_pax_from_row(row: dict, default_dep: str = "", default_ades: str = 
         "FlightDeparture": str(row.get("FlightDeparture") or "").strip(),
         "AircraftRegistration": str(row.get("AircraftRegistration") or "").strip().upper(),
         "AircraftType": str(row.get("AircraftType") or "").strip(),
+        "BagToWeigh": bool(row.get("BagToWeigh")),
+        "SelfCheckinInviteSentAt": str(row.get("SelfCheckinInviteSentAt") or "").strip() or None,
+        "SelfCheckinCompletedAt": str(row.get("SelfCheckinCompletedAt") or "").strip() or None,
         "PassengerId": str(row.get("PassengerId") or row.get("passenger_id") or uuid.uuid4().hex).strip(),
         "Status": status,
         "Boarded": status.upper() in {"BOARDED", "FLOWN"},
@@ -2140,6 +2144,44 @@ def _charter_wallet_passenger_data(manifest: CharterManifest, passenger: dict) -
     return enriched
 
 
+def _charter_self_checkin_token(flight_id: str, passenger_id: str) -> str:
+    return URLSafeTimedSerializer(current_app.secret_key, salt="accharters-self-checkin").dumps({"f": flight_id, "p": passenger_id})
+
+
+def _charter_self_checkin_claims(token: str) -> dict:
+    return URLSafeTimedSerializer(current_app.secret_key, salt="accharters-self-checkin").loads(token, max_age=60 * 60 * 24 * 7)
+
+
+def send_due_charter_self_checkin_invites() -> int:
+    """Email a secure pre-check-in link once a passenger is within 48 hours of departure."""
+    sent = 0
+    for manifest in CharterManifest.query.filter_by(closed_at=None).all():
+        try:
+            flight = envision_get_flight_times(envision_authenticate()["token"], manifest.envision_flight_id)
+            raw_departure = flight.get("departureEstimate") or flight.get("departureScheduled")
+            departure = datetime.fromisoformat(str(raw_departure).replace("Z", "+00:00"))
+            if departure.tzinfo is None: departure = departure.replace(tzinfo=timezone.utc)
+            hours = (departure - datetime.now(timezone.utc)).total_seconds() / 3600
+            if not 0 < hours <= 48: continue
+            passengers = _serialize_charter_manifest(manifest)
+            changed = False
+            for passenger in passengers:
+                recipient = str(passenger.get("Email") or "").strip().lower()
+                if passenger.get("SelfCheckinInviteSentAt") or "@" not in recipient or _normalise_charter_status(passenger.get("Status")) != "Booked": continue
+                token = _charter_self_checkin_token(str(manifest.envision_flight_id), str(passenger.get("PassengerId")))
+                link = url_for("ui.charter_self_checkin", token=token, _external=True)
+                departure_label = _charter_departure_label(raw_departure)
+                subject = f"Complete your ACCharters pre-check-in — {manifest.flight_no or 'Charter'}"
+                text = f"Complete your pre-check-in for {manifest.dep} to {manifest.ades}, departing {departure_label}. Choose your seat and tell us if you have a checked bag to weigh. One carry-on bag up to 7 kg is permitted.\n\n{link}"
+                body = f'<div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;color:#173743"><div style="padding:22px;background:#075c74;color:#fff"><img src="{url_for("ui.charter_brand_asset", asset="main-logo", _external=True)}" alt="ACCharters" style="max-width:180px;background:#fff;padding:4px"><h1>Complete your pre-check-in</h1></div><div style="padding:22px"><p>Choose your seat and let us know if you have a checked bag for our check-in team to weigh.</p><p><strong>{html.escape((manifest.dep or "---").upper())} to {html.escape((manifest.ades or "---").upper())}</strong><br>{html.escape(departure_label)}</p><p><strong>Carry-on allowance:</strong> one bag up to 7 kg.</p><p><a href="{html.escape(link, quote=True)}" style="display:inline-block;padding:12px 18px;background:#137b91;color:#fff;text-decoration:none;border-radius:6px;font-weight:bold">Start pre-check-in</a></p></div></div>'
+                if _send_email_via_graph(_charter_email_sender(), [recipient], subject, text, html_body=body):
+                    passenger["SelfCheckinInviteSentAt"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"; changed = True; sent += 1
+            if changed: _upsert_charter_manifest(str(manifest.envision_flight_id), passengers, flight_no=manifest.flight_no or "", dep=manifest.dep or "", ades=manifest.ades or "", gate=manifest.gate or "", filename=manifest.uploaded_filename)
+        except Exception:
+            current_app.logger.exception("Unable to send charter pre-check-in invitations for %s", manifest.envision_flight_id)
+    return sent
+
+
 def _send_charter_boarding_pass_email(manifest: CharterManifest, passenger: dict) -> bool:
     """Email a checked-in passenger their branded pass. Delivery errors never undo check-in."""
     passenger = _charter_wallet_passenger_data(manifest, passenger)
@@ -2235,6 +2277,36 @@ def api_charter_manifest_get():
         closed_at=manifest.closed_at.isoformat() if manifest and manifest.closed_at else None,
         gate=manifest.gate if manifest else "",
     )
+
+
+@api_bp.route("/dcs/charter-self-checkin/<token>", methods=["GET", "POST"])
+def api_charter_self_checkin(token: str):
+    try:
+        claims = _charter_self_checkin_claims(token)
+    except Exception:
+        return jsonify(ok=False, error="This pre-check-in link is invalid or has expired."), 404
+    manifest = CharterManifest.query.filter_by(envision_flight_id=str(claims.get("f") or "")).first()
+    passengers = _serialize_charter_manifest(manifest)
+    index = next((i for i, passenger in enumerate(passengers) if str(passenger.get("PassengerId") or "") == str(claims.get("p") or "")), None)
+    if manifest is None or index is None or manifest.closed_at:
+        return jsonify(ok=False, error="Pre-check-in is not available for this flight."), 409
+    passenger = passengers[index]
+    if request.method == "GET":
+        return jsonify(ok=True, passenger={key: passenger.get(key) for key in ("GivenName", "Surname", "Seat", "BagToWeigh", "SelfCheckinCompletedAt")}, flight={"flight_no":manifest.flight_no, "dep":manifest.dep, "ades":manifest.ades, "gate":manifest.gate})
+    if _normalise_charter_status(passenger.get("Status")) != "Booked":
+        return jsonify(ok=False, error="This passenger can no longer use pre-check-in."), 409
+    data = request.get_json(silent=True) or {}
+    seat = str(data.get("Seat") or "").strip().upper()
+    if str(passenger.get("PassengerType") or "").upper() != "INF" and not seat:
+        return jsonify(ok=False, error="Please select a seat."), 400
+    if seat and any(i != index and str(other.get("Seat") or "").strip().upper() == seat for i, other in enumerate(passengers)):
+        return jsonify(ok=False, error="That seat has just been selected. Please choose another."), 409
+    passenger["Seat"] = seat
+    passenger["BagToWeigh"] = bool(data.get("BagToWeigh"))
+    passenger["SelfCheckinCompletedAt"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    passengers[index] = _charter_pax_from_row(passenger, manifest.dep or "", manifest.ades or "")
+    _upsert_charter_manifest(str(manifest.envision_flight_id), passengers, flight_no=manifest.flight_no or "", dep=manifest.dep or "", ades=manifest.ades or "", gate=manifest.gate or "", filename=manifest.uploaded_filename)
+    return jsonify(ok=True, message="Your pre-check-in has been saved.")
 
 
 @api_bp.post("/dcs/charter_manifest/upload")
