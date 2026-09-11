@@ -1875,7 +1875,7 @@ def _charter_pax_from_row(row: dict, default_dep: str = "", default_ades: str = 
         "AircraftRegistration": str(row.get("AircraftRegistration") or "").strip().upper(),
         "AircraftType": str(row.get("AircraftType") or "").strip(),
         "BagToWeigh": bool(row.get("BagToWeigh")),
-        "DangerousGoodsDeclared": bool(row.get("DangerousGoodsDeclared")),
+        "DangerousGoodsDeclared": None if row.get("DangerousGoodsDeclared") is None else bool(row.get("DangerousGoodsDeclared")),
         "DangerousGoodsConfirmedAt": str(row.get("DangerousGoodsConfirmedAt") or "").strip() or None,
         "SelfCheckinInviteSentAt": str(row.get("SelfCheckinInviteSentAt") or "").strip() or None,
         "SelfCheckinCompletedAt": str(row.get("SelfCheckinCompletedAt") or "").strip() or None,
@@ -2192,7 +2192,7 @@ def send_due_charter_self_checkin_invites() -> int:
                     passenger["SelfCheckinInviteSentAt"] = None
                     passenger["SelfCheckinCompletedAt"] = None
                     passenger["BagToWeigh"] = False
-                    passenger["DangerousGoodsDeclared"] = False
+                    passenger["DangerousGoodsDeclared"] = None
                     passenger["DangerousGoodsConfirmedAt"] = None
                     changed = True
                 if passenger.get("SelfCheckinInviteSentAt"):
@@ -2321,9 +2321,12 @@ def api_charter_self_checkin(token: str):
         return jsonify(ok=False, error="Pre-check-in is not available for this flight."), 409
     passenger = passengers[index]
     if request.method == "GET":
+        dangerous_goods_answer = passenger.get("DangerousGoodsDeclared")
+        if _normalise_charter_status(passenger.get("Status")) == "Booked" and not passenger.get("SelfCheckinCompletedAt"):
+            dangerous_goods_answer = None
         return jsonify(
             ok=True,
-            passenger={key: passenger.get(key) for key in ("GivenName", "Surname", "Seat", "BagToWeigh", "DangerousGoodsDeclared", "SelfCheckinCompletedAt", "PassengerType")},
+            passenger={**{key: passenger.get(key) for key in ("GivenName", "Surname", "Seat", "BagToWeigh", "SelfCheckinCompletedAt", "PassengerType")}, "DangerousGoodsDeclared": dangerous_goods_answer},
             flight=_charter_self_checkin_flight_data(manifest, passenger),
             occupied_seats=[str(other.get("Seat") or "").strip().upper() for i, other in enumerate(passengers) if i != index and str(other.get("Seat") or "").strip()],
         )
@@ -2489,7 +2492,7 @@ def api_charter_manifest_update_passenger():
                 merged["SelfCheckinInviteSentAt"] = None
                 merged["SelfCheckinCompletedAt"] = None
                 merged["BagToWeigh"] = False
-                merged["DangerousGoodsDeclared"] = False
+                merged["DangerousGoodsDeclared"] = None
                 merged["DangerousGoodsConfirmedAt"] = None
         passenger = _charter_pax_from_row(merged, manifest.dep or "", manifest.ades or "")
         if not passenger:
