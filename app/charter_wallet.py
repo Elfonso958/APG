@@ -38,7 +38,9 @@ def google_wallet_link(*, issuer_id: str, service_account_file: str, origin: str
     object_id = f"{issuer_id}.charter_{flight_id}_{passenger['PassengerId']}".replace("-", "_")
     class_id = f"{issuer_id}.accharters_charter_boarding"
     barcode = f"ACCI|{flight_id}|{passenger['PassengerId']}|{passenger.get('Seat') or ''}"
-    title = f"{dep} → {ades}"
+    # Generic Wallet cards have a very compact header. Plain text prevents the
+    # route separator or logo from colliding with the destination on small screens.
+    title = f"{dep} to {ades}"
     payload = {
         "iss": account["client_email"], "aud": "google", "typ": "savetowallet", "origins": [origin.rstrip("/")],
         "payload": {"genericClasses": [{"id": class_id, "issuerName": "ACCharters", "reviewStatus": "UNDER_REVIEW", "logo": {"sourceUri": {"uri": logo_url}}, "hexBackgroundColor": "#075c74"}], "genericObjects": [{"id": object_id, "classId": class_id, "state": "ACTIVE", "cardTitle": {"defaultValue": {"language": "en-NZ", "value": "ACCharters"}}, "header": {"defaultValue": {"language": "en-NZ", "value": title}}, "subheader": {"defaultValue": {"language": "en-NZ", "value": flight_no or "Charter flight"}}, "barcode": {"type": "QR_CODE", "value": barcode, "alternateText": passenger.get("Seat") or "GATE"}, "textModulesData": [{"header": "Passenger", "body": f"{passenger.get('GivenName','')} {passenger.get('Surname','')}".strip()}, {"header": "Seat · Gate", "body": f"{passenger.get('Seat') or 'GATE'} · {gate or 'AS DIRECTED'}"}, {"header": "Departure", "body": departure}]}]},
