@@ -1875,6 +1875,7 @@ def _charter_pax_from_row(row: dict, default_dep: str = "", default_ades: str = 
         "AircraftRegistration": str(row.get("AircraftRegistration") or "").strip().upper(),
         "AircraftType": str(row.get("AircraftType") or "").strip(),
         "BagToWeigh": bool(row.get("BagToWeigh")),
+        "DangerousGoodsDeclared": bool(row.get("DangerousGoodsDeclared")),
         "SelfCheckinInviteSentAt": str(row.get("SelfCheckinInviteSentAt") or "").strip() or None,
         "SelfCheckinCompletedAt": str(row.get("SelfCheckinCompletedAt") or "").strip() or None,
         "PassengerId": str(row.get("PassengerId") or row.get("passenger_id") or uuid.uuid4().hex).strip(),
@@ -2309,7 +2310,7 @@ def api_charter_self_checkin(token: str):
     if request.method == "GET":
         return jsonify(
             ok=True,
-            passenger={key: passenger.get(key) for key in ("GivenName", "Surname", "Seat", "BagToWeigh", "SelfCheckinCompletedAt", "PassengerType")},
+            passenger={key: passenger.get(key) for key in ("GivenName", "Surname", "Seat", "BagToWeigh", "DangerousGoodsDeclared", "SelfCheckinCompletedAt", "PassengerType")},
             flight=_charter_self_checkin_flight_data(manifest, passenger),
             occupied_seats=[str(other.get("Seat") or "").strip().upper() for i, other in enumerate(passengers) if i != index and str(other.get("Seat") or "").strip()],
         )
@@ -2323,6 +2324,7 @@ def api_charter_self_checkin(token: str):
         return jsonify(ok=False, error="That seat has just been selected. Please choose another."), 409
     passenger["Seat"] = seat
     passenger["BagToWeigh"] = bool(data.get("BagToWeigh"))
+    passenger["DangerousGoodsDeclared"] = bool(data.get("DangerousGoodsDeclared"))
     passenger["SelfCheckinCompletedAt"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
     passengers[index] = _charter_pax_from_row(passenger, manifest.dep or "", manifest.ades or "")
     _upsert_charter_manifest(str(manifest.envision_flight_id), passengers, flight_no=manifest.flight_no or "", dep=manifest.dep or "", ades=manifest.ades or "", gate=manifest.gate or "", filename=manifest.uploaded_filename)
