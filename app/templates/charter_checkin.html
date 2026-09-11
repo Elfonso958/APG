@@ -35,6 +35,7 @@
       <div class="top-actions">
         <label>Date <input id="dayInput" type="date" value="{{ day.isoformat() }}"></label>
         <button id="refreshBtn" class="button secondary" type="button">Refresh flights</button>
+        <button id="printerSetupBtn" class="button secondary" type="button">Printers</button>
         {% if apg_current_user %}
           <span class="account-email" title="Signed in account">{{ apg_current_user.display_name or apg_current_user.email }}</span>
           {% if apg_is_admin %}
@@ -83,7 +84,6 @@
             <label>Status <select id="statusFilter"><option value="">All statuses</option><option>Booked</option><option>Checked In</option><option>Boarded</option><option>Flown</option><option>No Show</option></select></label>
             <button id="addPassenger" class="button secondary" type="button">Add passenger</button>
             <button id="scanBoardingPass" class="button" type="button">Scan QR to board</button>
-            <button id="printerSetupBtn" class="button secondary" type="button">Printers</button>
             <label>Bag tag printer <select id="bagTagProfile"><option value="iata">IATA 54 mm thermal</option><option value="long">54 mm long thermal</option><option value="a4">A4 proof sheet</option></select></label>
             <span id="manifestMeta" class="muted"></span>
           </div>
