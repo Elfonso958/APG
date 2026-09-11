@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='charter_checkin.css') }}?v=20">
+  <link rel="stylesheet" href="{{ url_for('static', filename='charter_checkin.css') }}?v=21">
 </head>
 <body style="--brand-watermark:url('{{ url_for('ui.charter_brand_asset', asset='main-logo') }}')">
   <main id="charterCheckinApp"
@@ -83,6 +83,7 @@
             <label>Status <select id="statusFilter"><option value="">All statuses</option><option>Booked</option><option>Checked In</option><option>Boarded</option><option>Flown</option><option>No Show</option></select></label>
             <button id="addPassenger" class="button secondary" type="button">Add passenger</button>
             <button id="scanBoardingPass" class="button" type="button">Scan QR to board</button>
+            <button id="printerSetupBtn" class="button secondary" type="button">Printers</button>
             <label>Bag tag printer <select id="bagTagProfile"><option value="iata">IATA 54 mm thermal</option><option value="long">54 mm long thermal</option><option value="a4">A4 proof sheet</option></select></label>
             <span id="manifestMeta" class="muted"></span>
           </div>
@@ -184,6 +185,16 @@
       <div class="checkin-actions"><button id="savePrintBagTag" class="button secondary" type="button">Save &amp; print tag</button><button class="button" type="submit">Save baggage</button></div>
     </form>
   </dialog>
+  <dialog id="printerSetupDialog" class="seatmap-dialog account-dialog">
+    <form id="printerSetupForm" class="seatmap-shell login-form">
+      <header><div><p class="eyebrow">This workstation</p><h2>Printer setup</h2></div><button id="printerSetupClose" class="button secondary" type="button">Close</button></header>
+      <p id="printerSetupStatus" class="muted">Checking for the local print service…</p>
+      <label>Boarding-pass printer<select id="boardingPassPrinter"><option value="">Use browser print dialog</option></select></label>
+      <label>Bag-tag printer<select id="bagTagPrinter"><option value="">Use browser print dialog</option></select></label>
+      <p class="muted">Saved printers are used automatically from this browser. To enable direct printing, install and run QZ Tray on this check-in workstation.</p>
+      <div class="checkin-actions"><a class="button secondary" href="https://qz.io/download/" target="_blank" rel="noopener">Install QZ Tray</a><button id="refreshPrinters" class="button secondary" type="button">Refresh printers</button><button class="button" type="submit">Save printers</button></div>
+    </form>
+  </dialog>
   {% if apg_is_admin %}
   <dialog id="weightSettingsDialog" class="seatmap-dialog account-dialog">
     <form id="weightSettingsForm" class="seatmap-shell login-form">
@@ -201,6 +212,7 @@
   </dialog>
   {% endif %}
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
-  <script src="{{ url_for('static', filename='charter_checkin.js') }}?v=36"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qz-tray@2.2.4/qz-tray.js"></script>
+  <script src="{{ url_for('static', filename='charter_checkin.js') }}?v=37"></script>
 </body>
 </html>

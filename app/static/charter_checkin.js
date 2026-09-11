@@ -32,10 +32,67 @@
   els.sendDueInvites = $("sendDueInvitesBtn");
   els.bagWeighDialog = $("bagWeighDialog"); els.bagWeighForm = $("bagWeighForm"); els.bagWeighClose = $("bagWeighClose"); els.bagWeighTitle = $("bagWeighTitle"); els.bagWeighPassenger = $("bagWeighPassenger"); els.bagWeighKg = $("bagWeighKg"); els.bagWeighPieces = $("bagWeighPieces"); els.savePrintBagTag = $("savePrintBagTag");
   els.bagTagProfile = $("bagTagProfile");
+  els.printerSetupBtn = $("printerSetupBtn"); els.printerSetupDialog = $("printerSetupDialog"); els.printerSetupClose = $("printerSetupClose"); els.printerSetupForm = $("printerSetupForm"); els.printerSetupStatus = $("printerSetupStatus"); els.boardingPassPrinter = $("boardingPassPrinter"); els.bagTagPrinter = $("bagTagPrinter"); els.refreshPrinters = $("refreshPrinters");
   ["AD", "T", "CHD", "INF", "UMNR"].forEach((type) => { els[`weight${type}`] = $(`weight${type}`); });
   const workspace = document.querySelector(".workspace");
   if (els.bagTagProfile) els.bagTagProfile.value = localStorage.getItem("charter-bag-tag-profile") || "iata";
   const state = { flights: [], flight: null, passengers: [], passengerWeights: { AD:86, T:96, CHD:46, INF:15, UMNR:46 } };
+  const printerStorageKeys = { boarding:"charter-boarding-pass-printer", bag:"charter-bag-tag-printer" };
+  function savedPrinter(kind) { return localStorage.getItem(printerStorageKeys[kind]) || ""; }
+  function setPrinterOptions(select, printers, selected) {
+    if (!select) return;
+    select.innerHTML = `<option value="">Use browser print dialog</option>${printers.map((printer) => `<option value="${esc(printer)}">${esc(printer)}</option>`).join("")}`;
+    select.value = selected || "";
+  }
+  async function availablePrinters() {
+    if (!window.qz) throw Error("QZ Tray is not available in this browser.");
+    if (!qz.websocket.isActive()) await qz.websocket.connect({ retries:0, delay:0 });
+    const printers = await qz.printers.find();
+    return Array.isArray(printers) ? printers : [];
+  }
+  async function refreshPrinterSetup() {
+    if (!els.printerSetupStatus) return;
+    els.printerSetupStatus.textContent = "Looking for QZ Tray and installed printers…";
+    try {
+      const printers = await availablePrinters();
+      setPrinterOptions(els.boardingPassPrinter, printers, savedPrinter("boarding"));
+      setPrinterOptions(els.bagTagPrinter, printers, savedPrinter("bag"));
+      els.printerSetupStatus.textContent = printers.length ? `${printers.length} printer${printers.length === 1 ? "" : "s"} found. Choose one for each document type.` : "QZ Tray is connected, but Windows has not provided any printers.";
+    } catch (_) {
+      setPrinterOptions(els.boardingPassPrinter, [], savedPrinter("boarding"));
+      setPrinterOptions(els.bagTagPrinter, [], savedPrinter("bag"));
+      els.printerSetupStatus.textContent = "QZ Tray is not running. Install and open it to select printers and enable direct printing; otherwise the browser print dialog will be used.";
+    }
+  }
+  async function routePrintDocument(documentHtml, kind) {
+    const printer = savedPrinter(kind);
+    if (!printer) return false;
+    try {
+      if (!qz.websocket.isActive()) await qz.websocket.connect({ retries:0, delay:0 });
+      const config = qz.configs.create(printer, kind === "bag" ? { units:"mm", size:{ width:54, height:320 }, margins:0, rasterize:true } : { units:"mm", size:{ width:200, height:80 }, margins:0, rasterize:true });
+      await qz.print(config, [{ type:"html", format:"plain", data:documentHtml }]);
+      showNotice(`${kind === "bag" ? "Bag tag" : "Boarding pass"} sent to ${printer}.`);
+      return true;
+    } catch (error) {
+      showNotice(`Could not send to ${printer}; opening the browser print dialog instead. ${error.message || ""}`, true);
+      return false;
+    }
+  }
+  // Browser security prevents page JavaScript from selecting a printer. QZ Tray is the
+  // optional local bridge that makes the configured per-document routing possible.
+  const browserWindowOpen = window.open.bind(window);
+  window.open = (...args) => {
+    const child = browserWindowOpen(...args);
+    if (!child) return child;
+    const nativePrint = child.print.bind(child);
+    child.print = () => {
+      const kind = /bag tag/i.test(child.document.title) ? "bag" : "boarding";
+      routePrintDocument(child.document.documentElement.outerHTML, kind).then((sent) => {
+        if (sent) child.close(); else nativePrint();
+      });
+    };
+    return child;
+  };
   let scanStream = null, scanTimer = null, scanProcessing = false, scanAudioContext = null, manifestRefreshInFlight = false, pendingSeatChangeCode = "", pendingBoardingCode = "", pendingBoardingHasDangerousGoods = false, ignoredScanCode = "", ignoreScanUntil = 0, scanPauseUntil = 0;
   let checkinPassenger = null, checkinSsrs = [], bagWeighPassenger = null;
   const gateWarningShown = new Set();
@@ -438,6 +495,10 @@
   els.bagWeighForm.addEventListener("submit", (event) => saveBagWeigh(event).catch((error) => showNotice(error.message, true)));
   els.savePrintBagTag.addEventListener("click", () => recordBagWeigh().then((passenger) => { if (passenger) printBagTag(passenger); }).catch((error) => showNotice(error.message, true)));
   els.bagTagProfile.addEventListener("change", () => localStorage.setItem("charter-bag-tag-profile", els.bagTagProfile.value));
+  els.printerSetupBtn?.addEventListener("click", () => { els.printerSetupDialog.showModal(); refreshPrinterSetup(); });
+  els.printerSetupClose?.addEventListener("click", () => els.printerSetupDialog.close());
+  els.refreshPrinters?.addEventListener("click", refreshPrinterSetup);
+  els.printerSetupForm?.addEventListener("submit", (event) => { event.preventDefault(); localStorage.setItem(printerStorageKeys.boarding, els.boardingPassPrinter.value); localStorage.setItem(printerStorageKeys.bag, els.bagTagPrinter.value); els.printerSetupDialog.close(); showNotice("Printer routing saved for this workstation."); });
   els.sendDueInvites?.addEventListener("click", sendDuePrecheckinInvites);
   els.acknowledgeSeatChange.addEventListener("click", () => processBoardingScan(true));
   els.allowBoarding.addEventListener("click", () => processBoardingScan(false, true));
