@@ -2508,6 +2508,11 @@ def api_charter_manifest_update_passenger():
             if status == "No Show":
                 merged["Seat"] = ""
                 merged["CheckedInAt"] = None
+                # A no-show cannot have checked baggage on this sector. Clear this
+                # server-side so every path (including API clients) stays correct.
+                merged["BaggageWeight"] = 0
+                merged["BaggagePieces"] = 0
+                merged["BagToWeigh"] = False
             elif status == "Booked" and _normalise_charter_status(existing.get("Status")) != "Booked":
                 # Reversing a self check-in must return the passenger to a
                 # genuinely fresh booking state, including a new invitation.
