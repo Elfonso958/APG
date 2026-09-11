@@ -2184,7 +2184,19 @@ def send_due_charter_self_checkin_invites() -> int:
             changed = False
             for passenger in passengers:
                 recipient = str(passenger.get("Email") or "").strip().lower()
-                if passenger.get("SelfCheckinInviteSentAt") or "@" not in recipient or _normalise_charter_status(passenger.get("Status")) != "Booked": continue
+                if "@" not in recipient or _normalise_charter_status(passenger.get("Status")) != "Booked":
+                    continue
+                # Handle flights reversed to Booked before this reset behaviour
+                # existed, so they can receive a fresh invitation as well.
+                if passenger.get("SelfCheckinCompletedAt"):
+                    passenger["SelfCheckinInviteSentAt"] = None
+                    passenger["SelfCheckinCompletedAt"] = None
+                    passenger["BagToWeigh"] = False
+                    passenger["DangerousGoodsDeclared"] = False
+                    passenger["DangerousGoodsConfirmedAt"] = None
+                    changed = True
+                if passenger.get("SelfCheckinInviteSentAt"):
+                    continue
                 token = _charter_self_checkin_token(str(manifest.envision_flight_id), str(passenger.get("PassengerId")))
                 link = url_for("ui.charter_self_checkin", token=token, _external=True)
                 departure_label = _charter_departure_label(raw_departure)
@@ -2470,6 +2482,15 @@ def api_charter_manifest_update_passenger():
             if status == "No Show":
                 merged["Seat"] = ""
                 merged["CheckedInAt"] = None
+            elif status == "Booked" and _normalise_charter_status(existing.get("Status")) != "Booked":
+                # Reversing a self check-in must return the passenger to a
+                # genuinely fresh booking state, including a new invitation.
+                merged["CheckedInAt"] = None
+                merged["SelfCheckinInviteSentAt"] = None
+                merged["SelfCheckinCompletedAt"] = None
+                merged["BagToWeigh"] = False
+                merged["DangerousGoodsDeclared"] = False
+                merged["DangerousGoodsConfirmedAt"] = None
         passenger = _charter_pax_from_row(merged, manifest.dep or "", manifest.ades or "")
         if not passenger:
             return jsonify(ok=False, error="Passenger details are invalid"), 400
