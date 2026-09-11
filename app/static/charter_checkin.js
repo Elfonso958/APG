@@ -33,7 +33,7 @@
   ["AD", "T", "CHD", "INF", "UMNR"].forEach((type) => { els[`weight${type}`] = $(`weight${type}`); });
   const workspace = document.querySelector(".workspace");
   const state = { flights: [], flight: null, passengers: [], passengerWeights: { AD:86, T:96, CHD:46, INF:15, UMNR:46 } };
-  let scanStream = null, scanTimer = null, scanProcessing = false, scanAudioContext = null, manifestRefreshInFlight = false, pendingSeatChangeCode = "", pendingBoardingCode = "", pendingBoardingHasDangerousGoods = false, ignoredScanCode = "", ignoreScanUntil = 0;
+  let scanStream = null, scanTimer = null, scanProcessing = false, scanAudioContext = null, manifestRefreshInFlight = false, pendingSeatChangeCode = "", pendingBoardingCode = "", pendingBoardingHasDangerousGoods = false, ignoredScanCode = "", ignoreScanUntil = 0, scanPauseUntil = 0;
   let checkinPassenger = null, checkinSsrs = [];
   const gateWarningShown = new Set();
   const ssrOptions = [["", "Choose an SSR code"], ["WCHR", "Wheelchair — ramp / distance"], ["WCHS", "Wheelchair — steps assistance"], ["WCHC", "Wheelchair — cabin seat transfer"], ["BLND", "Blind or low-vision passenger"], ["DEAF", "Deaf or hard-of-hearing passenger"], ["MAAS", "Meet and assist"], ["DPNA", "Disability / non-visible assistance"], ["UMNR", "Unaccompanied minor"], ["MEDA", "Medical case — clearance may be needed"], ["OXYG", "Supplementary oxygen"], ["EXST", "Extra seat"], ["STCR", "Stretcher"], ["PETC", "Pet in cabin"], ["AVIH", "Animal in hold"], ["WEAP", "Weapon handling"], ["INFT", "Infant accompanying passenger"], ["OTHS", "Other special service"]];
@@ -338,7 +338,7 @@
       els.scanStatus.textContent = detector ? "Point the camera at the boarding-pass QR code." : "Safari camera scanner ready. Point the camera at the boarding-pass QR code.";
       scanTimer = setInterval(async () => {
         try {
-          if (scanProcessing || !els.seatChangeAlert.hidden || !els.boardingDecisionAlert.hidden) return;
+          if (scanProcessing || Date.now() < scanPauseUntil || !els.seatChangeAlert.hidden || !els.boardingDecisionAlert.hidden) return;
           let code = "";
           if (detector) {
             code = (await detector.detect(els.scanVideo))[0]?.rawValue || "";
@@ -347,7 +347,7 @@
             context.drawImage(els.scanVideo, 0, 0, canvas.width, canvas.height);
             code = window.jsQR(context.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height, { inversionAttempts:"dontInvert" })?.data || "";
           }
-          if (code && !(code === ignoredScanCode && Date.now() < ignoreScanUntil)) { els.scanCode.value = code; await processBoardingScan(); }
+          if (code && !(code === ignoredScanCode && Date.now() < ignoreScanUntil)) { scanPauseUntil = Date.now() + 3000; els.scanCode.value = code; await processBoardingScan(); }
         } catch (_) {}
       }, 500);
     } catch (err) { els.scanStatus.textContent = `Camera unavailable: ${err.message}.`; }
