@@ -1861,6 +1861,7 @@ def _upsert_charter_manifest(
     flight_no: str = "",
     dep: str = "",
     ades: str = "",
+    gate: str = "",
     filename: str | None = None,
 ) -> CharterManifest:
     manifest = CharterManifest.query.filter_by(envision_flight_id=str(flight_id)).first()
@@ -1874,6 +1875,8 @@ def _upsert_charter_manifest(
     manifest.flight_no = flight_no or manifest.flight_no
     manifest.dep = dep or manifest.dep
     manifest.ades = ades or manifest.ades
+    if gate:
+        manifest.gate = gate.strip().upper()
     manifest.pax_json = json.dumps(passengers)
     manifest.uploaded_filename = filename or manifest.uploaded_filename
     manifest.updated_at = now
@@ -1989,6 +1992,7 @@ def api_charter_manifest_get():
         uploaded_filename=manifest.uploaded_filename if manifest else "",
         updated_at=manifest.updated_at.isoformat() if manifest and manifest.updated_at else None,
         closed_at=manifest.closed_at.isoformat() if manifest and manifest.closed_at else None,
+        gate=manifest.gate if manifest else "",
     )
 
 
@@ -2269,6 +2273,28 @@ def api_charter_manifest_reopen_flight():
     db.session.commit()
     _clear_live_gantt_cache()
     return jsonify(ok=True, closed_at=None, message="Flight reopened for check-in.")
+
+
+@api_bp.patch("/dcs/charter_manifest/flight-gate")
+def api_charter_manifest_update_flight_gate():
+    data = request.get_json(force=True) or {}
+    flight_id = str(data.get("flight_id") or data.get("envision_flight_id") or "").strip()
+    gate = str(data.get("gate") or "").strip().upper()
+    if not flight_id:
+        return jsonify(ok=False, error="Missing flight_id"), 400
+    if len(gate) > 16:
+        return jsonify(ok=False, error="Gate must be 16 characters or fewer"), 400
+    manifest = CharterManifest.query.filter_by(envision_flight_id=flight_id).first()
+    if not manifest:
+        return jsonify(ok=False, error="No charter manifest has been uploaded for this flight"), 404
+    if manifest.closed_at:
+        return jsonify(ok=False, error="This flight is closed. Reopen it before changing the gate."), 409
+    manifest.gate = gate or None
+    manifest.updated_at = datetime.utcnow()
+    db.session.add(manifest)
+    db.session.commit()
+    _clear_live_gantt_cache()
+    return jsonify(ok=True, gate=manifest.gate or "", updated_at=manifest.updated_at.isoformat())
 
 
 @api_bp.route("/envision/environment", methods=["GET", "POST"])

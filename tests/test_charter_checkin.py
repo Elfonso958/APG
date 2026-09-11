@@ -192,3 +192,16 @@ class CharterCheckinTest(unittest.TestCase):
         self.assertEqual(closed.status_code, 200)
         self.assertFalse(closed.get_json()["email_sent"])
         self.assertTrue(closed.get_json()["closed_at"])
+
+    def test_agent_can_assign_a_gate_to_an_open_charter_flight(self):
+        self.client.put("/api/dcs/charter_manifest", json={
+            "flight_id": "charter-gate-1",
+            "passengers": [{"GivenName": "Gate", "Surname": "Test"}],
+        })
+        saved = self.client.patch("/api/dcs/charter_manifest/flight-gate", json={
+            "flight_id": "charter-gate-1", "gate": " 4a ",
+        })
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(saved.get_json()["gate"], "4A")
+        manifest = self.client.get("/api/dcs/charter_manifest", query_string={"flight_id": "charter-gate-1"})
+        self.assertEqual(manifest.get_json()["gate"], "4A")

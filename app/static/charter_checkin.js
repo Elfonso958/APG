@@ -5,10 +5,13 @@
   const els = { day: $("dayInput"), refresh: $("refreshBtn"), notice: $("notice"), flightList: $("flightList"), flightCount: $("flightCount"), empty: $("emptyState"), content: $("checkinContent"), title: $("selectedFlightTitle"), meta: $("selectedFlightMeta"), summary: $("summary"), template: $("templateLink"), file: $("manifestFile"), search: $("searchInput"), filter: $("statusFilter"), rows: $("passengerRows"), manifestMeta: $("manifestMeta"), toggleFlights: $("toggleFlightPanel"), addPassenger: $("addPassenger"), seatmapDialog: $("seatmapDialog"), seatmapTitle: $("seatmapTitle"), seatmapHelp: $("seatmapHelp"), seatmapGrid: $("seatmapGrid"), seatmapClose: $("seatmapClose"), scanButton: $("scanBoardingPass"), scanDialog: $("boardingScanDialog"), scanClose: $("boardingScanClose"), scanStatus: $("boardingScanStatus"), scanVideo: $("boardingScanVideo"), scanCode: $("boardingScanCode"), scanProcess: $("processBoardingCode"), checkinDialog: $("checkinDialog"), checkinClose: $("checkinClose"), checkinTitle: $("checkinTitle"), checkinMeta: $("checkinPassengerMeta"), checkinIdentity: $("checkinIdentity"), checkinGivenName: $("checkinGivenName"), checkinSurname: $("checkinSurname"), checkinPassengerType: $("checkinPassengerType"), checkinPnr: $("checkinPnr"), checkinSeat: $("checkinSeat"), checkinSeatmapGrid: $("checkinSeatmapGrid"), checkinBagKg: $("checkinBagKg"), checkinBagPieces: $("checkinBagPieces"), checkinSsrCode: $("checkinSsrCode"), checkinSsrText: $("checkinSsrText"), addCheckinSsr: $("addCheckinSsr"), checkinSsrList: $("checkinSsrList"), checkinComments: $("checkinComments"), confirmCheckin: $("confirmCheckin"), confirmCheckinPrint: $("confirmCheckinPrint") };
   els.closeFlight = $("closeFlightBtn");
   els.reopenFlight = $("reopenFlightBtn");
+  els.gate = $("flightGate");
+  els.saveGate = $("saveGateBtn");
   const workspace = document.querySelector(".workspace");
   const state = { flights: [], flight: null, passengers: [] };
   let scanStream = null, scanTimer = null;
   let checkinPassenger = null, checkinSsrs = [];
+  const gateWarningShown = new Set();
   const ssrOptions = [["", "Choose an SSR code"], ["WCHR", "Wheelchair — ramp / distance"], ["WCHS", "Wheelchair — steps assistance"], ["WCHC", "Wheelchair — cabin seat transfer"], ["BLND", "Blind or low-vision passenger"], ["DEAF", "Deaf or hard-of-hearing passenger"], ["MAAS", "Meet and assist"], ["DPNA", "Disability / non-visible assistance"], ["UMNR", "Unaccompanied minor"], ["MEDA", "Medical case — clearance may be needed"], ["OXYG", "Supplementary oxygen"], ["EXST", "Extra seat"], ["STCR", "Stretcher"], ["PETC", "Pet in cabin"], ["AVIH", "Animal in hold"], ["WEAP", "Weapon handling"], ["INFT", "Infant accompanying passenger"], ["OTHS", "Other special service"]];
   const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "'":"&#39;", '"':"&quot;" }[c]));
   const statusOf = (p) => p.Flown || String(p.Status || "").toLowerCase() === "flown" ? "Flown" : p.Boarded || String(p.Status || "").toLowerCase() === "boarded" ? "Boarded" : /check/i.test(String(p.Status || "")) ? "Checked In" : "Booked";
@@ -79,14 +82,30 @@
       return `<tr data-id="${id}"><td class="pax-name"><strong>${esc(nameOf(p))}</strong><span>${esc(p.BookingReferenceID || "No booking reference")}</span></td><td>${esc(p.PassengerType || "AD")}</td><td><input class="seat-input" data-field="Seat" value="${esc(p.Seat || "")}" maxlength="5" aria-label="Seat for ${esc(nameOf(p))}"></td><td><input type="number" min="0" step="0.1" data-field="BaggageWeight" value="${Number(p.BaggageWeight || 0)}" aria-label="Baggage kilograms for ${esc(nameOf(p))}"></td><td><input type="number" min="0" step="1" data-field="BaggagePieces" value="${Number(p.BaggagePieces || 0)}" aria-label="Baggage pieces for ${esc(nameOf(p))}"></td><td>${esc((p.Ssrs || []).map((s) => `${s.Code}${s.FreeText ? ` (${s.FreeText})` : ""}`).join(", ") || p.SSR || "—")}</td><td><span class="status ${cls}">${esc(status)}</span></td><td><div class="row-actions"><button class="button secondary" data-action="save" data-id="${id}">Save</button>${seatmap}${checkin}${board}${reverse}<button class="button secondary" data-action="print" data-id="${id}">Print pass</button></div></td></tr>`;
     }).join("") : '<tr><td class="empty" colspan="8">No passengers match the current filters.</td></tr>';
   }
+  function renderPassengerActions() {
+    els.rows.querySelectorAll('input[data-field]').forEach((field) => { field.disabled = true; });
+    els.rows.querySelectorAll('[data-action="save"], [data-action="seatmap"]').forEach((button) => button.remove());
+    els.rows.querySelectorAll("tr[data-id]").forEach((row) => {
+      const actions = row.querySelector(".row-actions");
+      if (!actions) return;
+      actions.querySelector('[data-action="checkin"]')?.remove();
+      const edit = document.createElement("button");
+      edit.className = "button secondary";
+      edit.type = "button";
+      edit.dataset.action = "checkin";
+      edit.dataset.id = row.dataset.id;
+      edit.textContent = "Edit";
+      actions.prepend(edit);
+    });
+  }
   function renderFlight() {
     const f = state.flight; els.empty.hidden = !!f; els.content.hidden = !f; if (!f) return;
     const closed = Boolean(f.charter_flight_closed_at);
     els.title.textContent = `${f.flight_number || f.flight || "Charter"} · ${f.dep || ""}–${f.ades || f.dest || ""}`;
     els.meta.textContent = `${fmtTime(f.std_nz)} · ${f.reg || "Aircraft TBC"}`;
     els.template.href = app.dataset.templateUrl; els.manifestMeta.textContent = closed ? `Flight closed ${new Date(f.charter_flight_closed_at).toLocaleString("en-NZ")}` : (state.passengers.length ? `${state.passengers.length} passenger records` : "No passenger list uploaded");
-    els.closeFlight.hidden = closed; els.reopenFlight.hidden = !closed; els.file.disabled = closed; els.addPassenger.disabled = closed; els.scanButton.disabled = closed;
-    renderSummary(); renderPassengers(); renderFlights();
+    els.closeFlight.hidden = closed; els.reopenFlight.hidden = !closed; els.file.disabled = closed; els.addPassenger.disabled = closed; els.scanButton.disabled = closed; els.gate.value = f.charter_gate || ""; els.gate.disabled = closed; els.saveGate.disabled = closed;
+    renderSummary(); renderPassengers(); renderPassengerActions(); renderFlights();
   }
   async function selectFlight(flight) {
     state.flight = flight; state.passengers = []; renderFlight(); showNotice("Loading passenger list…");
@@ -111,6 +130,24 @@
     state.flight.charter_flight_closed_at = data.closed_at || null;
     renderFlight(); renderFlights(); showNotice(data.message || `Flight ${closing ? "closed" : "reopened"}.`);
   }
+  async function saveGate() {
+    if (!state.flight) return;
+    const response = await fetch(app.dataset.gateUrl, { method:"PATCH", headers:{ "Content-Type":"application/json" }, body:JSON.stringify({ flight_id:state.flight.envision_flight_id, gate:els.gate.value.trim().toUpperCase() }) });
+    const data = await responseJson(response, "Save gate");
+    if (!response.ok || data.ok === false) throw Error(data.error || "Unable to save gate");
+    state.flight.charter_gate = data.gate || "";
+    renderFlight(); renderFlights(); showNotice(data.gate ? `Gate ${data.gate} assigned.` : "Gate cleared.");
+  }
+  async function ensureGateBeforePrinting() {
+    const flightId = String(state.flight?.envision_flight_id || "");
+    if (!flightId || state.flight.charter_gate || gateWarningShown.has(flightId)) return;
+    gateWarningShown.add(flightId);
+    if (!window.confirm("No gate has been assigned to this flight. Would you like to assign one before printing the boarding pass?")) return;
+    const gate = window.prompt("Enter the departure gate. Leave blank to print AS DIRECTED.", state.flight.charter_gate || "");
+    if (gate === null || !gate.trim()) return;
+    els.gate.value = gate.trim().toUpperCase();
+    await saveGate();
+  }
   async function boardScannedCode(code) {
     const response = await fetch(app.dataset.boardScanUrl, { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify({ code }) });
     const data = await responseJson(response, "Boarding scan");
@@ -122,8 +159,30 @@
   async function processScanCode() { const code = els.scanCode.value.trim(); if (!code) return; els.scanProcess.disabled = true; try { const data = await boardScannedCode(code); stopScanner(); els.scanDialog.close(); scanFeedback(true, data.message || "PASSENGER BOARDED"); showNotice(data.message || "Passenger boarded."); } catch (err) { scanFeedback(false, "SCAN NOT ACCEPTED"); els.scanStatus.textContent = err.message; showNotice(err.message, true); } finally { els.scanProcess.disabled = false; } }
   async function openScanner() {
     els.scanCode.value = ""; els.scanStatus.textContent = "Allow camera access to scan a QR code, or scan/type the code below."; els.scanDialog.showModal(); els.scanCode.focus();
-    if (!("BarcodeDetector" in window) || !navigator.mediaDevices?.getUserMedia) { els.scanStatus.textContent = "Camera QR scanning is not supported in this browser. Use a handheld scanner or paste the code below."; return; }
-    try { scanStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:"environment" } } }); els.scanVideo.srcObject = scanStream; await els.scanVideo.play(); const detector = new BarcodeDetector({ formats:["qr_code"] }); scanTimer = setInterval(async () => { try { const results = await detector.detect(els.scanVideo); if (results[0]?.rawValue) { els.scanCode.value = results[0].rawValue; await processScanCode(); } } catch (_) {} }, 500); } catch (err) { els.scanStatus.textContent = `Camera unavailable: ${err.message}. Use a handheld scanner or paste the code below.`; }
+    if (!navigator.mediaDevices?.getUserMedia) { els.scanStatus.textContent = "Camera access is not available in this browser. Use a handheld scanner or paste the code below."; return; }
+    if (!("BarcodeDetector" in window) && typeof window.jsQR !== "function") { els.scanStatus.textContent = "QR decoding is unavailable. Use a handheld scanner or paste the code below."; return; }
+    try {
+      scanStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:"environment" } } });
+      els.scanVideo.srcObject = scanStream;
+      await els.scanVideo.play();
+      const detector = "BarcodeDetector" in window ? new BarcodeDetector({ formats:["qr_code"] }) : null;
+      const canvas = detector ? null : document.createElement("canvas");
+      const context = canvas?.getContext("2d", { willReadFrequently:true });
+      els.scanStatus.textContent = detector ? "Point the camera at the boarding-pass QR code." : "Safari camera scanner ready. Point the camera at the boarding-pass QR code.";
+      scanTimer = setInterval(async () => {
+        try {
+          let code = "";
+          if (detector) {
+            code = (await detector.detect(els.scanVideo))[0]?.rawValue || "";
+          } else if (canvas && context && els.scanVideo.videoWidth) {
+            canvas.width = els.scanVideo.videoWidth; canvas.height = els.scanVideo.videoHeight;
+            context.drawImage(els.scanVideo, 0, 0, canvas.width, canvas.height);
+            code = window.jsQR(context.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height, { inversionAttempts:"dontInvert" })?.data || "";
+          }
+          if (code) { els.scanCode.value = code; await processScanCode(); }
+        } catch (_) {}
+      }, 500);
+    } catch (err) { els.scanStatus.textContent = `Camera unavailable: ${err.message}. Use a handheld scanner or paste the code below.`; }
   }
   function ssrTextValue() { return checkinSsrs.map((ssr) => `${ssr.Code}${ssr.FreeText ? ` (${ssr.FreeText})` : ""}`).join(", "); }
   function renderCheckinSsrs() { els.checkinSsrList.innerHTML = checkinSsrs.length ? checkinSsrs.map((ssr, index) => `<span class="ssr-chip"><strong>${esc(ssr.Code)}</strong>${ssr.FreeText ? ` ${esc(ssr.FreeText)}` : ""}<button type="button" data-ssr-index="${index}" aria-label="Remove ${esc(ssr.Code)}">×</button></span>`).join("") : '<span class="muted">No SSRs recorded.</span>'; }
@@ -141,20 +200,35 @@
     els.checkinSeat.value = String(passenger.Seat || availableSeatFor(passenger) || "").toUpperCase(); els.checkinBagKg.value = Number(passenger.BaggageWeight || 0); els.checkinBagPieces.value = Number(passenger.BaggagePieces || 0); els.checkinComments.value = passenger.Comments || "";
     els.checkinSsrCode.innerHTML = ssrOptions.map(([value, label]) => `<option value="${value}">${esc(label)}</option>`).join(""); els.checkinSsrText.value = ""; renderCheckinSsrs(); renderCheckinSeatmap(); els.checkinDialog.showModal();
   }
-  async function completeCheckin(printAfter = false) {
+  async function completeCheckin() {
+    const originalStatus = checkinPassenger ? statusOf(checkinPassenger) : "Booked";
+    const originalSeat = String(checkinPassenger?.Seat || "").trim().toUpperCase();
+    const isNewCheckin = originalStatus === "Booked";
+    if (isNewCheckin) await ensureGateBeforePrinting();
     const seat = els.checkinSeat.value.trim().toUpperCase();
-    const values = { Status:"Checked In", Seat:seat, BaggageWeight:Number(els.checkinBagKg.value || 0), BaggagePieces:Number(els.checkinBagPieces.value || 0), SSR:ssrTextValue(), Comments:els.checkinComments.value.trim() };
+    const values = { Status:isNewCheckin ? "Checked In" : originalStatus, Seat:seat, BaggageWeight:Number(els.checkinBagKg.value || 0), BaggagePieces:Number(els.checkinBagPieces.value || 0), SSR:ssrTextValue(), Comments:els.checkinComments.value.trim() };
     let passenger;
     if (checkinPassenger) passenger = await updatePassenger(checkinPassenger.PassengerId, values);
     else { const response = await fetch(app.dataset.passengerAddUrl, { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify({ flight_id:state.flight.envision_flight_id, GivenName:els.checkinGivenName.value.trim(), Surname:els.checkinSurname.value.trim(), PassengerType:els.checkinPassengerType.value, BookingReferenceID:els.checkinPnr.value.trim(), ...values }) }); const data = await responseJson(response, "Add passenger"); if (!response.ok || data.ok === false) throw Error(data.error || "Unable to add passenger"); passenger = data.passenger; state.passengers.push(passenger); renderFlight(); }
-    els.checkinDialog.close(); showNotice(`${nameOf(passenger)} checked in${seat ? ` in seat ${seat}` : ""}.`); if (printAfter) printPass(passenger);
+    els.checkinDialog.close();
+    if (isNewCheckin) {
+      showNotice(`${nameOf(passenger)} checked in${seat ? ` in seat ${seat}` : ""}.`);
+      printPass(passenger);
+    } else if (originalSeat !== seat) {
+      showNotice(`${nameOf(passenger)} moved from ${originalSeat || "an unassigned seat"} to ${seat || "an unassigned seat"}. Collect the existing boarding pass.`);
+      if (window.confirm(`Seat changed from ${originalSeat || "unassigned"} to ${seat || "unassigned"}. Collect the existing boarding pass. Print a replacement now?`)) printPass(passenger);
+    } else {
+      showNotice(`${nameOf(passenger)} updated.`);
+    }
   }
   function printPass(p) {
     const f = state.flight, w = window.open("", "_blank", "width=900,height=450");
     if (!w) { showNotice("Allow pop-ups to print a boarding pass.", true); return; }
     const travelDate = f.std_nz ? new Intl.DateTimeFormat("en-NZ", { weekday:"short", day:"2-digit", month:"short", year:"numeric" }).format(new Date(f.std_nz)) : "Date TBC";
-    const route = `${esc(f.dep)} - ${esc(f.ades || f.dest)}`, passenger = esc(nameOf(p)), flight = esc(f.flight_number || f.flight), seat = esc(p.Seat || "GATE"), qr = esc(boardingQrUrl(p));
+    const route = `${esc(f.dep)} - ${esc(f.ades || f.dest)}`, passenger = esc(nameOf(p)), flight = esc(f.flight_number || f.flight), seat = esc(p.Seat || "GATE"), gate = esc(f.charter_gate || "AS DIRECTED"), qr = esc(boardingQrUrl(p));
     w.document.write(`<!doctype html><html><head><title>Boarding Pass</title><style>@page{size:200mm 80mm;margin:0}*{box-sizing:border-box}html,body{width:200mm;height:80mm;margin:0;background:#fff;font-family:Arial,sans-serif;color:#111}.pass{display:grid;grid-template-columns:150mm 50mm;width:200mm;height:80mm;overflow:hidden;border:1px solid #111}.main{padding:6mm 7mm}.brand{font-size:9pt;font-weight:700;letter-spacing:1.4px;color:#075985}.title{font-size:7pt;letter-spacing:1px;margin-top:1mm;color:#555}.route{font-size:28pt;font-weight:800;letter-spacing:1px;line-height:1;margin:4mm 0}.grid{display:grid;grid-template-columns:1.6fr .75fr .8fr;gap:4mm}.label{font-size:6.5pt;font-weight:700;letter-spacing:.7px;color:#555}.value{font-size:12pt;font-weight:700;margin-top:1mm}.seat .value{font-size:25pt;line-height:.85}.footer{margin-top:4mm;padding-top:3mm;border-top:1px solid #222;font-size:7pt}.stub{padding:6mm 4mm;border-left:1px dashed #111;text-align:center}.stub .route{font-size:16pt;margin:3mm 0}.stub .seat{margin:4mm 0}.qr{width:32mm;height:32mm;display:block;margin:2mm auto 1mm}.scan{font-size:6.5pt;color:#444}@media screen{body{padding:15px;background:#e5e7eb}.pass{box-shadow:0 3px 15px #0003;margin:auto}}</style></head><body><section class="pass"><div class="main"><div class="brand">AIR CHATHAMS</div><div class="title">CHARTER BOARDING PASS</div><div class="route">${route}</div><div class="grid"><div><div class="label">PASSENGER</div><div class="value">${passenger}</div></div><div><div class="label">FLIGHT</div><div class="value">${flight}</div></div><div class="seat"><div class="label">SEAT</div><div class="value">${seat}</div></div><div><div class="label">DATE</div><div class="value">${esc(travelDate)}</div></div><div><div class="label">DEPARTURE</div><div class="value">${esc(fmtTime(f.std_nz))}</div></div><div><div class="label">BOOKING REF</div><div class="value">${esc(p.BookingReferenceID || "-")}</div></div></div><div class="footer">Boarding pass valid for this charter sector only. Present QR code at the gate.</div></div><aside class="stub"><div class="brand">AIR CHATHAMS</div><div class="route">${route}</div><div class="label">FLIGHT</div><div class="value">${flight}</div><div class="seat"><div class="label">SEAT</div><div class="value">${seat}</div></div><img class="qr" src="${qr}" alt="Boarding QR code"><div class="scan">SCAN AT BOARDING</div></aside></section><script>window.onload=()=>window.print()<\/script></body></html>`);
+    w.document.querySelector(".grid")?.insertAdjacentHTML("beforeend", `<div><div class="label">GATE</div><div class="value">${gate}</div></div>`);
+    w.document.querySelector(".stub .qr")?.insertAdjacentHTML("beforebegin", `<div class="label">GATE</div><div class="value">${gate}</div>`);
     w.document.close();
   }
   els.flightList.addEventListener("click", (e) => { const btn = e.target.closest("[data-id]"); if (btn) selectFlight(state.flights.find((f) => String(f.envision_flight_id) === btn.dataset.id)); });
@@ -163,4 +237,7 @@
   els.checkinSeatmapGrid.addEventListener("click", (event) => { const seat = event.target.closest("[data-checkin-seat]")?.dataset.checkinSeat; if (!seat) return; els.checkinSeat.value = seat; renderCheckinSeatmap(); }); els.checkinSeat.addEventListener("input", renderCheckinSeatmap); els.seatmapClose.addEventListener("click", () => els.seatmapDialog.close()); els.toggleFlights.addEventListener("click", () => { workspace.classList.toggle("hide-flights"); els.toggleFlights.textContent = workspace.classList.contains("hide-flights") ? "Show charter flights" : "Hide charter flights"; }); els.addPassenger.addEventListener("click", () => openCheckin()); els.scanButton.addEventListener("click", openScanner); els.scanClose.addEventListener("click", () => { stopScanner(); els.scanDialog.close(); }); els.scanProcess.addEventListener("click", processScanCode); els.scanCode.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); processScanCode(); } }); els.scanDialog.addEventListener("close", stopScanner); els.checkinClose.addEventListener("click", () => els.checkinDialog.close()); els.addCheckinSsr.addEventListener("click", () => { const code = els.checkinSsrCode.value; if (!code) return; checkinSsrs.push({ Code:code, FreeText:els.checkinSsrText.value.trim() }); els.checkinSsrCode.value = ""; els.checkinSsrText.value = ""; renderCheckinSsrs(); }); els.checkinSsrList.addEventListener("click", (event) => { const button = event.target.closest("[data-ssr-index]"); if (!button) return; checkinSsrs.splice(Number(button.dataset.ssrIndex), 1); renderCheckinSsrs(); }); els.confirmCheckin.addEventListener("click", () => completeCheckin(false).catch((err) => showNotice(err.message, true))); els.confirmCheckinPrint.addEventListener("click", () => completeCheckin(true).catch((err) => showNotice(err.message, true))); els.search.addEventListener("input", renderPassengers); els.filter.addEventListener("change", renderPassengers); els.refresh.addEventListener("click", loadFlights); els.day.addEventListener("change", () => { history.replaceState({}, "", `?date=${els.day.value}`); state.flight = null; state.passengers = []; loadFlights(); }); loadFlights();
   els.closeFlight.addEventListener("click", () => changeFlightClosure(true).catch((err) => showNotice(err.message, true)));
   els.reopenFlight.addEventListener("click", () => changeFlightClosure(false).catch((err) => showNotice(err.message, true)));
+  els.saveGate.addEventListener("click", () => saveGate().catch((err) => showNotice(err.message, true)));
+  els.search.addEventListener("input", renderPassengerActions);
+  els.filter.addEventListener("change", renderPassengerActions);
 })();

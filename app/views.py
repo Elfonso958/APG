@@ -706,6 +706,7 @@ def _apply_charter_manifests(rows: list[dict]) -> None:
         r["charter_manifest_filename"] = manifest.uploaded_filename or ""
         r["charter_manifest_updated_at"] = manifest.updated_at.isoformat() if manifest.updated_at else None
         r["charter_flight_closed_at"] = manifest.closed_at.isoformat() if manifest.closed_at else None
+        r["charter_gate"] = manifest.gate or ""
         if _is_charter_service(r):
             counts = _count_pax_types(pax)
             r["pax_list"] = pax
@@ -1678,6 +1679,7 @@ def api_dcs_gantt_data():
             "charter_manifest_filename": r.get("charter_manifest_filename") or "",
             "charter_manifest_updated_at": r.get("charter_manifest_updated_at"),
             "charter_flight_closed_at": r.get("charter_flight_closed_at"),
+            "charter_gate": r.get("charter_gate") or "",
             "dcs_linked": bool(r.get("dcs_linked")),
             "envision_flight_id": r.get("envision_flight_id"),
             "delays": r.get("delays") or [],   # <-- NEW: ship delays to JS

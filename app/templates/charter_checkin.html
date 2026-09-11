@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='charter_checkin.css') }}?v=9">
+  <link rel="stylesheet" href="{{ url_for('static', filename='charter_checkin.css') }}?v=12">
 </head>
 <body>
   <main id="charterCheckinApp"
@@ -21,6 +21,7 @@
         data-board-scan-url="{{ url_for('api.api_charter_manifest_board_scan') }}"
         data-close-flight-url="{{ url_for('api.api_charter_manifest_close_flight') }}"
         data-reopen-flight-url="{{ url_for('api.api_charter_manifest_reopen_flight') }}"
+        data-gate-url="{{ url_for('api.api_charter_manifest_update_flight_gate') }}"
         data-template-url="{{ url_for('api.api_charter_manifest_template') }}"
         data-day="{{ day.isoformat() }}">
     <header class="topbar">
@@ -53,6 +54,8 @@
               <button id="toggleFlightPanel" class="button secondary" type="button">Hide charter flights</button>
               <button id="closeFlightBtn" class="button danger" type="button">Close flight</button>
               <button id="reopenFlightBtn" class="button secondary" type="button" hidden>Reopen flight</button>
+              <label class="gate-field">Gate<input id="flightGate" type="text" maxlength="16" placeholder="e.g. 4" autocapitalize="characters"></label>
+              <button id="saveGateBtn" class="button secondary" type="button">Save gate</button>
               <a id="templateLink" class="button secondary" href="#" download>Download template</a>
               <label class="button secondary upload-label">Upload passenger list<input id="manifestFile" type="file" accept=".xlsx,.xlsm,.xltx,.xltm"></label>
             </div>
@@ -111,11 +114,12 @@
       </div>
       <section class="checkin-section"><div class="section-heading"><h3>Special service requests</h3><span class="muted">IATA SSR codes</span></div><div class="ssr-add"><select id="checkinSsrCode"></select><input id="checkinSsrText" type="text" placeholder="Optional SSR detail"><button id="addCheckinSsr" class="button secondary" type="button">Add SSR</button></div><div id="checkinSsrList" class="ssr-list"></div></section>
       <label class="comments-label">Agent comments<textarea id="checkinComments" rows="3" placeholder="Internal operational note — not an SSR"></textarea></label>
-      <div class="checkin-actions"><button id="confirmCheckin" class="button" type="button">Check in</button><button id="confirmCheckinPrint" class="button secondary" type="button">Check in & print</button></div>
+      <div class="checkin-actions"><button id="confirmCheckin" class="button" type="button">Check in & print</button><button id="confirmCheckinPrint" type="button" hidden></button></div>
         </div>
       </div>
     </div>
   </dialog>
-  <script src="{{ url_for('static', filename='charter_checkin.js') }}?v=9"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+  <script src="{{ url_for('static', filename='charter_checkin.js') }}?v=13"></script>
 </body>
 </html>

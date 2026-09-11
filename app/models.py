@@ -101,6 +101,7 @@ class CharterManifest(db.Model):
     flight_no = db.Column(db.String(16), index=True, nullable=True)
     dep = db.Column(db.String(8), nullable=True)
     ades = db.Column(db.String(8), nullable=True)
+    gate = db.Column(db.String(16), nullable=True)
     pax_json = db.Column(db.Text, nullable=False, default="[]")
     uploaded_filename = db.Column(db.String(255), nullable=True)
     closed_at = db.Column(db.DateTime, nullable=True)
