@@ -192,13 +192,17 @@
     return data;
   }
   function stopScanner() { if (scanTimer) clearInterval(scanTimer); scanTimer = null; if (scanStream) scanStream.getTracks().forEach((track) => track.stop()); scanStream = null; els.scanVideo.srcObject = null; }
-  async function processScanCode() { const code = els.scanCode.value.trim(); if (!code || scanProcessing) return; scanProcessing = true; els.scanProcess.disabled = true; try { const data = await boardScannedCode(code); els.scanCode.value = ""; scanFeedback(true, data.message || "PASSENGER BOARDED"); els.scanStatus.textContent = `${data.message || "Passenger boarded."} Ready for the next boarding pass.`; showNotice(data.message || "Passenger boarded."); } catch (err) { els.scanCode.value = ""; scanFeedback(false, "SCAN NOT ACCEPTED"); els.scanStatus.textContent = err.message; showNotice(err.message, true); } finally { scanProcessing = false; els.scanProcess.disabled = false; } }
+  async function ensureScannerOpen() {
+    if (!els.scanDialog.open || !scanStream?.active) await openScanner();
+  }
+  async function processScanCode() { const code = els.scanCode.value.trim(); if (!code || scanProcessing) return; scanProcessing = true; els.scanProcess.disabled = true; try { const data = await boardScannedCode(code); els.scanCode.value = ""; scanFeedback(true, data.message || "PASSENGER BOARDED"); els.scanStatus.textContent = `${data.message || "Passenger boarded."} Ready for the next boarding pass.`; showNotice(data.message || "Passenger boarded."); await ensureScannerOpen(); } catch (err) { els.scanCode.value = ""; scanFeedback(false, "SCAN NOT ACCEPTED"); els.scanStatus.textContent = err.message; showNotice(err.message, true); } finally { scanProcessing = false; els.scanProcess.disabled = false; } }
   async function openScanner() {
     unlockScanAudio();
-    els.scanCode.value = ""; els.scanStatus.textContent = "Allow camera access, then point it at the boarding-pass QR code."; els.scanDialog.showModal();
+    els.scanCode.value = ""; els.scanStatus.textContent = "Allow camera access, then point it at the boarding-pass QR code."; if (!els.scanDialog.open) els.scanDialog.showModal();
     if (!navigator.mediaDevices?.getUserMedia) { els.scanStatus.textContent = "Camera access is not available in this browser."; return; }
     if (!("BarcodeDetector" in window) && typeof window.jsQR !== "function") { els.scanStatus.textContent = "QR decoding is unavailable in this browser."; return; }
     try {
+      if (scanStream?.active) return;
       scanStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:"environment" } } });
       els.scanVideo.srcObject = scanStream;
       await els.scanVideo.play();
