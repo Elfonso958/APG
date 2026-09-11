@@ -2672,14 +2672,6 @@ def api_charter_manifest_board_scan():
                 passenger=existing,
                 error="Dangerous goods have been declared. Confirm the passenger has been spoken to before boarding.",
             ), 409
-        if not data.get("confirm_boarding"):
-            return jsonify(
-                ok=False,
-                boarding_confirmation_required=True,
-                flight_id=flight_id,
-                passenger=existing,
-                error="Agent confirmation is required before boarding this passenger.",
-            ), 409
         merged = dict(existing)
         if dangerous_goods_pending:
             merged["DangerousGoodsConfirmedAt"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
