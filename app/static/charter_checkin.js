@@ -116,7 +116,7 @@
     } catch (_) { return null; }
   }
   function scanFeedback(success, message) {
-    const overlay = document.createElement("div"); overlay.className = `scan-feedback ${success ? "success" : "error"}`; overlay.textContent = message || (success ? "PASSENGER BOARDED" : "SCAN NOT ACCEPTED"); document.body.appendChild(overlay);
+    const overlay = document.createElement("div"); overlay.className = `scan-feedback ${success ? "success" : "error"}`; overlay.textContent = message || (success ? "PASSENGER BOARDED" : "SCAN NOT ACCEPTED"); (els.scanDialog?.open ? els.scanDialog : document.body).appendChild(overlay);
     try { const audio = unlockScanAudio(); if (audio) { const oscillator = audio.createOscillator(), gain = audio.createGain(); oscillator.connect(gain); gain.connect(audio.destination); oscillator.frequency.value = success ? 880 : 180; gain.gain.setValueAtTime(.12, audio.currentTime); oscillator.start(); oscillator.stop(audio.currentTime + (success ? .18 : .45)); } } catch (_) {}
     setTimeout(() => overlay.remove(), 1800);
   }
