@@ -2328,11 +2328,11 @@ def api_charter_self_checkin(token: str):
             dangerous_goods_answer = None
         return jsonify(
             ok=True,
-            passenger={**{key: passenger.get(key) for key in ("GivenName", "Surname", "Seat", "BagToWeigh", "SelfCheckinCompletedAt", "PassengerType")}, "DangerousGoodsDeclared": dangerous_goods_answer},
+            passenger={**{key: passenger.get(key) for key in ("GivenName", "Surname", "Seat", "BagToWeigh", "SelfCheckinCompletedAt", "PassengerType", "Status")}, "DangerousGoodsDeclared": dangerous_goods_answer},
             flight=_charter_self_checkin_flight_data(manifest, passenger),
             occupied_seats=[str(other.get("Seat") or "").strip().upper() for i, other in enumerate(passengers) if i != index and str(other.get("Seat") or "").strip()],
         )
-    if _normalise_charter_status(passenger.get("Status")) != "Booked":
+    if _normalise_charter_status(passenger.get("Status")) not in {"Booked", "Checked In"}:
         return jsonify(ok=False, error="This passenger can no longer use pre-check-in."), 409
     data = request.get_json(silent=True) or {}
     seat = str(data.get("Seat") or "").strip().upper()
@@ -2344,7 +2344,7 @@ def api_charter_self_checkin(token: str):
     passenger["BagToWeigh"] = bool(data.get("BagToWeigh"))
     passenger["DangerousGoodsDeclared"] = bool(data.get("DangerousGoodsDeclared"))
     passenger["Status"] = "Checked In"
-    passenger["CheckedInAt"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    passenger["CheckedInAt"] = passenger.get("CheckedInAt") or datetime.utcnow().isoformat(timespec="seconds") + "Z"
     passenger["SelfCheckinCompletedAt"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
     passengers[index] = _charter_pax_from_row(passenger, manifest.dep or "", manifest.ades or "")
     saved_manifest = _upsert_charter_manifest(str(manifest.envision_flight_id), passengers, flight_no=manifest.flight_no or "", dep=manifest.dep or "", ades=manifest.ades or "", gate=manifest.gate or "", filename=manifest.uploaded_filename)
