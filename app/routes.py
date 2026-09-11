@@ -2224,6 +2224,8 @@ def _send_charter_boarding_pass_email(manifest: CharterManifest, passenger: dict
         raise RuntimeError("Boarding-pass email sender is not configured")
     flight_id = str(manifest.envision_flight_id)
     flight_no, dep, ades, gate = manifest.flight_no or "Charter", (manifest.dep or "---").upper(), (manifest.ades or "---").upper(), manifest.gate or "AS DIRECTED"
+    bag_notice_html = '<div style="margin:0 0 18px;padding:13px 15px;border-left:4px solid #b89552;background:#fbf7ed;color:#4a3a1c;font-size:14px;line-height:20px"><strong>Checked baggage:</strong> Please see a check-in agent to weigh and accept your bag before proceeding to the gate lounge.</div>' if passenger.get("BagToWeigh") else ""
+    bag_notice_text = "\n\nChecked baggage: Please see a check-in agent to weigh and accept your bag before proceeding to the gate lounge." if passenger.get("BagToWeigh") else ""
     token = make_wallet_token(flight_id, str(passenger["PassengerId"]))
     logo_url = url_for("ui.charter_brand_asset", asset="main-logo", _external=True)
     qr_url = url_for("api.api_charter_manifest_boarding_qr", flight_id=flight_id, passenger_id=passenger["PassengerId"], _external=True)
@@ -2238,8 +2240,8 @@ def _send_charter_boarding_pass_email(manifest: CharterManifest, passenger: dict
     )
     name = html.escape(f"{passenger.get('GivenName', '')} {passenger.get('Surname', '')}".strip())
     google_button = f'<a href="{html.escape(google_url, quote=True)}" style="display:inline-block;margin:8px;padding:12px 18px;background:#202124;color:#fff;border-radius:6px;text-decoration:none;font-weight:bold">Add to Google Wallet</a>' if google_url else ""
-    html_body = f'''<div style="max-width:640px;margin:auto;padding:24px 14px;font-family:Arial,sans-serif;color:#173743;background:#e8f5f3"><div style="overflow:hidden;border-radius:18px;background:#fff;box-shadow:0 10px 28px #073b5c24"><div style="padding:22px 26px 20px;background:linear-gradient(135deg,#075c74,#148596);color:#fff"><img src="{html.escape(logo_url, quote=True)}" alt="ACCharters" style="display:block;max-width:180px;height:auto;background:#fff;border-radius:7px;padding:4px 9px"><p style="margin:20px 0 0;font-size:11px;letter-spacing:1.5px;font-weight:bold">CHARTER BOARDING PASS</p><h1 style="margin:7px 0 0;font-size:30px;line-height:1.12">{dep} &rarr; {ades}</h1></div><div style="padding:24px 26px"><p style="margin:0 0 18px">Hello {name}, you are checked in. Please keep this pass handy for boarding.</p><table role="presentation" style="width:100%;border-collapse:separate;border-spacing:0 10px;font-size:14px"><tr><td style="width:42%;color:#5c7478;font-weight:bold">Departure</td><td style="font-weight:bold">{html.escape(departure)}</td></tr><tr><td style="color:#5c7478;font-weight:bold">Flight</td><td style="font-weight:bold">{html.escape(flight_no)}</td></tr><tr><td style="color:#5c7478;font-weight:bold">Aircraft</td><td style="font-weight:bold">{html.escape(aircraft)}</td></tr><tr><td style="color:#5c7478;font-weight:bold">Seat · Gate</td><td style="font-weight:bold">{html.escape(str(passenger.get('Seat') or 'GATE'))} · {html.escape(gate)}</td></tr></table><p style="margin:22px 0 16px;text-align:center"><img src="{html.escape(qr_url, quote=True)}" alt="Boarding QR code" width="170" height="170" style="display:block;margin:auto;padding:8px;border:1px solid #c9dfe0;border-radius:10px"></p><div style="text-align:center"><a href="{html.escape(apple_url, quote=True)}" style="display:inline-block;margin:6px;padding:12px 17px;background:#000;color:#fff;border-radius:7px;text-decoration:none;font-weight:bold">Add to Apple Wallet</a>{google_button}</div><p style="margin:18px 0 0;font-size:12px;color:#5c7478">Present the QR code at boarding. This pass is valid only for this charter sector.</p></div></div></div>'''
-    text_body = f"ACCharters boarding pass\n\n{dep} - {ades}\nDeparture: {departure}\nPassenger: {name}\nFlight: {flight_no}\nAircraft: {aircraft}\nSeat: {passenger.get('Seat') or 'GATE'}\nGate: {gate}\n\nApple Wallet: {apple_url}\nGoogle Wallet: {google_url or 'Unavailable'}"
+    html_body = f'''<div style="max-width:640px;margin:auto;padding:24px 14px;font-family:Arial,sans-serif;color:#173743;background:#e8f5f3"><div style="overflow:hidden;border-radius:18px;background:#fff;box-shadow:0 10px 28px #073b5c24"><div style="padding:22px 26px 20px;background:linear-gradient(135deg,#075c74,#148596);color:#fff"><img src="{html.escape(logo_url, quote=True)}" alt="ACCharters" style="display:block;max-width:180px;height:auto;background:#fff;border-radius:7px;padding:4px 9px"><p style="margin:20px 0 0;font-size:11px;letter-spacing:1.5px;font-weight:bold">CHARTER BOARDING PASS</p><h1 style="margin:7px 0 0;font-size:30px;line-height:1.12">{dep} &rarr; {ades}</h1></div><div style="padding:24px 26px"><p style="margin:0 0 18px">Hello {name}, you are checked in. Please keep this pass handy for boarding.</p>{bag_notice_html}<table role="presentation" style="width:100%;border-collapse:separate;border-spacing:0 10px;font-size:14px"><tr><td style="width:42%;color:#5c7478;font-weight:bold">Departure</td><td style="font-weight:bold">{html.escape(departure)}</td></tr><tr><td style="color:#5c7478;font-weight:bold">Flight</td><td style="font-weight:bold">{html.escape(flight_no)}</td></tr><tr><td style="color:#5c7478;font-weight:bold">Aircraft</td><td style="font-weight:bold">{html.escape(aircraft)}</td></tr><tr><td style="color:#5c7478;font-weight:bold">Seat · Gate</td><td style="font-weight:bold">{html.escape(str(passenger.get('Seat') or 'GATE'))} · {html.escape(gate)}</td></tr></table><p style="margin:22px 0 16px;text-align:center"><img src="{html.escape(qr_url, quote=True)}" alt="Boarding QR code" width="170" height="170" style="display:block;margin:auto;padding:8px;border:1px solid #c9dfe0;border-radius:10px"></p><div style="text-align:center"><a href="{html.escape(apple_url, quote=True)}" style="display:inline-block;margin:6px;padding:12px 17px;background:#000;color:#fff;border-radius:7px;text-decoration:none;font-weight:bold">Add to Apple Wallet</a>{google_button}</div><p style="margin:18px 0 0;font-size:12px;color:#5c7478">Present the QR code at boarding. This pass is valid only for this charter sector.</p></div></div></div>'''
+    text_body = f"ACCharters boarding pass\n\n{dep} - {ades}\nDeparture: {departure}\nPassenger: {name}\nFlight: {flight_no}\nAircraft: {aircraft}\nSeat: {passenger.get('Seat') or 'GATE'}\nGate: {gate}{bag_notice_text}\n\nApple Wallet: {apple_url}\nGoogle Wallet: {google_url or 'Unavailable'}"
     graph_available = bool(_email_env("GRAPH_TENANT_ID", "MS_TENANT_ID") and _email_env("GRAPH_CLIENT_ID", "MS_CLIENT_ID") and _email_env("GRAPH_CLIENT_SECRET", "MS_CLIENT_SECRET"))
     if graph_available and _send_email_via_graph(sender, [recipient], f"Your ACCharters boarding pass — {flight_no}", text_body, html_body=html_body):
         return True
@@ -2332,6 +2334,7 @@ def api_charter_self_checkin(token: str):
             flight=_charter_self_checkin_flight_data(manifest, passenger),
             occupied_seats=[str(other.get("Seat") or "").strip().upper() for i, other in enumerate(passengers) if i != index and str(other.get("Seat") or "").strip()],
         )
+    was_booked = _normalise_charter_status(passenger.get("Status")) == "Booked"
     if _normalise_charter_status(passenger.get("Status")) not in {"Booked", "Checked In"}:
         return jsonify(ok=False, error="This passenger can no longer use pre-check-in."), 409
     data = request.get_json(silent=True) or {}
@@ -2364,7 +2367,13 @@ def api_charter_self_checkin(token: str):
         )
     except Exception:
         current_app.logger.exception("Unable to create Google Wallet link for charter pre-check-in")
-    return jsonify(ok=True, message="Your pre-check-in has been saved.", wallet={"apple_url": apple_url, "google_url": google_url})
+    boarding_pass_email_sent = False
+    if was_booked and wallet_passenger.get("Email"):
+        try:
+            boarding_pass_email_sent = _send_charter_boarding_pass_email(saved_manifest, wallet_passenger)
+        except Exception:
+            current_app.logger.exception("Unable to email charter boarding pass after self check-in for %s", wallet_passenger.get("PassengerId"))
+    return jsonify(ok=True, message="Your pre-check-in has been saved.", boarding_pass_email_sent=boarding_pass_email_sent, wallet={"apple_url": apple_url, "google_url": google_url})
 
 
 @api_bp.post("/dcs/charter_manifest/upload")
