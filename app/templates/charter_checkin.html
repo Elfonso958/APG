@@ -23,6 +23,7 @@
         data-reopen-flight-url="{{ url_for('api.api_charter_manifest_reopen_flight') }}"
         data-gate-url="{{ url_for('api.api_charter_manifest_update_flight_gate') }}"
         data-passenger-weights-url="{{ url_for('api.api_charter_passenger_weights') }}"
+        data-send-due-invites-url="{{ url_for('api.api_charter_send_due_self_checkin_invites') }}"
         data-template-url="{{ url_for('api.api_charter_manifest_template') }}"
         data-day="{{ day.isoformat() }}">
     <header class="topbar">
@@ -37,6 +38,7 @@
           <span class="account-email" title="Signed in account">{{ apg_current_user.display_name or apg_current_user.email }}</span>
           {% if apg_is_admin %}
             <button id="weightSettingsBtn" class="button secondary" type="button">Passenger weights</button>
+            <button id="sendDueInvitesBtn" class="button secondary" type="button">Send due pre-check-in emails</button>
             <a class="button secondary" href="{{ url_for('ui.admin_email_settings') }}">Email settings</a>
             <a class="button secondary" href="{{ url_for('ui.admin_users') }}">Users</a>
           {% endif %}

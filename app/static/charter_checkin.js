@@ -29,6 +29,7 @@
   els.weightSettingsDialog = $("weightSettingsDialog");
   els.weightSettingsForm = $("weightSettingsForm");
   els.weightSettingsClose = $("weightSettingsClose");
+  els.sendDueInvites = $("sendDueInvitesBtn");
   ["AD", "T", "CHD", "INF", "UMNR"].forEach((type) => { els[`weight${type}`] = $(`weight${type}`); });
   const workspace = document.querySelector(".workspace");
   const state = { flights: [], flight: null, passengers: [], passengerWeights: { AD:86, T:96, CHD:46, INF:15, UMNR:46 } };
@@ -83,6 +84,17 @@
     const data = await responseJson(response, "Save passenger weights");
     if (!response.ok || data.ok === false) throw Error(data.error || "Unable to save passenger weights");
     setPassengerWeights(data.weights); els.weightSettingsDialog.close(); showNotice("Passenger weights saved.");
+  }
+  async function sendDuePrecheckinInvites() {
+    if (!els.sendDueInvites || !window.confirm("Send pre-check-in invitations now to eligible Booked passengers departing within 48 hours?")) return;
+    els.sendDueInvites.disabled = true; showNotice("Checking for due pre-check-in invitations…");
+    try {
+      const response = await fetch(app.dataset.sendDueInvitesUrl, { method:"POST", headers:{ "Content-Type":"application/json" }, body:"{}" });
+      const data = await responseJson(response, "Pre-check-in invitations");
+      if (!response.ok || data.ok === false) throw Error(data.error || "Unable to run the invitation check");
+      showNotice(data.message || `Sent ${Number(data.sent || 0)} due pre-check-in emails.`);
+    } catch (error) { showNotice(error.message, true); }
+    finally { els.sendDueInvites.disabled = false; }
   }
   const isCharter = (f) => /charter/.test(`${f.service_type || ""} ${f.flight_type || ""}`.toLowerCase());
   function showNotice(text, error = false) { els.notice.textContent = text; els.notice.hidden = !text; els.notice.classList.toggle("error", error); }
@@ -396,6 +408,7 @@
   els.file.addEventListener("change", async () => { const file = els.file.files[0]; if (!file || !state.flight) return; const body = new FormData(); body.append("flight_id", state.flight.envision_flight_id); body.append("flight_number", state.flight.flight_number || state.flight.flight || ""); body.append("dep", state.flight.dep || ""); body.append("ades", state.flight.ades || state.flight.dest || ""); body.append("file", file); showNotice("Uploading passenger list…"); try { const r = await fetch(app.dataset.uploadUrl, { method:"POST", body }); const d = await responseJson(r, "Manifest upload"); if (!r.ok || d.ok === false) throw Error(d.error || "Upload failed"); state.passengers = d.passengers || []; showNotice(`${state.passengers.length} passengers uploaded as Booked.`); renderFlight(); } catch (e) { showNotice(e.message, true); } finally { els.file.value = ""; } });
   els.checkinSeatmapGrid.addEventListener("click", (event) => { const seat = event.target.closest("[data-checkin-seat]")?.dataset.checkinSeat; if (!seat) return; els.checkinSeat.value = seat; renderCheckinSeatmap(); }); els.checkinSeat.addEventListener("input", renderCheckinSeatmap); els.seatmapClose.addEventListener("click", () => els.seatmapDialog.close()); els.toggleFlights.addEventListener("click", () => { workspace.classList.toggle("hide-flights"); els.toggleFlights.textContent = workspace.classList.contains("hide-flights") ? "Show charter flights" : "Hide charter flights"; }); els.addPassenger.addEventListener("click", () => openCheckin()); els.scanButton.addEventListener("click", openScanner); els.scanClose.addEventListener("click", () => { stopScanner(); els.scanDialog.close(); }); els.scanProcess.addEventListener("click", processScanCode); els.scanCode.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); processScanCode(); } }); els.scanDialog.addEventListener("close", stopScanner); els.checkinClose.addEventListener("click", () => els.checkinDialog.close()); els.addCheckinSsr.addEventListener("click", () => { const code = els.checkinSsrCode.value; if (!code) return; checkinSsrs.push({ Code:code, FreeText:els.checkinSsrText.value.trim() }); els.checkinSsrCode.value = ""; els.checkinSsrText.value = ""; renderCheckinSsrs(); }); els.checkinSsrList.addEventListener("click", (event) => { const button = event.target.closest("[data-ssr-index]"); if (!button) return; checkinSsrs.splice(Number(button.dataset.ssrIndex), 1); renderCheckinSsrs(); }); els.confirmCheckin.addEventListener("click", () => completeCheckin(false).catch((err) => showNotice(err.message, true))); els.confirmCheckinPrint.addEventListener("click", () => completeCheckin(true).catch((err) => showNotice(err.message, true))); els.search.addEventListener("input", renderPassengers); els.filter.addEventListener("change", renderPassengers); els.refresh.addEventListener("click", loadFlights); els.day.addEventListener("change", () => { history.replaceState({}, "", `?date=${els.day.value}`); state.flight = null; state.passengers = []; loadFlights(); }); loadFlights();
   els.checkinPassengerType.addEventListener("change", renderCheckinPassengerWeight);
+  els.sendDueInvites?.addEventListener("click", sendDuePrecheckinInvites);
   els.acknowledgeSeatChange.addEventListener("click", () => processBoardingScan(true));
   els.allowBoarding.addEventListener("click", () => processBoardingScan(false, true));
   els.delayBoarding.addEventListener("click", async () => { const code = pendingBoardingCode; pendingBoardingCode = ""; pendingBoardingHasDangerousGoods = false; els.boardingDecisionAlert.hidden = true; ignoredScanCode = code; ignoreScanUntil = Date.now() + 3000; els.scanStatus.textContent = "Passenger boarding delayed. Ready to scan the next pass."; await ensureScannerOpen(); });

@@ -1844,6 +1844,18 @@ def api_charter_passenger_weights():
     return jsonify(ok=True, weights=weights)
 
 
+@api_bp.post("/dcs/charter-self-checkin/send-due-invites")
+def api_charter_send_due_self_checkin_invites():
+    if not _charter_weights_admin():
+        return jsonify(ok=False, error="Administrator access is required"), 403
+    try:
+        sent = send_due_charter_self_checkin_invites()
+    except Exception:
+        current_app.logger.exception("Unable to run the charter self-check-in invitation check")
+        return jsonify(ok=False, error="Unable to run the pre-check-in email check"), 500
+    return jsonify(ok=True, sent=sent, message=f"Sent {sent} due pre-check-in email{'s' if sent != 1 else ''}.")
+
+
 def _charter_pax_from_row(row: dict, default_dep: str = "", default_ades: str = "") -> dict | None:
     given = str(row.get("GivenName") or row.get("FirstName") or "").strip()
     surname = str(row.get("Surname") or row.get("LastName") or "").strip()
