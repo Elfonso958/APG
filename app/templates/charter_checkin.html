@@ -83,6 +83,7 @@
             <label>Status <select id="statusFilter"><option value="">All statuses</option><option>Booked</option><option>Checked In</option><option>Boarded</option><option>Flown</option><option>No Show</option></select></label>
             <button id="addPassenger" class="button secondary" type="button">Add passenger</button>
             <button id="scanBoardingPass" class="button" type="button">Scan QR to board</button>
+            <label>Bag tag printer <select id="bagTagProfile"><option value="iata">IATA 54 mm thermal</option><option value="long">54 mm long thermal</option><option value="a4">A4 proof sheet</option></select></label>
             <span id="manifestMeta" class="muted"></span>
           </div>
           <div class="table-wrap">
@@ -200,6 +201,6 @@
   </dialog>
   {% endif %}
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
-  <script src="{{ url_for('static', filename='charter_checkin.js') }}?v=35"></script>
+  <script src="{{ url_for('static', filename='charter_checkin.js') }}?v=36"></script>
 </body>
 </html>
