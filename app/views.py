@@ -1,12 +1,12 @@
 ﻿from flask import Blueprint, render_template, request, redirect, jsonify, flash, current_app,send_file, abort, url_for, make_response
 from datetime import date, datetime, time, timezone, timedelta
 from flask import session
-from .models import SyncRun, SyncFlightLog, AppConfig, CharterManifest
+from .models import SyncRun, SyncFlightLog, AppConfig, CharterManifest, AppUser, EmailSettings
 from . import db
 from .kmh_auth import create_kmh_session, clear_kmh_session, get_kmh_session
 from .zenith_client import fetch_dcs_for_flight
 from .otp_cache_job import get_otp_cache_job_status, start_otp_cache_job
-from functools import lru_cache
+from functools import lru_cache, wraps
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime as _dt
 from datetime import date as _date
@@ -17,6 +17,8 @@ from io import BytesIO
 import json, requests
 import time as _time
 import re
+import secrets
+from werkzeug.security import check_password_hash, generate_password_hash
 from zoneinfo import ZoneInfo
 NZ = ZoneInfo("Pacific/Auckland")
 
@@ -63,6 +65,207 @@ def clear_gantt_flight_cache() -> None:
 from .zenith_client import fetch_dcs_for_flight
 
 ui_bp = Blueprint("ui", __name__)
+
+
+def _normalise_user_email(value: str | None) -> str:
+    return str(value or "").strip().lower()
+
+
+def _bootstrap_initial_admin() -> None:
+    """Create the first local administrator from protected environment variables, once."""
+    try:
+        if AppUser.query.count():
+            return
+        email = _normalise_user_email(os.getenv("APG_INITIAL_ADMIN_EMAIL"))
+        password = os.getenv("APG_INITIAL_ADMIN_PASSWORD") or ""
+        if not email or not password:
+            return
+        db.session.add(AppUser(
+            email=email,
+            display_name=os.getenv("APG_INITIAL_ADMIN_NAME") or email.split("@", 1)[0],
+            password_hash=generate_password_hash(password),
+            is_admin=True,
+        ))
+        db.session.commit()
+        current_app.logger.info("Created initial APG administrator account for %s", email)
+    except Exception:
+        db.session.rollback()
+
+
+def _current_apg_user() -> AppUser | None:
+    user_id = session.get("apg_user_id")
+    if not user_id:
+        return None
+    try:
+        user = db.session.get(AppUser, int(user_id))
+        return user if user and user.is_active else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _csrf_token() -> str:
+    token = session.get("apg_csrf_token")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session["apg_csrf_token"] = token
+    return token
+
+
+def _csrf_is_valid() -> bool:
+    return bool(session.get("apg_csrf_token")) and secrets.compare_digest(
+        str(request.form.get("csrf_token") or ""), str(session.get("apg_csrf_token") or "")
+    )
+
+
+def _login_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if not _current_apg_user():
+            return redirect(url_for("ui.apg_login", next=request.full_path))
+        return view(*args, **kwargs)
+    return wrapped
+
+
+def _admin_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        user = _current_apg_user()
+        if not user:
+            return redirect(url_for("ui.apg_login", next=request.full_path))
+        if not user.is_admin:
+            abort(403)
+        return view(*args, **kwargs)
+    return wrapped
+
+
+@ui_bp.app_context_processor
+def _inject_apg_account_context():
+    user = _current_apg_user()
+    return {
+        "apg_current_user": user,
+        "apg_is_admin": bool(user and user.is_admin),
+        "apg_csrf_token": _csrf_token(),
+    }
+
+
+def _safe_apg_next(value: str | None) -> str:
+    candidate = str(value or "").strip()
+    return candidate if candidate.startswith("/") and not candidate.startswith("//") else url_for("ui.home")
+
+
+@ui_bp.route("/account/login", methods=["GET", "POST"])
+def apg_login():
+    _bootstrap_initial_admin()
+    next_url = _safe_apg_next(request.values.get("next"))
+    error = None
+    if request.method == "POST":
+        if not _csrf_is_valid():
+            error = "Your sign-in form expired. Please try again."
+        else:
+            user = AppUser.query.filter_by(email=_normalise_user_email(request.form.get("email"))).first()
+            if not user or not user.is_active or not check_password_hash(user.password_hash, request.form.get("password") or ""):
+                error = "Incorrect email address or password."
+            else:
+                session.clear()
+                session["apg_user_id"] = user.id
+                _csrf_token()
+                user.last_login_at = datetime.utcnow()
+                db.session.add(user)
+                db.session.commit()
+                return redirect(next_url)
+    return render_template("account_login.html", error=error, next_url=next_url)
+
+
+@ui_bp.post("/account/logout")
+@_login_required
+def apg_logout():
+    session.clear()
+    return redirect(url_for("ui.apg_login"))
+
+
+@ui_bp.route("/admin/users", methods=["GET", "POST"])
+@_admin_required
+def admin_users():
+    if request.method == "POST":
+        if not _csrf_is_valid():
+            flash("Your form expired. Please try again.", "danger")
+            return redirect(url_for("ui.admin_users"))
+        action = str(request.form.get("action") or "").strip()
+        if action == "create":
+            email = _normalise_user_email(request.form.get("email"))
+            password = request.form.get("password") or ""
+            if not email or "@" not in email or len(password) < 8:
+                flash("Enter a valid email address and a password of at least 8 characters.", "danger")
+            elif AppUser.query.filter_by(email=email).first():
+                flash("An APG account already exists for that email address.", "danger")
+            else:
+                db.session.add(AppUser(
+                    email=email,
+                    display_name=str(request.form.get("display_name") or "").strip() or None,
+                    password_hash=generate_password_hash(password),
+                    is_admin=bool(request.form.get("is_admin")),
+                    is_active=True,
+                ))
+                db.session.commit()
+                flash("APG user account created.", "success")
+        elif action == "update":
+            try:
+                user_id = int(request.form.get("user_id") or 0)
+            except (TypeError, ValueError):
+                user_id = 0
+            user = db.session.get(AppUser, user_id)
+            if not user:
+                flash("User account not found.", "danger")
+            else:
+                requested_admin = bool(request.form.get("is_admin"))
+                requested_active = bool(request.form.get("is_active"))
+                final_admin = AppUser.query.filter_by(is_admin=True, is_active=True).count() == 1 and user.is_admin and user.is_active and (not requested_admin or not requested_active)
+                if final_admin:
+                    flash("Keep at least one active APG administrator account.", "danger")
+                else:
+                    user.display_name = str(request.form.get("display_name") or "").strip() or None
+                    user.is_admin = requested_admin
+                    user.is_active = requested_active
+                    new_password = request.form.get("new_password") or ""
+                    if new_password:
+                        if len(new_password) < 8:
+                            flash("Password changes must be at least 8 characters.", "danger")
+                            return redirect(url_for("ui.admin_users"))
+                        user.password_hash = generate_password_hash(new_password)
+                    db.session.add(user)
+                    db.session.commit()
+                    flash("APG user account updated.", "success")
+        return redirect(url_for("ui.admin_users"))
+    return render_template("admin_users.html", users=AppUser.query.order_by(AppUser.is_admin.desc(), AppUser.email.asc()).all())
+
+
+@ui_bp.route("/admin/email-settings", methods=["GET", "POST"])
+@_admin_required
+def admin_email_settings():
+    settings = db.session.get(EmailSettings, 1)
+    if request.method == "POST":
+        if not _csrf_is_valid():
+            flash("Your form expired. Please try again.", "danger")
+            return redirect(url_for("ui.admin_email_settings"))
+        recipients = ", ".join(part.strip() for part in str(request.form.get("flight_operations_email") or "").split(",") if part.strip())
+        if recipients and any("@" not in address for address in recipients.split(", ")):
+            flash("Enter one or more valid email addresses, separated by commas.", "danger")
+        else:
+            settings = settings or EmailSettings(id=1)
+            settings.flight_operations_email = recipients or None
+            settings.charter_closure_emails_enabled = bool(request.form.get("charter_closure_emails_enabled"))
+            db.session.add(settings)
+            db.session.commit()
+            flash("Email settings saved.", "success")
+        return redirect(url_for("ui.admin_email_settings"))
+    configured_recipients = (settings.flight_operations_email if settings else None) or os.getenv("FLIGHT_OPERATIONS_EMAIL", "")
+    return render_template(
+        "admin_email_settings.html",
+        settings=settings,
+        configured_recipients=configured_recipients,
+        graph_configured=bool(os.getenv("GRAPH_TENANT_ID") or os.getenv("MS_TENANT_ID")),
+        smtp_configured=bool(os.getenv("MAIL_USERNAME") or os.getenv("SMTP_USERNAME")),
+    )
 
 
 @ui_bp.before_app_request

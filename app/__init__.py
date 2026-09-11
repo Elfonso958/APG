@@ -164,7 +164,7 @@ def create_app():
     # ---- DB config (keep if you still want to override)
     app.config.setdefault("SQLALCHEMY_DATABASE_URI", "sqlite:///apg_importer.db")
     app.config.setdefault("SQLALCHEMY_TRACK_MODIFICATIONS", False)
-    app.secret_key = app.config.get("SECRET_KEY", "dev")
+    app.secret_key = app.config.get("SECRET_KEY") or "dev"
     app.permanent_session_lifetime = timedelta(hours=8)
 
     # Log (masked) DCS config so you can confirm it’s loaded

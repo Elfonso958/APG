@@ -194,6 +194,8 @@ nav .btn{
   font-size: 0.8rem;
 }
 
+.nav-user{ color:var(--text); font-size:.78rem; font-weight:700; padding:5px 8px; border-left:1px solid var(--line); }.nav-logout{ margin:0; }.flash-message{ margin:16px 0; padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:color-mix(in oklab,var(--brand) 14%,transparent); }.flash-message.success{ background:color-mix(in oklab,var(--ok) 16%,transparent); border-color:color-mix(in oklab,var(--ok) 40%,var(--line)); }.flash-message.danger{ background:color-mix(in oklab,var(--err) 16%,transparent); border-color:color-mix(in oklab,var(--err) 40%,var(--line)); }.account-shell{ max-width:460px; margin:7vh auto; }.account-card{ width:100%; }.admin-grid{ grid-template-columns:minmax(280px,.75fr) minmax(0,1.25fr); align-items:start; }.user-list{ display:grid; gap:12px; }.user-row{ display:grid; grid-template-columns:minmax(150px,1fr) minmax(120px,.8fr) minmax(150px,1fr) auto auto auto; align-items:end; gap:10px; padding:12px 0; border-bottom:1px solid var(--line); }.user-row:last-child{ border-bottom:0; }.user-row-main{ display:grid; gap:3px; padding-bottom:7px; }.user-row .toggle-row{ min-width:57px; padding-bottom:7px; }.user-row .btn{ align-self:end; }@media(max-width:900px){.admin-grid{ grid-template-columns:1fr; }.user-row{ grid-template-columns:1fr 1fr; }.user-row-main{ grid-column:span 2; }}@media(max-width:600px){.nav-user{ display:none; }.user-row{ grid-template-columns:1fr; }.user-row-main{ grid-column:auto; }}
+
 
 /* ====== Buttons & Links ====== */
 .btn{

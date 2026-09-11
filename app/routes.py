@@ -11,7 +11,7 @@ from . import db, _normalise_sync_result
 import requests
 from sqlalchemy import func
 from zoneinfo import ZoneInfo
-from .models import SyncRun, SyncFlightLog, SyncFlightState, AppConfig, ManifestUploadState, CharterManifest, EnvisionOtpFlightCache, FlightFreightAllocation, FlightCargoAllocation
+from .models import SyncRun, SyncFlightLog, SyncFlightState, AppConfig, ManifestUploadState, CharterManifest, EnvisionOtpFlightCache, FlightFreightAllocation, FlightCargoAllocation, EmailSettings
 from .kmh_auth import get_kmh_session
 from .helpers_manifest import _seat_sort_key, _format_ssrs, _calc_age, _parse_dcs_dob, generate_manifest_pdf_from_html, generate_pdf_modern
 
@@ -1890,6 +1890,17 @@ def _upsert_charter_manifest(
 
 
 def _charter_closure_recipients() -> list[str]:
+    try:
+        settings = db.session.get(EmailSettings, 1)
+        if settings:
+            if not settings.charter_closure_emails_enabled:
+                return []
+            configured = str(settings.flight_operations_email or "").strip()
+            if configured:
+                return [address.strip() for address in configured.split(",") if address.strip()]
+    except Exception:
+        # The settings table may not be available until the migration has been applied.
+        db.session.rollback()
     return [address.strip() for address in os.getenv("FLIGHT_OPERATIONS_EMAIL", "").split(",") if address.strip()]
 
 
