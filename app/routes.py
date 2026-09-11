@@ -2634,6 +2634,9 @@ def api_charter_manifest_board_scan():
     if len(parts) not in {3, 4} or parts[0] != "ACCI" or not parts[1] or not parts[2]:
         return jsonify(ok=False, error="This is not a valid Air Chathams charter boarding-pass QR code"), 400
     flight_id, passenger_id = parts[1], parts[2]
+    selected_flight_id = str(data.get("selected_flight_id") or "").strip()
+    if not selected_flight_id or selected_flight_id != flight_id:
+        return jsonify(ok=False, error="This boarding pass belongs to a different flight. Select the matching flight before boarding."), 409
     printed_seat = str(parts[3] if len(parts) == 4 else "").strip().upper()
     manifest = CharterManifest.query.filter_by(envision_flight_id=flight_id).first()
     if not manifest:

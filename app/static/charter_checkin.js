@@ -298,7 +298,7 @@
     throw Error("Choose and save a gate, then complete check-in.");
   }
   async function boardScannedCode(code, acknowledgeSeatChange = false, confirmBoarding = false) {
-    const response = await fetch(app.dataset.boardScanUrl, { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify({ code, acknowledge_seat_change:acknowledgeSeatChange, confirm_boarding:confirmBoarding, confirm_dangerous_goods:confirmBoarding && pendingBoardingHasDangerousGoods }) });
+    const response = await fetch(app.dataset.boardScanUrl, { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify({ code, selected_flight_id:state.flight?.envision_flight_id || "", acknowledge_seat_change:acknowledgeSeatChange, confirm_boarding:confirmBoarding, confirm_dangerous_goods:confirmBoarding && pendingBoardingHasDangerousGoods }) });
     const data = await responseJson(response, "Boarding scan");
     if (data.seat_changed || data.boarding_confirmation_required) return data;
     if (!response.ok || data.ok === false) throw Error(data.error || "Unable to board passenger");
