@@ -2146,6 +2146,27 @@ def _charter_self_checkin_claims(token: str) -> dict:
     return URLSafeTimedSerializer(current_app.secret_key, salt="accharters-self-checkin").loads(token, max_age=60 * 60 * 24 * 7)
 
 
+def _charter_self_checkin_flight_data(manifest: CharterManifest, passenger: dict) -> dict:
+    """Return enough aircraft information to render the passenger seat map."""
+    flight = {
+        "flight_no": manifest.flight_no,
+        "dep": manifest.dep,
+        "ades": manifest.ades,
+        "gate": manifest.gate,
+        "registration": passenger.get("AircraftRegistration") or "",
+        "aircraft_type": passenger.get("AircraftType") or "",
+    }
+    try:
+        source = envision_get_flight_times(envision_authenticate()["token"], manifest.envision_flight_id)
+        flight["registration"] = source.get("flightRegistrationDescription") or source.get("aircraftRegistration") or flight["registration"]
+        flight["aircraft_type"] = source.get("aircraftType") or source.get("aircraftTypeDescription") or source.get("aircraftModel") or flight["aircraft_type"]
+    except Exception:
+        # A previously completed/cancelled Envision flight can no longer be
+        # queried. The map still renders from details held on the manifest.
+        current_app.logger.info("Unable to enrich self check-in aircraft for %s", manifest.envision_flight_id)
+    return flight
+
+
 def send_due_charter_self_checkin_invites() -> int:
     """Email a secure pre-check-in link once a passenger is within 48 hours of departure."""
     sent = 0
@@ -2286,7 +2307,12 @@ def api_charter_self_checkin(token: str):
         return jsonify(ok=False, error="Pre-check-in is not available for this flight."), 409
     passenger = passengers[index]
     if request.method == "GET":
-        return jsonify(ok=True, passenger={key: passenger.get(key) for key in ("GivenName", "Surname", "Seat", "BagToWeigh", "SelfCheckinCompletedAt")}, flight={"flight_no":manifest.flight_no, "dep":manifest.dep, "ades":manifest.ades, "gate":manifest.gate})
+        return jsonify(
+            ok=True,
+            passenger={key: passenger.get(key) for key in ("GivenName", "Surname", "Seat", "BagToWeigh", "SelfCheckinCompletedAt", "PassengerType")},
+            flight=_charter_self_checkin_flight_data(manifest, passenger),
+            occupied_seats=[str(other.get("Seat") or "").strip().upper() for i, other in enumerate(passengers) if i != index and str(other.get("Seat") or "").strip()],
+        )
     if _normalise_charter_status(passenger.get("Status")) != "Booked":
         return jsonify(ok=False, error="This passenger can no longer use pre-check-in."), 409
     data = request.get_json(silent=True) or {}
