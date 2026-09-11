@@ -2647,7 +2647,17 @@ def api_charter_manifest_update_flight_gate():
         return jsonify(ok=False, error="Gate must be 16 characters or fewer"), 400
     manifest = CharterManifest.query.filter_by(envision_flight_id=flight_id).first()
     if not manifest:
-        return jsonify(ok=False, error="No charter manifest has been uploaded for this flight"), 404
+        # A gate can be assigned before the passenger list is available.  Keep a
+        # lightweight manifest record so the value is ready for any boarding
+        # passes generated after the list is uploaded.
+        manifest = CharterManifest(
+            envision_flight_id=flight_id,
+            flight_no=str(data.get("flight_no") or data.get("flight_number") or "").strip()[:16] or None,
+            dep=str(data.get("dep") or "").strip().upper()[:8] or None,
+            ades=str(data.get("ades") or data.get("dest") or "").strip().upper()[:8] or None,
+            pax_json="[]",
+            created_at=datetime.utcnow(),
+        )
     if manifest.closed_at:
         return jsonify(ok=False, error="This flight is closed. Reopen it before changing the gate."), 409
     manifest.gate = gate or None

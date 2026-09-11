@@ -248,7 +248,7 @@
   }
   async function saveGate() {
     if (!state.flight) return;
-    const response = await fetch(app.dataset.gateUrl, { method:"PATCH", headers:{ "Content-Type":"application/json" }, body:JSON.stringify({ flight_id:state.flight.envision_flight_id, gate:els.gate.value.trim().toUpperCase() }) });
+    const response = await fetch(app.dataset.gateUrl, { method:"PATCH", headers:{ "Content-Type":"application/json" }, body:JSON.stringify({ flight_id:state.flight.envision_flight_id, gate:els.gate.value.trim().toUpperCase(), flight_no:state.flight.flight_number || state.flight.flight || "", dep:state.flight.dep || "", ades:state.flight.ades || state.flight.dest || "" }) });
     const data = await responseJson(response, "Save gate");
     if (!response.ok || data.ok === false) throw Error(data.error || "Unable to save gate");
     state.flight.charter_gate = data.gate || "";
