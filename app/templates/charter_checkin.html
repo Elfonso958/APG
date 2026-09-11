@@ -119,6 +119,12 @@
       <video id="boardingScanVideo" class="boarding-video" playsinline muted></video>
       <label class="scan-code-label" hidden>Scanner code<input id="boardingScanCode" type="text" autocomplete="off"></label>
       <button id="processBoardingCode" type="button" hidden></button>
+      <div id="boardingDecisionAlert" class="boarding-decision-alert" role="alertdialog" aria-modal="true" aria-labelledby="boardingDecisionHeading" hidden>
+        <p class="eyebrow">Boarding decision</p>
+        <strong id="boardingDecisionHeading">Allow this passenger to board?</strong>
+        <p id="boardingDecisionMessage"></p>
+        <div class="boarding-decision-actions"><button id="delayBoarding" class="button secondary" type="button">Delay passenger</button><button id="allowBoarding" class="button" type="button">Allow boarding</button></div>
+      </div>
       <div id="seatChangeAlert" class="seat-change-alert" role="alertdialog" aria-modal="true" aria-labelledby="seatChangeHeading" hidden>
         <strong id="seatChangeHeading">STOP — SEAT HAS CHANGED</strong>
         <p id="seatChangeMessage"></p>

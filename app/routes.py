@@ -2636,8 +2636,6 @@ def api_charter_manifest_board_scan():
         if existing.get("Boarded") or existing_status in {"boarded", "flown"}:
             passenger_name = " ".join(str(existing.get(key) or "").strip() for key in ("GivenName", "Surname")).strip() or "This passenger"
             return jsonify(ok=False, error=f"{passenger_name} has already boarded. This boarding pass cannot be used again."), 409
-        if existing.get("DangerousGoodsDeclared") and not existing.get("DangerousGoodsConfirmedAt"):
-            return jsonify(ok=False, error="Dangerous goods have been declared. An agent must confirm they have spoken to this passenger before boarding."), 409
         current_seat = str(existing.get("Seat") or "").strip().upper()
         if printed_seat and printed_seat != current_seat and not data.get("acknowledge_seat_change"):
             return jsonify(
@@ -2649,7 +2647,27 @@ def api_charter_manifest_board_scan():
                 current_seat=current_seat,
                 error=f"Seat changed from {printed_seat or 'unassigned'} to {current_seat or 'unassigned'}.",
             ), 409
+        dangerous_goods_pending = bool(existing.get("DangerousGoodsDeclared") and not existing.get("DangerousGoodsConfirmedAt"))
+        if dangerous_goods_pending and not data.get("confirm_dangerous_goods"):
+            return jsonify(
+                ok=False,
+                boarding_confirmation_required=True,
+                dangerous_goods_confirmation_required=True,
+                flight_id=flight_id,
+                passenger=existing,
+                error="Dangerous goods have been declared. Confirm the passenger has been spoken to before boarding.",
+            ), 409
+        if not data.get("confirm_boarding"):
+            return jsonify(
+                ok=False,
+                boarding_confirmation_required=True,
+                flight_id=flight_id,
+                passenger=existing,
+                error="Agent confirmation is required before boarding this passenger.",
+            ), 409
         merged = dict(existing)
+        if dangerous_goods_pending:
+            merged["DangerousGoodsConfirmedAt"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
         merged["Status"] = "Boarded"
         merged["BoardedAt"] = merged.get("BoardedAt") or datetime.utcnow().isoformat(timespec="seconds") + "Z"
         passenger = _charter_pax_from_row(merged, manifest.dep or "", manifest.ades or "")
