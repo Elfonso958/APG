@@ -1760,6 +1760,8 @@ def _normalise_charter_status(value: str | None) -> str:
         return "Boarded"
     if "CHECK" in s or s in {"CKIN", "CKI", "CI"}:
         return "Checked In"
+    if s in {"NO SHOW", "NOSHOW", "NS"} or "NO SHOW" in s:
+        return "No Show"
     if "BOOK" in s or s in {"BK", "BKG"}:
         return "Booked"
     return "Booked"
@@ -2348,6 +2350,9 @@ def api_charter_manifest_update_passenger():
                 merged["BoardedAt"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
             elif status not in {"Boarded", "Flown"}:
                 merged["BoardedAt"] = None
+            if status == "No Show":
+                merged["Seat"] = ""
+                merged["CheckedInAt"] = None
         passenger = _charter_pax_from_row(merged, manifest.dep or "", manifest.ades or "")
         if not passenger:
             return jsonify(ok=False, error="Passenger details are invalid"), 400
