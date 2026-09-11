@@ -5,6 +5,9 @@ class Config:
     SECRET_KEY = os.getenv("SECRET_KEY")
     APPLICATION_ROOT = os.getenv("APPLICATION_ROOT", "/APG").rstrip("/")
     PREFERRED_URL_SCHEME = os.getenv("PREFERRED_URL_SCHEME", "https")
+    # Background jobs do not have proxy request headers to infer the public
+    # host from.  This lets invitation and wallet links be generated safely.
+    SERVER_NAME = os.getenv("SERVER_NAME") or os.getenv("PUBLIC_SERVER_NAME")
 
     ENVISION_BASE = os.getenv("ENVISION_BASE")
     ENVISION_TEST = os.getenv("ENVISION_TEST")
