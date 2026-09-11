@@ -1178,6 +1178,23 @@ body {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
+
+/* Live Gantt is used at a distance on operations screens: keep core flight data legible. */
+body.view-gantt .topbar-label { font-size: .9rem; }
+body.view-gantt .envision-env-pill { font-size: .88rem; }
+body.view-gantt .ctrl { font-size: .96rem; }
+body.view-gantt .switch { font-size: 1rem; }
+body.view-gantt .stat .label { font-size: .94rem; }
+body.view-gantt .stat .value { font-size: 1.35rem; }
+body.view-gantt .live-now-label { font-size: .82rem; }
+body.view-gantt .tick { font-size: .88rem; }
+body.view-gantt .row { min-height: 58px; }
+body.view-gantt .row-label .fno,
+body.view-gantt .reg-link { font-size: 1.06rem; }
+body.view-gantt .row-label .meta { font-size: .92rem; }
+body.view-gantt .maintenance-bar { font-size: .84rem; }
+body.view-gantt .flight-route-tag { min-height: 18px; font-size: .75rem; }
+body.view-gantt .bar { height: 30px; font-size: .9rem; }
 .cargo-weight-accordion {
   margin-bottom: 12px;
   border: 1px solid var(--line);

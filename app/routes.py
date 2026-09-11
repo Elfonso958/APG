@@ -2202,6 +2202,10 @@ def api_charter_manifest_board_scan():
     for index, existing in enumerate(passengers):
         if not isinstance(existing, dict) or str(existing.get("PassengerId") or "") != passenger_id:
             continue
+        existing_status = str(existing.get("Status") or "").strip().lower()
+        if existing.get("Boarded") or existing_status in {"boarded", "flown"}:
+            passenger_name = " ".join(str(existing.get(key) or "").strip() for key in ("GivenName", "Surname")).strip() or "This passenger"
+            return jsonify(ok=False, error=f"{passenger_name} has already boarded. This boarding pass cannot be used again."), 409
         merged = dict(existing)
         merged["Status"] = "Boarded"
         merged["BoardedAt"] = merged.get("BoardedAt") or datetime.utcnow().isoformat(timespec="seconds") + "Z"

@@ -90,6 +90,12 @@ class CharterCheckinTest(unittest.TestCase):
         self.assertEqual(scanned.status_code, 200)
         self.assertTrue(scanned.get_json()["passenger"]["Boarded"])
 
+        duplicate_scan = self.client.post("/api/dcs/charter_manifest/board-scan", json={
+            "code": f"ACCI|charter-123|{passenger['PassengerId']}",
+        })
+        self.assertEqual(duplicate_scan.status_code, 409)
+        self.assertIn("already boarded", duplicate_scan.get_json()["error"])
+
         late_passenger = self.client.post("/api/dcs/charter_manifest/passenger", json={
             "flight_id": "charter-123",
             "GivenName": "Late",
