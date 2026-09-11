@@ -1913,12 +1913,22 @@ def _email_env(*names: str, default: str = "") -> str:
     return default
 
 
+def _charter_email_sender() -> str:
+    try:
+        settings = db.session.get(EmailSettings, 1)
+        if settings and settings.from_email:
+            return str(settings.from_email).strip()
+    except Exception:
+        db.session.rollback()
+    return _email_env("SMTP_FROM", "MAIL_FROM", "MAIL_DEFAULT_SENDER")
+
+
 def _send_email_via_graph(sender: str, recipients: list[str], subject: str, body: str) -> bool:
     """Use the LMS Microsoft Graph setup when it is present; return False when unavailable."""
     tenant_id = _email_env("GRAPH_TENANT_ID", "MS_TENANT_ID")
     client_id = _email_env("GRAPH_CLIENT_ID", "MS_CLIENT_ID")
     client_secret = _email_env("GRAPH_CLIENT_SECRET", "MS_CLIENT_SECRET")
-    mailbox = _email_env("GRAPH_MAILBOX_UPN", "TEAMS_ORGANIZER_UPN", default=sender)
+    mailbox = sender or _email_env("GRAPH_MAILBOX_UPN", "TEAMS_ORGANIZER_UPN")
     if not all((tenant_id, client_id, client_secret, mailbox)):
         return False
 
@@ -1965,7 +1975,7 @@ def _send_charter_flight_closure_email(manifest: CharterManifest, closed_at: dat
     """Send the close-out manifest before the flight is marked closed."""
     recipients = _charter_closure_recipients()
     smtp_host = _email_env("SMTP_HOST", "MAIL_SERVER", default="send.xtra.co.nz")
-    sender = _email_env("SMTP_FROM", "MAIL_FROM", "MAIL_DEFAULT_SENDER")
+    sender = _charter_email_sender()
     graph_available = bool(
         _email_env("GRAPH_TENANT_ID", "MS_TENANT_ID")
         and _email_env("GRAPH_CLIENT_ID", "MS_CLIENT_ID")

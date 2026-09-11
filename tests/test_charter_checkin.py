@@ -4,7 +4,8 @@ from unittest.mock import patch
 
 from app import create_app, db
 from app.config import Config
-from app.models import CharterManifest
+from app.models import AppUser, CharterManifest
+from werkzeug.security import generate_password_hash
 from app.views import _apply_charter_manifests
 
 
@@ -158,6 +159,29 @@ class CharterCheckinTest(unittest.TestCase):
         logo = self.client.get("/dcs/charter-brand/main-logo")
         self.assertEqual(logo.status_code, 200)
         self.assertEqual(logo.mimetype, "image/png")
+
+    def test_charter_checkin_account_actions_are_visible_after_admin_login(self):
+        db.session.add(AppUser(
+            email="admin@example.com",
+            password_hash=generate_password_hash("correct-horse-battery-staple"),
+            is_admin=True,
+        ))
+        db.session.commit()
+        page = self.client.get("/dcs/charter-checkin?date=2026-09-11")
+        self.assertIn(b'id="loginBtn"', page.data)
+        with self.client.session_transaction() as session:
+            csrf_token = session["apg_csrf_token"]
+        response = self.client.post("/account/login", data={
+            "csrf_token": csrf_token,
+            "email": "admin@example.com",
+            "password": "correct-horse-battery-staple",
+            "next": "/dcs/charter-checkin?date=2026-09-11",
+        })
+        self.assertEqual(response.status_code, 302)
+        authenticated_page = self.client.get("/dcs/charter-checkin?date=2026-09-11")
+        self.assertIn(b"admin@example.com", authenticated_page.data)
+        self.assertIn(b"Email settings", authenticated_page.data)
+        self.assertIn(b">Users<", authenticated_page.data)
 
     def test_uploaded_charter_manifest_is_not_treated_as_a_dcs_link(self):
         db.session.add(CharterManifest(

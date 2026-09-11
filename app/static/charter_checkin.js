@@ -17,6 +17,9 @@
   els.acknowledgeSeatChange = $("acknowledgeSeatChange");
   els.checkinNamePrefix = $("checkinNamePrefix");
   els.checkinPassengerWeight = $("checkinPassengerWeight");
+  els.login = $("loginBtn");
+  els.loginDialog = $("loginDialog");
+  els.loginDialogClose = $("loginDialogClose");
   const workspace = document.querySelector(".workspace");
   const state = { flights: [], flight: null, passengers: [] };
   let scanStream = null, scanTimer = null, scanProcessing = false, scanAudioContext = null, manifestRefreshInFlight = false, pendingSeatChangeCode = "", ignoredScanCode = "", ignoreScanUntil = 0;
@@ -317,6 +320,8 @@
   els.closeFlight.addEventListener("click", () => changeFlightClosure(true).catch((err) => showNotice(err.message, true)));
   els.reopenFlight.addEventListener("click", () => changeFlightClosure(false).catch((err) => showNotice(err.message, true)));
   els.openGate.addEventListener("click", openGateDialog);
+  els.login?.addEventListener("click", () => els.loginDialog?.showModal());
+  els.loginDialogClose?.addEventListener("click", () => els.loginDialog?.close());
   els.gateDialogClose.addEventListener("click", () => els.gateDialog.close());
   els.clearGate.addEventListener("click", () => { els.gate.value = ""; saveGate().catch((err) => showNotice(err.message, true)); });
   els.saveGate.addEventListener("click", () => saveGate().catch((err) => showNotice(err.message, true)));

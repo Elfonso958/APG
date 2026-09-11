@@ -243,6 +243,11 @@ def admin_users():
 @_admin_required
 def admin_email_settings():
     settings = db.session.get(EmailSettings, 1)
+    sender_options = []
+    for value in (os.getenv("MAIL_FROM"), os.getenv("MAIL_DEFAULT_SENDER"), os.getenv("GRAPH_MAILBOX_UPN"), os.getenv("TEAMS_ORGANIZER_UPN")):
+        value = _normalise_user_email(value)
+        if value and value not in sender_options:
+            sender_options.append(value)
     if request.method == "POST":
         if not _csrf_is_valid():
             flash("Your form expired. Please try again.", "danger")
@@ -252,7 +257,12 @@ def admin_email_settings():
             flash("Enter one or more valid email addresses, separated by commas.", "danger")
         else:
             settings = settings or EmailSettings(id=1)
+            selected_sender = _normalise_user_email(request.form.get("from_email"))
+            if selected_sender and selected_sender not in sender_options:
+                flash("Choose one of the configured sender addresses.", "danger")
+                return redirect(url_for("ui.admin_email_settings"))
             settings.flight_operations_email = recipients or None
+            settings.from_email = selected_sender or None
             settings.charter_closure_emails_enabled = bool(request.form.get("charter_closure_emails_enabled"))
             db.session.add(settings)
             db.session.commit()
@@ -263,6 +273,7 @@ def admin_email_settings():
         "admin_email_settings.html",
         settings=settings,
         configured_recipients=configured_recipients,
+        sender_options=sender_options,
         graph_configured=bool(os.getenv("GRAPH_TENANT_ID") or os.getenv("MS_TENANT_ID")),
         smtp_configured=bool(os.getenv("MAIL_USERNAME") or os.getenv("SMTP_USERNAME")),
     )

@@ -131,6 +131,7 @@ class EmailSettings(db.Model):
 
     id = db.Column(db.Integer, primary_key=True, default=1)
     flight_operations_email = db.Column(db.String(1000), nullable=True)
+    from_email = db.Column(db.String(255), nullable=True)
     charter_closure_emails_enabled = db.Column(db.Boolean, nullable=False, default=True)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

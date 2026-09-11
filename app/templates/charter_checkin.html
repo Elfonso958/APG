@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='charter_checkin.css') }}?v=18">
+  <link rel="stylesheet" href="{{ url_for('static', filename='charter_checkin.css') }}?v=19">
 </head>
 <body>
   <main id="charterCheckinApp"
@@ -32,6 +32,19 @@
       <div class="top-actions">
         <label>Date <input id="dayInput" type="date" value="{{ day.isoformat() }}"></label>
         <button id="refreshBtn" class="button secondary" type="button">Refresh flights</button>
+        {% if apg_current_user %}
+          <span class="account-email" title="Signed in account">{{ apg_current_user.display_name or apg_current_user.email }}</span>
+          {% if apg_is_admin %}
+            <a class="button secondary" href="{{ url_for('ui.admin_email_settings') }}">Email settings</a>
+            <a class="button secondary" href="{{ url_for('ui.admin_users') }}">Users</a>
+          {% endif %}
+          <form class="account-logout" method="post" action="{{ url_for('ui.apg_logout') }}">
+            <input type="hidden" name="csrf_token" value="{{ apg_csrf_token }}">
+            <button class="button secondary" type="submit">Sign out</button>
+          </form>
+        {% else %}
+          <button id="loginBtn" class="button secondary" type="button">Log in</button>
+        {% endif %}
       </div>
     </header>
 
@@ -77,6 +90,19 @@
       </section>
     </section>
   </main>
+  {% if not apg_current_user %}
+  <dialog id="loginDialog" class="seatmap-dialog account-dialog" aria-labelledby="loginDialogTitle">
+    <form method="post" action="{{ url_for('ui.apg_login') }}" class="seatmap-shell login-form">
+      <header><div><p class="eyebrow">APG account</p><h2 id="loginDialogTitle">Log in</h2></div><button id="loginDialogClose" class="button secondary" type="button">Close</button></header>
+      <p class="muted">Log in to access account-controlled Charter Check-in settings.</p>
+      <input type="hidden" name="csrf_token" value="{{ apg_csrf_token }}">
+      <input type="hidden" name="next" value="{{ request.full_path }}">
+      <label>Email address<input name="email" type="email" required autocomplete="username" autofocus></label>
+      <label>Password<input name="password" type="password" required autocomplete="current-password"></label>
+      <div class="checkin-actions"><button class="button" type="submit">Log in</button></div>
+    </form>
+  </dialog>
+  {% endif %}
   <dialog id="seatmapDialog" class="seatmap-dialog">
     <div class="seatmap-shell">
       <header><div><p class="eyebrow">Assign seat</p><h2 id="seatmapTitle">Aircraft seatmap</h2></div><button id="seatmapClose" class="button secondary" type="button">Close</button></header>
@@ -136,6 +162,6 @@
     </div>
   </dialog>
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
-  <script src="{{ url_for('static', filename='charter_checkin.js') }}?v=21"></script>
+  <script src="{{ url_for('static', filename='charter_checkin.js') }}?v=22"></script>
 </body>
 </html>
