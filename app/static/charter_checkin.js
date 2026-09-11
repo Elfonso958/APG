@@ -9,7 +9,7 @@
   els.saveGate = $("saveGateBtn");
   const workspace = document.querySelector(".workspace");
   const state = { flights: [], flight: null, passengers: [] };
-  let scanStream = null, scanTimer = null;
+  let scanStream = null, scanTimer = null, scanProcessing = false, scanAudioContext = null;
   let checkinPassenger = null, checkinSsrs = [];
   const gateWarningShown = new Set();
   const ssrOptions = [["", "Choose an SSR code"], ["WCHR", "Wheelchair — ramp / distance"], ["WCHS", "Wheelchair — steps assistance"], ["WCHC", "Wheelchair — cabin seat transfer"], ["BLND", "Blind or low-vision passenger"], ["DEAF", "Deaf or hard-of-hearing passenger"], ["MAAS", "Meet and assist"], ["DPNA", "Disability / non-visible assistance"], ["UMNR", "Unaccompanied minor"], ["MEDA", "Medical case — clearance may be needed"], ["OXYG", "Supplementary oxygen"], ["EXST", "Extra seat"], ["STCR", "Stretcher"], ["PETC", "Pet in cabin"], ["AVIH", "Animal in hold"], ["WEAP", "Weapon handling"], ["INFT", "Infant accompanying passenger"], ["OTHS", "Other special service"]];
@@ -18,9 +18,18 @@
   const nameOf = (p) => [p.NamePrefix, p.GivenName, p.Surname].filter(Boolean).join(" ").trim() || "Unnamed passenger";
   const isCharter = (f) => /charter/.test(`${f.service_type || ""} ${f.flight_type || ""}`.toLowerCase());
   function showNotice(text, error = false) { els.notice.textContent = text; els.notice.hidden = !text; els.notice.classList.toggle("error", error); }
+  function unlockScanAudio() {
+    try {
+      const Audio = window.AudioContext || window.webkitAudioContext;
+      if (!Audio) return null;
+      scanAudioContext ||= new Audio();
+      if (scanAudioContext.state === "suspended") scanAudioContext.resume();
+      return scanAudioContext;
+    } catch (_) { return null; }
+  }
   function scanFeedback(success, message) {
     const overlay = document.createElement("div"); overlay.className = `scan-feedback ${success ? "success" : "error"}`; overlay.textContent = message || (success ? "PASSENGER BOARDED" : "SCAN NOT ACCEPTED"); document.body.appendChild(overlay);
-    try { const audio = new (window.AudioContext || window.webkitAudioContext)(); const oscillator = audio.createOscillator(), gain = audio.createGain(); oscillator.connect(gain); gain.connect(audio.destination); oscillator.frequency.value = success ? 880 : 180; gain.gain.setValueAtTime(.08, audio.currentTime); oscillator.start(); oscillator.stop(audio.currentTime + (success ? .16 : .42)); oscillator.onended = () => audio.close(); } catch (_) {}
+    try { const audio = unlockScanAudio(); if (audio) { const oscillator = audio.createOscillator(), gain = audio.createGain(); oscillator.connect(gain); gain.connect(audio.destination); oscillator.frequency.value = success ? 880 : 180; gain.gain.setValueAtTime(.12, audio.currentTime); oscillator.start(); oscillator.stop(audio.currentTime + (success ? .18 : .45)); } } catch (_) {}
     setTimeout(() => overlay.remove(), 1800);
   }
   async function responseJson(response, action) {
@@ -94,7 +103,8 @@
       edit.type = "button";
       edit.dataset.action = "checkin";
       edit.dataset.id = row.dataset.id;
-      edit.textContent = "Edit";
+      const passenger = state.passengers.find((item) => String(item.PassengerId) === String(row.dataset.id));
+      edit.textContent = statusOf(passenger || {}) === "Booked" ? "Check in" : "Edit";
       actions.prepend(edit);
     });
   }
@@ -156,8 +166,9 @@
     return data;
   }
   function stopScanner() { if (scanTimer) clearInterval(scanTimer); scanTimer = null; if (scanStream) scanStream.getTracks().forEach((track) => track.stop()); scanStream = null; els.scanVideo.srcObject = null; }
-  async function processScanCode() { const code = els.scanCode.value.trim(); if (!code) return; els.scanProcess.disabled = true; try { const data = await boardScannedCode(code); stopScanner(); els.scanDialog.close(); scanFeedback(true, data.message || "PASSENGER BOARDED"); showNotice(data.message || "Passenger boarded."); } catch (err) { scanFeedback(false, "SCAN NOT ACCEPTED"); els.scanStatus.textContent = err.message; showNotice(err.message, true); } finally { els.scanProcess.disabled = false; } }
+  async function processScanCode() { const code = els.scanCode.value.trim(); if (!code || scanProcessing) return; scanProcessing = true; els.scanProcess.disabled = true; try { const data = await boardScannedCode(code); els.scanCode.value = ""; scanFeedback(true, data.message || "PASSENGER BOARDED"); els.scanStatus.textContent = `${data.message || "Passenger boarded."} Ready for the next boarding pass.`; showNotice(data.message || "Passenger boarded."); } catch (err) { els.scanCode.value = ""; scanFeedback(false, "SCAN NOT ACCEPTED"); els.scanStatus.textContent = err.message; showNotice(err.message, true); } finally { scanProcessing = false; els.scanProcess.disabled = false; } }
   async function openScanner() {
+    unlockScanAudio();
     els.scanCode.value = ""; els.scanStatus.textContent = "Allow camera access, then point it at the boarding-pass QR code."; els.scanDialog.showModal();
     if (!navigator.mediaDevices?.getUserMedia) { els.scanStatus.textContent = "Camera access is not available in this browser."; return; }
     if (!("BarcodeDetector" in window) && typeof window.jsQR !== "function") { els.scanStatus.textContent = "QR decoding is unavailable in this browser."; return; }
