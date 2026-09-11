@@ -1876,6 +1876,7 @@ def _charter_pax_from_row(row: dict, default_dep: str = "", default_ades: str = 
         "AircraftType": str(row.get("AircraftType") or "").strip(),
         "BagToWeigh": bool(row.get("BagToWeigh")),
         "DangerousGoodsDeclared": bool(row.get("DangerousGoodsDeclared")),
+        "DangerousGoodsConfirmedAt": str(row.get("DangerousGoodsConfirmedAt") or "").strip() or None,
         "SelfCheckinInviteSentAt": str(row.get("SelfCheckinInviteSentAt") or "").strip() or None,
         "SelfCheckinCompletedAt": str(row.get("SelfCheckinCompletedAt") or "").strip() or None,
         "PassengerId": str(row.get("PassengerId") or row.get("passenger_id") or uuid.uuid4().hex).strip(),
@@ -2438,7 +2439,7 @@ def api_charter_manifest_update_passenger():
         return jsonify(ok=False, error="This flight is closed. Reopen it before changing passenger details."), 409
 
     passengers = _serialize_charter_manifest(manifest)
-    allowed_fields = {"Seat", "NamePrefix", "GivenName", "Surname", "PassengerType", "PassengerWeight", "BaggageWeight", "BaggagePieces", "Status", "CheckedInAt", "BoardedAt", "SSR", "Comments", "Email", "PhoneNumber", "FlightDeparture", "AircraftRegistration", "AircraftType"}
+    allowed_fields = {"Seat", "NamePrefix", "GivenName", "Surname", "PassengerType", "PassengerWeight", "BaggageWeight", "BaggagePieces", "Status", "CheckedInAt", "BoardedAt", "SSR", "Comments", "Email", "PhoneNumber", "FlightDeparture", "AircraftRegistration", "AircraftType", "DangerousGoodsConfirmed"}
     changes = {key: data[key] for key in allowed_fields if key in data}
     for index, existing in enumerate(passengers):
         if str(existing.get("PassengerId") or "") != passenger_id:
@@ -2446,6 +2447,8 @@ def api_charter_manifest_update_passenger():
         merged = dict(existing)
         was_booked = _normalise_charter_status(existing.get("Status")) == "Booked"
         merged.update(changes)
+        if changes.pop("DangerousGoodsConfirmed", False):
+            merged["DangerousGoodsConfirmedAt"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
         requested_seat = str(merged.get("Seat") or "").strip().upper()
         if requested_seat:
             for other_index, other in enumerate(passengers):
@@ -2456,6 +2459,8 @@ def api_charter_manifest_update_passenger():
                     return jsonify(ok=False, error=f"Seat {requested_seat} is already assigned to another passenger"), 409
         if "Status" in changes:
             status = _normalise_charter_status(changes["Status"])
+            if status in {"Boarded", "Flown"} and merged.get("DangerousGoodsDeclared") and not merged.get("DangerousGoodsConfirmedAt"):
+                return jsonify(ok=False, error="Dangerous goods have been declared. Confirm the passenger has been spoken to before boarding."), 409
             if status == "Checked In" and not merged.get("CheckedInAt"):
                 merged["CheckedInAt"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
             if status in {"Boarded", "Flown"} and not merged.get("BoardedAt"):
@@ -2596,6 +2601,8 @@ def api_charter_manifest_board_scan():
         if existing.get("Boarded") or existing_status in {"boarded", "flown"}:
             passenger_name = " ".join(str(existing.get(key) or "").strip() for key in ("GivenName", "Surname")).strip() or "This passenger"
             return jsonify(ok=False, error=f"{passenger_name} has already boarded. This boarding pass cannot be used again."), 409
+        if existing.get("DangerousGoodsDeclared") and not existing.get("DangerousGoodsConfirmedAt"):
+            return jsonify(ok=False, error="Dangerous goods have been declared. An agent must confirm they have spoken to this passenger before boarding."), 409
         current_seat = str(existing.get("Seat") or "").strip().upper()
         if printed_seat and printed_seat != current_seat and not data.get("acknowledge_seat_change"):
             return jsonify(
