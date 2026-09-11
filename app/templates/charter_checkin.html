@@ -8,9 +8,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='charter_checkin.css') }}?v=19">
+  <link rel="stylesheet" href="{{ url_for('static', filename='charter_checkin.css') }}?v=20">
 </head>
-<body>
+<body style="--brand-watermark:url('{{ url_for('ui.charter_brand_asset', asset='main-logo') }}')">
   <main id="charterCheckinApp"
         data-gantt-url="{{ url_for('ui.api_dcs_gantt_data') }}"
         data-manifest-url="{{ url_for('api.api_charter_manifest_get') }}"

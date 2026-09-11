@@ -68,6 +68,16 @@ def apple_wallet_pass(*, flight_id: str, passenger: dict, flight_no: str, dep: s
             shutil.copyfile(logo, root / "logo.png")
             shutil.copyfile(logo, root / "icon.png")
         pass_json = {"formatVersion": 1, "passTypeIdentifier": "pass.co.nz.accharters.boarding", "serialNumber": f"{flight_id}-{passenger['PassengerId']}", "teamIdentifier": "HZGY9VQVC8", "organizationName": "ACCharters", "description": "ACCharters boarding pass", "logoText": "ACCharters", "backgroundColor": "rgb(7, 92, 116)", "foregroundColor": "rgb(255, 255, 255)", "labelColor": "rgb(255, 255, 255)", "boardingPass": {"transitType": "PKTransitTypeAir", "primaryFields": [{"key": "route", "label": "ROUTE", "value": f"{dep}  →  {ades}"}], "secondaryFields": [{"key": "passenger", "label": "PASSENGER", "value": f"{passenger.get('GivenName','')} {passenger.get('Surname','')}".strip()}, {"key": "flight", "label": "FLIGHT", "value": flight_no or "CHARTER"}], "auxiliaryFields": [{"key": "seat", "label": "SEAT", "value": passenger.get("Seat") or "GATE"}, {"key": "gate", "label": "GATE", "value": gate or "AS DIRECTED"}], "backFields": [{"key": "departure", "label": "DEPARTURE", "value": departure}]}, "barcode": {"format": "PKBarcodeFormatQR", "message": f"ACCI|{flight_id}|{passenger['PassengerId']}|{passenger.get('Seat') or ''}", "messageEncoding": "iso-8859-1", "altText": passenger.get("Seat") or "GATE"}}
+        aircraft = " · ".join(part for part in (str(passenger.get("AircraftType") or "").strip(), str(passenger.get("AircraftRegistration") or "").strip().upper()) if part) or "Aircraft to be advised"
+        fields = pass_json["boardingPass"]
+        fields["auxiliaryFields"] = [
+            {"key": "departure", "label": "DEPARTURE", "value": departure},
+            {"key": "seat_gate", "label": "SEAT · GATE", "value": f"{passenger.get('Seat') or 'GATE'} · {gate or 'AS DIRECTED'}"},
+        ]
+        fields["backFields"] = [
+            {"key": "aircraft", "label": "AIRCRAFT", "value": aircraft},
+            {"key": "departure_details", "label": "DEPARTURE", "value": departure},
+        ]
         (root / "pass.json").write_text(json.dumps(pass_json, separators=(",", ":")), encoding="utf-8")
         manifest = {item.name: hashlib.sha1(item.read_bytes()).hexdigest() for item in root.iterdir() if item.is_file()}
         (root / "manifest.json").write_text(json.dumps(manifest, separators=(",", ":")), encoding="utf-8")
