@@ -22,6 +22,7 @@
         data-close-flight-url="{{ url_for('api.api_charter_manifest_close_flight') }}"
         data-reopen-flight-url="{{ url_for('api.api_charter_manifest_reopen_flight') }}"
         data-gate-url="{{ url_for('api.api_charter_manifest_update_flight_gate') }}"
+        data-passenger-weights-url="{{ url_for('api.api_charter_passenger_weights') }}"
         data-template-url="{{ url_for('api.api_charter_manifest_template') }}"
         data-day="{{ day.isoformat() }}">
     <header class="topbar">
@@ -35,6 +36,7 @@
         {% if apg_current_user %}
           <span class="account-email" title="Signed in account">{{ apg_current_user.display_name or apg_current_user.email }}</span>
           {% if apg_is_admin %}
+            <button id="weightSettingsBtn" class="button secondary" type="button">Passenger weights</button>
             <a class="button secondary" href="{{ url_for('ui.admin_email_settings') }}">Email settings</a>
             <a class="button secondary" href="{{ url_for('ui.admin_users') }}">Users</a>
           {% endif %}
@@ -145,7 +147,7 @@
         <label>Title<select id="checkinNamePrefix"><option value="">None</option><option>Mr</option><option>Mrs</option><option>Ms</option><option>Miss</option><option>Master</option></select></label>
         <label>Given name<input id="checkinGivenName" type="text" autocomplete="given-name"></label>
         <label>Surname<input id="checkinSurname" type="text" autocomplete="family-name"></label>
-        <label>Passenger type<select id="checkinPassengerType"><option value="AD">Adult</option><option value="T">T — Adult (96 kg)</option><option value="CHD">Child</option><option value="INF">Infant</option><option value="UMNR">Unaccompanied minor</option></select></label>
+        <label>Passenger type<select id="checkinPassengerType"><option value="AD">Adult</option><option value="T">T — Adult</option><option value="CHD">Child</option><option value="INF">Infant</option><option value="UMNR">Unaccompanied minor</option></select></label>
         <label>Booking reference<input id="checkinPnr" type="text" autocapitalize="characters"></label>
         <label>Email<input id="checkinEmail" type="email" autocomplete="email" placeholder="boarding pass email"></label>
         <label>Phone number<input id="checkinPhone" type="tel" autocomplete="tel" placeholder="optional"></label>
@@ -163,7 +165,23 @@
       </div>
     </div>
   </dialog>
+  {% if apg_is_admin %}
+  <dialog id="weightSettingsDialog" class="seatmap-dialog account-dialog">
+    <form id="weightSettingsForm" class="seatmap-shell login-form">
+      <header><div><p class="eyebrow">Charter check-in</p><h2>Passenger weights</h2></div><button id="weightSettingsClose" class="button secondary" type="button">Close</button></header>
+      <p class="muted">These standard weights apply when a passenger is checked in.</p>
+      <div class="checkin-fields">
+        <label>Adult (AD)<input id="weightAD" type="number" min="1" max="300" step="0.1" required></label>
+        <label>T adult (T)<input id="weightT" type="number" min="1" max="300" step="0.1" required></label>
+        <label>Child (CHD)<input id="weightCHD" type="number" min="1" max="300" step="0.1" required></label>
+        <label>Infant (INF)<input id="weightINF" type="number" min="1" max="300" step="0.1" required></label>
+        <label>Unaccompanied minor (UMNR)<input id="weightUMNR" type="number" min="1" max="300" step="0.1" required></label>
+      </div>
+      <div class="checkin-actions"><button class="button" type="submit">Save weights</button></div>
+    </form>
+  </dialog>
+  {% endif %}
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
-  <script src="{{ url_for('static', filename='charter_checkin.js') }}?v=24"></script>
+  <script src="{{ url_for('static', filename='charter_checkin.js') }}?v=25"></script>
 </body>
 </html>

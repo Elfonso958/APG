@@ -12,7 +12,7 @@ from . import db, _normalise_sync_result
 import requests
 from sqlalchemy import func
 from zoneinfo import ZoneInfo
-from .models import SyncRun, SyncFlightLog, SyncFlightState, AppConfig, ManifestUploadState, CharterManifest, EnvisionOtpFlightCache, FlightFreightAllocation, FlightCargoAllocation, EmailSettings
+from .models import SyncRun, SyncFlightLog, SyncFlightState, AppConfig, ManifestUploadState, CharterManifest, EnvisionOtpFlightCache, FlightFreightAllocation, FlightCargoAllocation, EmailSettings, AppUser
 from .kmh_auth import get_kmh_session
 from .helpers_manifest import _seat_sort_key, _format_ssrs, _calc_age, _parse_dcs_dob, generate_manifest_pdf_from_html, generate_pdf_modern
 from .charter_wallet import apple_wallet_pass, google_wallet_link, make_wallet_token, parse_wallet_token
@@ -1798,6 +1798,55 @@ def _charter_number(value, default: float = 0.0) -> float:
         return default
 
 
+CHARTER_DEFAULT_PASSENGER_WEIGHTS = {"AD": 86.0, "T": 96.0, "CHD": 46.0, "INF": 15.0, "UMNR": 46.0}
+
+
+def _charter_passenger_weights() -> dict[str, float]:
+    """Return validated configured passenger weights, with safe operational defaults."""
+    weights = dict(CHARTER_DEFAULT_PASSENGER_WEIGHTS)
+    try:
+        cfg = db.session.get(AppConfig, 1)
+        stored = json.loads(str(cfg.charter_passenger_weights_json or "{}")) if cfg else {}
+        if isinstance(stored, dict):
+            for passenger_type in weights:
+                value = _charter_number(stored.get(passenger_type), weights[passenger_type])
+                if 1 <= value <= 300:
+                    weights[passenger_type] = value
+    except Exception:
+        current_app.logger.warning("Unable to read configured charter passenger weights", exc_info=True)
+    return weights
+
+
+def _charter_weights_admin() -> bool:
+    user_id = session.get("apg_user_id")
+    user = db.session.get(AppUser, user_id) if user_id else None
+    return bool(user and user.is_active and user.is_admin)
+
+
+@api_bp.route("/dcs/charter-passenger-weights", methods=["GET", "PUT"])
+def api_charter_passenger_weights():
+    if request.method == "GET":
+        return jsonify(ok=True, weights=_charter_passenger_weights())
+    if not _charter_weights_admin():
+        return jsonify(ok=False, error="Administrator access is required"), 403
+    data = request.get_json(silent=True) or {}
+    submitted = data.get("weights") if isinstance(data.get("weights"), dict) else data
+    weights = {}
+    for passenger_type, default in CHARTER_DEFAULT_PASSENGER_WEIGHTS.items():
+        try:
+            value = float(submitted.get(passenger_type, default))
+        except (TypeError, ValueError):
+            return jsonify(ok=False, error=f"{passenger_type} weight must be a number"), 400
+        if not 1 <= value <= 300:
+            return jsonify(ok=False, error=f"{passenger_type} weight must be between 1 and 300 kg"), 400
+        weights[passenger_type] = value
+    cfg = db.session.get(AppConfig, 1) or AppConfig(id=1)
+    cfg.charter_passenger_weights_json = json.dumps(weights, separators=(",", ":"))
+    db.session.add(cfg)
+    db.session.commit()
+    return jsonify(ok=True, weights=weights)
+
+
 def _charter_pax_from_row(row: dict, default_dep: str = "", default_ades: str = "") -> dict | None:
     given = str(row.get("GivenName") or row.get("FirstName") or "").strip()
     surname = str(row.get("Surname") or row.get("LastName") or "").strip()
@@ -1809,7 +1858,7 @@ def _charter_pax_from_row(row: dict, default_dep: str = "", default_ades: str = 
     status = _normalise_charter_status(row.get("Status"))
 
     passenger_type = str(row.get("PassengerType") or "AD").strip().upper() or "AD"
-    passenger_weight = 96.0 if passenger_type == "T" else _charter_number(row.get("PassengerWeight"))
+    passenger_weight = _charter_passenger_weights().get(passenger_type, CHARTER_DEFAULT_PASSENGER_WEIGHTS["AD"])
     return {
         "Seat": str(row.get("Seat") or "").strip().upper(),
         "NamePrefix": title,
