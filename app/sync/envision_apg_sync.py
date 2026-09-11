@@ -3544,6 +3544,7 @@ def update_apg_plan_from_dcs_row(
     cargo_station_label: str | None = None,
     cargo_mass_kg: float | None = None,
     seat_freight_loads: list[dict] | None = None,
+    passenger_weights: dict[str, float] | None = None,
     preview_only: bool = False,
 ) -> dict:
     """
@@ -3577,7 +3578,7 @@ def update_apg_plan_from_dcs_row(
 
     # --- 2) Apply DCS passengers onto APG passenger rows ---
     aircraft_reg = _extract_aircraft_reg(dcs_flight, plan)
-    apply_dcs_passengers_to_apg_rows(loading, dcs_flight, aircraft_reg=aircraft_reg)
+    apply_dcs_passengers_to_apg_rows(loading, dcs_flight, aircraft_reg=aircraft_reg, passenger_weights=passenger_weights)
 
     # Seat-bag freight is persisted separately from DCS passengers and added
     # after passenger weights have reset the APG loading stations.
@@ -4535,6 +4536,7 @@ def apply_dcs_passengers_to_apg_rows(
     dcs_flight: dict,
     aircraft_reg: str | None = None,
     log_loads: bool = True,
+    passenger_weights: dict[str, float] | None = None,
 ) -> None:
     """
     Take a Zenith DCS flight (with .Passengers list) and overwrite the APG
@@ -4561,10 +4563,17 @@ def apply_dcs_passengers_to_apg_rows(
     raw_pax_list = (dcs_flight or {}).get("Passengers") or []
     pax_list = [p for p in raw_pax_list if is_dcs_passenger_boarded_or_flown(p)]
 
+    def configured_weight(passenger_type: str, fallback: float) -> float:
+        try:
+            value = float((passenger_weights or {}).get(passenger_type, fallback))
+            return value if 1 <= value <= 300 else fallback
+        except (TypeError, ValueError):
+            return fallback
+
     # --- Classify passengers from DCS ---
-    seated_adults: list[str] = []        # seat codes with adult
-    seated_children: list[str] = []      # seat codes with child
-    seated_infants: list[str] = []       # seat codes with infant-in-seat (rare)
+    seated_adults: list[tuple[str, float]] = []
+    seated_children: list[tuple[str, float]] = []
+    seated_infants: list[tuple[str, float]] = []
     lap_infants: list[dict] = []         # infants without seat
     included_adults: list[dict] = []
 
@@ -4572,47 +4581,47 @@ def apply_dcs_passengers_to_apg_rows(
         ptype = _dcs_passenger_weight_type(p)
         seat_code = _get_pax_seat_from_dcs(p)
 
-        if ptype == "AD":
+        if ptype in {"AD", "T"}:
             if seat_code:
-                seated_adults.append(seat_code)
+                seated_adults.append((seat_code, configured_weight(ptype, ADULT_MASS_KG)))
                 included_adults.append(p)
             # adult without seat is ignored for seat rows
         elif ptype in {"CHD", "UMNR"}:
             if seat_code:
-                seated_children.append(seat_code)
+                seated_children.append((seat_code, configured_weight(ptype, CHILD_MASS_KG)))
         elif ptype == "INF":
             if seat_code:
                 # Infant with its own seat â€“ treat as 15 kg in that seat
-                seated_infants.append(seat_code)
+                seated_infants.append((seat_code, configured_weight("INF", INFANT_MASS_KG)))
             else:
                 # Lap infant â€“ add 15 kg to an adult later
                 lap_infants.append(p)
         else:
             # Unknown type â†’ treat as adult
             if seat_code:
-                seated_adults.append(seat_code)
+                seated_adults.append((seat_code, configured_weight("AD", ADULT_MASS_KG)))
 
     # --- Build initial seat â†’ mass map for adults/children/infants-in-seat ---
     seat_to_load: dict[str, dict[str, float]] = {}
 
     # Adults
-    for seat in seated_adults:
+    for seat, mass in seated_adults:
         seat_to_load[seat] = {
-            "mass": ADULT_MASS_KG,
+            "mass": mass,
             "pob_count": 1.0,
         }
 
     # Children
-    for seat in seated_children:
+    for seat, mass in seated_children:
         seat_to_load[seat] = {
-            "mass": CHILD_MASS_KG,
+            "mass": mass,
             "pob_count": 1.0,
         }
 
     # Infants with their own seat (rare)
-    for seat in seated_infants:
+    for seat, mass in seated_infants:
         seat_to_load[seat] = {
-            "mass": INFANT_MASS_KG,
+            "mass": mass,
             "pob_count": 1.0,
         }
 
@@ -4623,13 +4632,13 @@ def apply_dcs_passengers_to_apg_rows(
         parent_seat = _lap_infant_parent_seat(infant, included_adults)
         load = seat_to_load.get(parent_seat or "")
         if load:
-            load["mass"] = float(load.get("mass", 0.0)) + INFANT_MASS_KG
+            load["mass"] = float(load.get("mass", 0.0)) + configured_weight("INF", INFANT_MASS_KG)
         else:
             unmatched_lap_infants += 1
 
     if unmatched_lap_infants > 0 and seated_adults:
         # Sort seats so assignment is stable (e.g. 1A, 1B, 2A...)
-        sorted_adult_seats = sorted(set(seated_adults))
+        sorted_adult_seats = sorted({seat for seat, _mass in seated_adults})
 
         # One lap infant per adult until we run out of infants or adults,
         # then round-robin if more infants than adults.
@@ -4638,7 +4647,7 @@ def apply_dcs_passengers_to_apg_rows(
             seat = sorted_adult_seats[idx]
             load = seat_to_load.get(seat)
             if load:
-                load["mass"] = float(load.get("mass", 0.0)) + INFANT_MASS_KG
+                load["mass"] = float(load.get("mass", 0.0)) + configured_weight("INF", INFANT_MASS_KG)
 
             unmatched_lap_infants -= 1
             idx += 1

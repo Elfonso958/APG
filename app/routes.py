@@ -2999,6 +2999,10 @@ def api_dcs_push_to_apg():
             if front and not allocation["override"]: return jsonify({"ok": False, "error": f"Passenger seated immediately in front at {', '.join(front)}. Override or move the seat bag."}), 409
             seat_freight_loads.extend({"seat": seat, "mass_kg": allocation["per_seat_kg"]} for seat in allocation["seats"])
 
+    charter_passenger_weights = None
+    if envision_flight_id is not None and CharterManifest.query.filter_by(envision_flight_id=str(envision_flight_id)).first():
+        charter_passenger_weights = _charter_passenger_weights()
+
     if not (dep and flight_date and designator and flight_no):
         return jsonify({
             "ok": False,
@@ -3053,6 +3057,7 @@ def api_dcs_push_to_apg():
             cargo_station_label=cargo_station_label or None,
             cargo_mass_kg=cargo_mass_kg,
             seat_freight_loads=seat_freight_loads,
+            passenger_weights=charter_passenger_weights,
             preview_only=preview_only,
         )
     except Exception as e:
