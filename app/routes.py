@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 from .models import SyncRun, SyncFlightLog, SyncFlightState, AppConfig, ManifestUploadState, CharterManifest, EnvisionOtpFlightCache, FlightFreightAllocation, FlightCargoAllocation, EmailSettings
 from .kmh_auth import get_kmh_session
 from .helpers_manifest import _seat_sort_key, _format_ssrs, _calc_age, _parse_dcs_dob, generate_manifest_pdf_from_html, generate_pdf_modern
+from .charter_wallet import apple_wallet_pass, google_wallet_link, make_wallet_token, parse_wallet_token
 
 from .sync.envision_apg_sync import (
     run_sync_once_return_summary,
@@ -1926,7 +1927,7 @@ def _charter_email_sender() -> str:
     return _email_env("SMTP_FROM", "MAIL_FROM", "MAIL_DEFAULT_SENDER")
 
 
-def _send_email_via_graph(sender: str, recipients: list[str], subject: str, body: str) -> bool:
+def _send_email_via_graph(sender: str, recipients: list[str], subject: str, body: str, *, html_body: str | None = None) -> bool:
     """Use the LMS Microsoft Graph setup when it is present; return False when unavailable."""
     tenant_id = _email_env("GRAPH_TENANT_ID", "MS_TENANT_ID")
     client_id = _email_env("GRAPH_CLIENT_ID", "MS_CLIENT_ID")
@@ -1954,7 +1955,7 @@ def _send_email_via_graph(sender: str, recipients: list[str], subject: str, body
             json={
                 "message": {
                     "subject": subject,
-                    "body": {"contentType": "Text", "content": body},
+                    "body": {"contentType": "HTML" if html_body else "Text", "content": html_body or body},
                     "toRecipients": [{"emailAddress": {"address": address}} for address in recipients],
                 },
                 "saveToSentItems": True,
@@ -2050,6 +2051,48 @@ def _send_charter_flight_closure_email(manifest: CharterManifest, closed_at: dat
             client.send_message(message)
     except Exception as exc:
         raise RuntimeError(f"Unable to send the Flight Operations closure email: {exc}") from exc
+
+
+def _send_charter_boarding_pass_email(manifest: CharterManifest, passenger: dict) -> bool:
+    """Email a checked-in passenger their branded pass. Delivery errors never undo check-in."""
+    recipient = str(passenger.get("Email") or "").strip().lower()
+    if "@" not in recipient:
+        return False
+    sender = _charter_email_sender()
+    if not sender:
+        raise RuntimeError("Boarding-pass email sender is not configured")
+    flight_id = str(manifest.envision_flight_id)
+    flight_no, dep, ades, gate = manifest.flight_no or "Charter", (manifest.dep or "---").upper(), (manifest.ades or "---").upper(), manifest.gate or "AS DIRECTED"
+    token = make_wallet_token(flight_id, str(passenger["PassengerId"]))
+    logo_url = url_for("ui.charter_brand_asset", asset="main-logo", _external=True)
+    qr_url = url_for("api.api_charter_manifest_boarding_qr", flight_id=flight_id, passenger_id=passenger["PassengerId"], _external=True)
+    apple_url = url_for("api.api_charter_wallet_apple", token=token, _external=True)
+    departure = "Departure time to be advised"
+    google_url = google_wallet_link(
+        issuer_id=os.getenv("GOOGLE_WALLET_ISSUER_ID", ""),
+        service_account_file=os.getenv("GOOGLE_WALLET_SERVICE_ACCOUNT_FILE", "/opt/apg-importer/wallet-secrets/google-wallet-service-account.json"),
+        origin=request.url_root.rstrip("/"), flight_id=flight_id, passenger=passenger, flight_no=flight_no, dep=dep, ades=ades, gate=gate,
+        departure=departure, logo_url=logo_url,
+    )
+    name = html.escape(f"{passenger.get('GivenName', '')} {passenger.get('Surname', '')}".strip())
+    google_button = f'<a href="{html.escape(google_url, quote=True)}" style="display:inline-block;margin:8px;padding:12px 18px;background:#202124;color:#fff;border-radius:6px;text-decoration:none;font-weight:bold">Add to Google Wallet</a>' if google_url else ""
+    html_body = f'''<div style="max-width:640px;margin:auto;font-family:Arial,sans-serif;color:#173743"><img src="{html.escape(logo_url, quote=True)}" alt="ACCharters" style="max-width:260px;height:auto"><h2>Your ACCharters boarding pass</h2><p>Hello {name}, you are checked in.</p><div style="padding:20px;border-radius:12px;background:#075c74;color:#fff"><div style="font-size:13px;letter-spacing:1px">ACCHARTERS BOARDING PASS</div><h1 style="margin:10px 0">{dep} &rarr; {ades}</h1><p><strong>Passenger:</strong> {name}<br><strong>Flight:</strong> {html.escape(flight_no)}<br><strong>Seat:</strong> {html.escape(str(passenger.get('Seat') or 'GATE'))}<br><strong>Gate:</strong> {html.escape(gate)}</p></div><p style="text-align:center"><img src="{html.escape(qr_url, quote=True)}" alt="Boarding QR code" width="180" height="180"></p><div style="text-align:center"><a href="{html.escape(apple_url, quote=True)}" style="display:inline-block;margin:8px;padding:12px 18px;background:#000;color:#fff;border-radius:6px;text-decoration:none;font-weight:bold">Add to Apple Wallet</a>{google_button}</div><p style="font-size:12px;color:#5c7478">Present this QR code at boarding. Your pass is valid only for this charter sector.</p></div>'''
+    text_body = f"ACCharters boarding pass\n\n{dep} - {ades}\nPassenger: {name}\nFlight: {flight_no}\nSeat: {passenger.get('Seat') or 'GATE'}\nGate: {gate}\n\nApple Wallet: {apple_url}\nGoogle Wallet: {google_url or 'Unavailable'}"
+    graph_available = bool(_email_env("GRAPH_TENANT_ID", "MS_TENANT_ID") and _email_env("GRAPH_CLIENT_ID", "MS_CLIENT_ID") and _email_env("GRAPH_CLIENT_SECRET", "MS_CLIENT_SECRET"))
+    if graph_available and _send_email_via_graph(sender, [recipient], f"Your ACCharters boarding pass — {flight_no}", text_body, html_body=html_body):
+        return True
+    message = EmailMessage()
+    message["Subject"], message["From"], message["To"] = f"Your ACCharters boarding pass — {flight_no}", sender, recipient
+    message.set_content(text_body)
+    message.add_alternative(html_body, subtype="html")
+    with smtplib.SMTP(_email_env("SMTP_HOST", "MAIL_SERVER", default="send.xtra.co.nz"), int(_email_env("SMTP_PORT", "MAIL_PORT", default="587")), timeout=20) as client:
+        client.ehlo()
+        if _email_env("SMTP_STARTTLS", "MAIL_USE_TLS", default="true").lower() not in {"0", "false", "no"}:
+            client.starttls(); client.ehlo()
+        if _email_env("SMTP_USERNAME", "MAIL_USERNAME"):
+            client.login(_email_env("SMTP_USERNAME", "MAIL_USERNAME"), _email_env("SMTP_PASSWORD", "MAIL_PASSWORD"))
+        client.send_message(message)
+    return True
 
 
 def _charter_email_is_configured() -> bool:
@@ -2200,6 +2243,7 @@ def api_charter_manifest_update_passenger():
         if str(existing.get("PassengerId") or "") != passenger_id:
             continue
         merged = dict(existing)
+        was_booked = _normalise_charter_status(existing.get("Status")) == "Booked"
         merged.update(changes)
         requested_seat = str(merged.get("Seat") or "").strip().upper()
         if requested_seat:
@@ -2229,8 +2273,14 @@ def api_charter_manifest_update_passenger():
             ades=manifest.ades or "",
             filename=manifest.uploaded_filename,
         )
+        boarding_pass_email_sent = False
+        if was_booked and _normalise_charter_status(passenger.get("Status")) == "Checked In" and passenger.get("Email"):
+            try:
+                boarding_pass_email_sent = _send_charter_boarding_pass_email(saved, passenger)
+            except Exception:
+                current_app.logger.exception("Unable to email charter boarding pass for %s", passenger.get("PassengerId"))
         _clear_live_gantt_cache()
-        return jsonify(ok=True, passenger=passenger, updated_at=saved.updated_at.isoformat())
+        return jsonify(ok=True, passenger=passenger, boarding_pass_email_sent=boarding_pass_email_sent, updated_at=saved.updated_at.isoformat())
 
     return jsonify(ok=False, error="Passenger not found. Reload the charter manifest and try again."), 404
 
@@ -2264,6 +2314,24 @@ def api_charter_manifest_add_passenger():
     )
     _clear_live_gantt_cache()
     return jsonify(ok=True, passenger=passenger, count=len(passengers)), 201
+
+
+@api_bp.get("/dcs/charter_manifest/wallet/apple/<token>")
+def api_charter_wallet_apple(token: str):
+    try:
+        claims = parse_wallet_token(token)
+    except Exception:
+        return jsonify(ok=False, error="This Apple Wallet link is invalid or has expired"), 404
+    manifest = CharterManifest.query.filter_by(envision_flight_id=str(claims.get("f") or "")).first()
+    passenger = next((item for item in _serialize_charter_manifest(manifest) if str(item.get("PassengerId") or "") == str(claims.get("p") or "")), None)
+    if not manifest or not passenger:
+        return jsonify(ok=False, error="Boarding pass not found"), 404
+    try:
+        pass_file = io.BytesIO(apple_wallet_pass(flight_id=str(manifest.envision_flight_id), passenger=passenger, flight_no=manifest.flight_no or "Charter", dep=(manifest.dep or "---").upper(), ades=(manifest.ades or "---").upper(), gate=manifest.gate or "AS DIRECTED", departure="Departure time to be advised"))
+        return send_file(pass_file, mimetype="application/vnd.apple.pkpass", as_attachment=True, download_name="accharters-boarding-pass.pkpass")
+    except Exception as exc:
+        current_app.logger.exception("Unable to build Apple Wallet boarding pass")
+        return jsonify(ok=False, error=f"Apple Wallet pass is unavailable: {exc}"), 503
 
 
 def _charter_boarding_code(flight_id: str, passenger_id: str, seat: str = "") -> str:
