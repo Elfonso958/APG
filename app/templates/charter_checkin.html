@@ -18,6 +18,7 @@
         data-passenger-url="{{ url_for('api.api_charter_manifest_update_passenger') }}"
         data-passenger-add-url="{{ url_for('api.api_charter_manifest_add_passenger') }}"
         data-boarding-qr-url="{{ url_for('api.api_charter_manifest_boarding_qr') }}"
+        data-bag-tag-barcode-url="{{ url_for('api.api_charter_manifest_bag_tag_barcode') }}"
         data-board-scan-url="{{ url_for('api.api_charter_manifest_board_scan') }}"
         data-close-flight-url="{{ url_for('api.api_charter_manifest_close_flight') }}"
         data-reopen-flight-url="{{ url_for('api.api_charter_manifest_reopen_flight') }}"
@@ -173,6 +174,15 @@
       </div>
     </div>
   </dialog>
+  <dialog id="bagWeighDialog" class="seatmap-dialog account-dialog">
+    <form id="bagWeighForm" class="seatmap-shell login-form">
+      <header><div><p class="eyebrow">Checked baggage</p><h2 id="bagWeighTitle">Weigh bag</h2></div><button id="bagWeighClose" class="button secondary" type="button">Close</button></header>
+      <p id="bagWeighPassenger" class="muted"></p>
+      <div class="checkin-fields"><label>Bag weight (kg)<input id="bagWeighKg" type="number" min="0" step="0.1" required autofocus></label><label>Bag pieces<input id="bagWeighPieces" type="number" min="1" step="1" required></label></div>
+      <p class="muted">Saving records the baggage and clears the bag-to-weigh flag.</p>
+      <div class="checkin-actions"><button id="savePrintBagTag" class="button secondary" type="button">Save &amp; print tag</button><button class="button" type="submit">Save baggage</button></div>
+    </form>
+  </dialog>
   {% if apg_is_admin %}
   <dialog id="weightSettingsDialog" class="seatmap-dialog account-dialog">
     <form id="weightSettingsForm" class="seatmap-shell login-form">
@@ -190,6 +200,6 @@
   </dialog>
   {% endif %}
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
-  <script src="{{ url_for('static', filename='charter_checkin.js') }}?v=31"></script>
+  <script src="{{ url_for('static', filename='charter_checkin.js') }}?v=32"></script>
 </body>
 </html>

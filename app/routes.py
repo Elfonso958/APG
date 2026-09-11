@@ -2477,7 +2477,7 @@ def api_charter_manifest_update_passenger():
         return jsonify(ok=False, error="This flight is closed. Reopen it before changing passenger details."), 409
 
     passengers = _serialize_charter_manifest(manifest)
-    allowed_fields = {"Seat", "NamePrefix", "GivenName", "Surname", "PassengerType", "PassengerWeight", "BaggageWeight", "BaggagePieces", "Status", "CheckedInAt", "BoardedAt", "SSR", "Comments", "Email", "PhoneNumber", "FlightDeparture", "AircraftRegistration", "AircraftType", "DangerousGoodsConfirmed"}
+    allowed_fields = {"Seat", "NamePrefix", "GivenName", "Surname", "PassengerType", "PassengerWeight", "BaggageWeight", "BaggagePieces", "BagToWeigh", "Status", "CheckedInAt", "BoardedAt", "SSR", "Comments", "Email", "PhoneNumber", "FlightDeparture", "AircraftRegistration", "AircraftType", "DangerousGoodsConfirmed"}
     changes = {key: data[key] for key in allowed_fields if key in data}
     for index, existing in enumerate(passengers):
         if str(existing.get("PassengerId") or "") != passenger_id:
@@ -2624,6 +2624,32 @@ def api_charter_manifest_boarding_qr():
     except Exception as exc:
         current_app.logger.exception("Unable to generate charter boarding QR code")
         return jsonify(ok=False, error=f"Unable to generate boarding QR code: {exc}"), 500
+
+
+@api_bp.get("/dcs/charter_manifest/bag-tag-barcode")
+def api_charter_manifest_bag_tag_barcode():
+    flight_id = str(request.args.get("flight_id") or "").strip()
+    passenger_id = str(request.args.get("passenger_id") or "").strip()
+    tag = "".join(char for char in str(request.args.get("tag") or "") if char.isdigit())
+    if not flight_id or not passenger_id or len(tag) != 10:
+        return jsonify(ok=False, error="A flight, passenger and ten-digit bag tag number are required"), 400
+    manifest = CharterManifest.query.filter_by(envision_flight_id=flight_id).first()
+    if not manifest or not any(str(p.get("PassengerId") or "") == passenger_id for p in _serialize_charter_manifest(manifest)):
+        return jsonify(ok=False, error="Passenger not found"), 404
+    try:
+        from reportlab.graphics.barcode.code128 import Code128
+        from reportlab.graphics.shapes import Drawing
+        from reportlab.graphics import renderPM
+        barcode = Code128(tag, barHeight=52, barWidth=1.15, humanReadable=False)
+        drawing = Drawing(barcode.width, barcode.height)
+        drawing.add(barcode)
+        png = io.BytesIO(renderPM.drawToString(drawing, fmt="PNG"))
+        response = send_file(png, mimetype="image/png", download_name="bag-tag-barcode.png")
+        response.headers["Cache-Control"] = "no-store"
+        return response
+    except Exception as exc:
+        current_app.logger.exception("Unable to generate charter bag tag barcode")
+        return jsonify(ok=False, error=f"Unable to generate bag tag barcode: {exc}"), 500
 
 
 @api_bp.post("/dcs/charter_manifest/board-scan")
