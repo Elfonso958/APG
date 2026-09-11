@@ -2564,8 +2564,8 @@ def api_charter_manifest_delete_passenger():
     for index, passenger in enumerate(passengers):
         if str(passenger.get("PassengerId") or "") != passenger_id:
             continue
-        if _normalise_charter_status(passenger.get("Status")) in {"Boarded", "Flown"}:
-            return jsonify(ok=False, error="A boarded passenger cannot be removed. Reverse their boarding status first."), 409
+        if _normalise_charter_status(passenger.get("Status")) not in {"Booked", "No Show"}:
+            return jsonify(ok=False, error="Only Booked or No Show passengers can be removed. Reverse their status first."), 409
         removed = passengers.pop(index)
         saved = _upsert_charter_manifest(
             flight_id, passengers, flight_no=manifest.flight_no or "", dep=manifest.dep or "",
