@@ -70,6 +70,23 @@ class CharterCheckinTest(unittest.TestCase):
         self.assertEqual(checkin["Ssrs"][0]["Code"], "WCHR")
         self.assertEqual(checkin["Comments"], "Confirm assistance at gate")
 
+        identity_update = self.client.patch("/api/dcs/charter_manifest/passenger", json={
+            "flight_id": "charter-123",
+            "passenger_id": passenger["PassengerId"],
+            "NamePrefix": "Ms",
+            "GivenName": "Janet",
+            "Surname": "Updated",
+            "PassengerType": "T",
+            "PassengerWeight": 50,
+        })
+        self.assertEqual(identity_update.status_code, 200)
+        identity = identity_update.get_json()["passenger"]
+        self.assertEqual(identity["NamePrefix"], "Ms")
+        self.assertEqual(identity["GivenName"], "Janet")
+        self.assertEqual(identity["Surname"], "Updated")
+        self.assertEqual(identity["PassengerType"], "T")
+        self.assertEqual(identity["PassengerWeight"], 96.0)
+
         duplicate_seat = self.client.patch("/api/dcs/charter_manifest/passenger", json={
             "flight_id": "charter-123",
             "passenger_id": second_passenger["PassengerId"],
@@ -84,8 +101,16 @@ class CharterCheckinTest(unittest.TestCase):
         self.assertEqual(qr_response.status_code, 200)
         self.assertEqual(qr_response.mimetype, "image/png")
 
+        changed_seat_scan = self.client.post("/api/dcs/charter_manifest/board-scan", json={
+            "code": f"ACCI|charter-123|{passenger['PassengerId']}|1A",
+        })
+        self.assertEqual(changed_seat_scan.status_code, 409)
+        self.assertTrue(changed_seat_scan.get_json()["seat_changed"])
+        self.assertEqual(changed_seat_scan.get_json()["current_seat"], "2A")
+
         scanned = self.client.post("/api/dcs/charter_manifest/board-scan", json={
-            "code": f"ACCI|charter-123|{passenger['PassengerId']}",
+            "code": f"ACCI|charter-123|{passenger['PassengerId']}|1A",
+            "acknowledge_seat_change": True,
         })
         self.assertEqual(scanned.status_code, 200)
         self.assertTrue(scanned.get_json()["passenger"]["Boarded"])
@@ -115,6 +140,16 @@ class CharterCheckinTest(unittest.TestCase):
         })
         self.assertEqual(boarded.status_code, 200)
         self.assertTrue(boarded.get_json()["passenger"]["Boarded"])
+
+        unboarded = self.client.patch("/api/dcs/charter_manifest/passenger", json={
+            "flight_id": "charter-123",
+            "passenger_id": passenger["PassengerId"],
+            "Status": "Checked In",
+        })
+        self.assertEqual(unboarded.status_code, 200)
+        self.assertEqual(unboarded.get_json()["passenger"]["Status"], "Checked In")
+        self.assertFalse(unboarded.get_json()["passenger"]["Boarded"])
+        self.assertIsNone(unboarded.get_json()["passenger"]["BoardedAt"])
 
     def test_charter_checkin_page_loads(self):
         response = self.client.get("/dcs/charter-checkin?date=2026-09-11")

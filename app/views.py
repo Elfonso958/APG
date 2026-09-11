@@ -292,7 +292,7 @@ def _count_pax_types(passengers: list[dict]) -> dict:
     def norm(x: str) -> str:
         return (x or "").strip().upper()
 
-    ADULT_TAGS = {"AD", "ADT", "ADULT", "A"}
+    ADULT_TAGS = {"AD", "ADT", "ADULT", "A", "T"}
     CHILD_TAGS = {"CHD", "CHILD", "C"}
     INFANT_TAGS = {"INF", "INFANT"}
 
@@ -819,7 +819,7 @@ def dcs_flights_page():
     def _agg(f):
         pax = f.get("Passengers") or []
         def ptype(p): return (p.get("PassengerType") or "").strip().upper()
-        adults = sum(1 for p in pax if ptype(p) in {"ADT", "ADULT", "A"})
+        adults = sum(1 for p in pax if ptype(p) in {"AD", "ADT", "ADULT", "A", "T"})
         children = sum(1 for p in pax if ptype(p) in {"CHD", "CHILD", "C", "INF", "INFANT"})
         def to_num(x):
             try:

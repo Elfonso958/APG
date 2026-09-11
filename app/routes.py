@@ -1730,6 +1730,7 @@ CHARTER_MANIFEST_COLUMNS = [
     "Origin",
     "Destination",
     "PassengerType",
+    "PassengerWeight",
     "Gender",
     "BaggageWeight",
     "BaggagePieces",
@@ -1805,6 +1806,8 @@ def _charter_pax_from_row(row: dict, default_dep: str = "", default_ades: str = 
     ssrs = _charter_ssrs_from_row(row)
     status = _normalise_charter_status(row.get("Status"))
 
+    passenger_type = str(row.get("PassengerType") or "AD").strip().upper() or "AD"
+    passenger_weight = 96.0 if passenger_type == "T" else _charter_number(row.get("PassengerWeight"))
     return {
         "Seat": str(row.get("Seat") or "").strip().upper(),
         "NamePrefix": title,
@@ -1812,7 +1815,8 @@ def _charter_pax_from_row(row: dict, default_dep: str = "", default_ades: str = 
         "Surname": surname,
         "__manifest_origin": str(row.get("Origin") or default_dep or "").strip().upper(),
         "__manifest_dest": str(row.get("Destination") or default_ades or "").strip().upper(),
-        "PassengerType": str(row.get("PassengerType") or "AD").strip().upper() or "AD",
+        "PassengerType": passenger_type,
+        "PassengerWeight": passenger_weight,
         "Gender": str(row.get("Gender") or "").strip().upper(),
         "BaggageWeight": _charter_number(row.get("BaggageWeight")),
         "BaggagePieces": max(0, int(_charter_number(row.get("BaggagePieces"), 0))),
@@ -2085,7 +2089,7 @@ def api_charter_manifest_update_passenger():
         return jsonify(ok=False, error="This flight is closed. Reopen it before changing passenger details."), 409
 
     passengers = _serialize_charter_manifest(manifest)
-    allowed_fields = {"Seat", "BaggageWeight", "BaggagePieces", "Status", "CheckedInAt", "BoardedAt", "SSR", "Comments"}
+    allowed_fields = {"Seat", "NamePrefix", "GivenName", "Surname", "PassengerType", "PassengerWeight", "BaggageWeight", "BaggagePieces", "Status", "CheckedInAt", "BoardedAt", "SSR", "Comments"}
     changes = {key: data[key] for key in allowed_fields if key in data}
     for index, existing in enumerate(passengers):
         if str(existing.get("PassengerId") or "") != passenger_id:
@@ -2106,6 +2110,8 @@ def api_charter_manifest_update_passenger():
                 merged["CheckedInAt"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
             if status in {"Boarded", "Flown"} and not merged.get("BoardedAt"):
                 merged["BoardedAt"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            elif status not in {"Boarded", "Flown"}:
+                merged["BoardedAt"] = None
         passenger = _charter_pax_from_row(merged, manifest.dep or "", manifest.ades or "")
         if not passenger:
             return jsonify(ok=False, error="Passenger details are invalid"), 400
@@ -2155,8 +2161,9 @@ def api_charter_manifest_add_passenger():
     return jsonify(ok=True, passenger=passenger, count=len(passengers)), 201
 
 
-def _charter_boarding_code(flight_id: str, passenger_id: str) -> str:
-    return f"ACCI|{flight_id}|{passenger_id}"
+def _charter_boarding_code(flight_id: str, passenger_id: str, seat: str = "") -> str:
+    """Encode the seat printed on the pass so boarding can detect a later seat change."""
+    return f"ACCI|{flight_id}|{passenger_id}|{str(seat or '').strip().upper()}"
 
 
 @api_bp.get("/dcs/charter_manifest/boarding-qr")
@@ -2166,13 +2173,17 @@ def api_charter_manifest_boarding_qr():
     if not flight_id or not passenger_id:
         return jsonify(ok=False, error="Missing flight_id or passenger_id"), 400
     manifest = CharterManifest.query.filter_by(envision_flight_id=flight_id).first()
-    if not manifest or not any(str(p.get("PassengerId") or "") == passenger_id for p in _serialize_charter_manifest(manifest) if isinstance(p, dict)):
+    if not manifest:
+        return jsonify(ok=False, error="Passenger not found"), 404
+    passenger = next((p for p in _serialize_charter_manifest(manifest)
+                      if isinstance(p, dict) and str(p.get("PassengerId") or "") == passenger_id), None)
+    if not passenger:
         return jsonify(ok=False, error="Passenger not found"), 404
     try:
         from reportlab.graphics.barcode import qr
         from reportlab.graphics.shapes import Drawing
         from reportlab.graphics import renderPM
-        widget = qr.QrCodeWidget(_charter_boarding_code(flight_id, passenger_id))
+        widget = qr.QrCodeWidget(_charter_boarding_code(flight_id, passenger_id, passenger.get("Seat")))
         x0, y0, x1, y1 = widget.getBounds()
         drawing = Drawing(x1 - x0, y1 - y0)
         drawing.add(widget)
@@ -2190,9 +2201,10 @@ def api_charter_manifest_board_scan():
     data = request.get_json(force=True) or {}
     code = str(data.get("code") or "").strip()
     parts = code.split("|")
-    if len(parts) != 3 or parts[0] != "ACCI" or not parts[1] or not parts[2]:
+    if len(parts) not in {3, 4} or parts[0] != "ACCI" or not parts[1] or not parts[2]:
         return jsonify(ok=False, error="This is not a valid Air Chathams charter boarding-pass QR code"), 400
     flight_id, passenger_id = parts[1], parts[2]
+    printed_seat = str(parts[3] if len(parts) == 4 else "").strip().upper()
     manifest = CharterManifest.query.filter_by(envision_flight_id=flight_id).first()
     if not manifest:
         return jsonify(ok=False, error="The flight for this boarding pass was not found"), 404
@@ -2206,6 +2218,17 @@ def api_charter_manifest_board_scan():
         if existing.get("Boarded") or existing_status in {"boarded", "flown"}:
             passenger_name = " ".join(str(existing.get(key) or "").strip() for key in ("GivenName", "Surname")).strip() or "This passenger"
             return jsonify(ok=False, error=f"{passenger_name} has already boarded. This boarding pass cannot be used again."), 409
+        current_seat = str(existing.get("Seat") or "").strip().upper()
+        if printed_seat and printed_seat != current_seat and not data.get("acknowledge_seat_change"):
+            return jsonify(
+                ok=False,
+                seat_changed=True,
+                flight_id=flight_id,
+                passenger=existing,
+                printed_seat=printed_seat,
+                current_seat=current_seat,
+                error=f"Seat changed from {printed_seat or 'unassigned'} to {current_seat or 'unassigned'}.",
+            ), 409
         merged = dict(existing)
         merged["Status"] = "Boarded"
         merged["BoardedAt"] = merged.get("BoardedAt") or datetime.utcnow().isoformat(timespec="seconds") + "Z"
@@ -4429,12 +4452,17 @@ def _build_manifest_html_and_ctx(
         is_um = raw_ptype in {"UM", "UMN", "UMNR"} or ptype == "UMNR" or has_um_code or has_um_text
         weight_key = "UMNR" if is_um else (ptype or "AD")
 
-        pax_weight_kg = float(
+        standard_weight_kg = float(
             PAX_STD_WEIGHTS_KG.get(
                 weight_key,
                 PAX_STD_WEIGHTS_KG.get("AD", 0.0)
             )
         )
+        try:
+            passenger_weight_kg = float(r.get("PassengerWeight") or 0)
+        except (TypeError, ValueError):
+            passenger_weight_kg = 0.0
+        pax_weight_kg = passenger_weight_kg if passenger_weight_kg > 0 else standard_weight_kg
 
         bag_weight = float(r.get("BaggageWeight") or 0.0)
         bag_pcs    = 1 if bag_weight > 0 else 0

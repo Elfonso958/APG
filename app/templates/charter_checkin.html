@@ -91,6 +91,11 @@
       <video id="boardingScanVideo" class="boarding-video" playsinline muted></video>
       <label class="scan-code-label" hidden>Scanner code<input id="boardingScanCode" type="text" autocomplete="off"></label>
       <button id="processBoardingCode" type="button" hidden></button>
+      <div id="seatChangeAlert" class="seat-change-alert" hidden>
+        <strong>Seat has changed</strong>
+        <p id="seatChangeMessage"></p>
+        <button id="acknowledgeSeatChange" class="button" type="button">Acknowledge and board</button>
+      </div>
       <p id="boardingLastPassenger" class="last-boarded" aria-live="polite">Last boarded: —</p>
     </div>
   </dialog>
@@ -110,11 +115,13 @@
         <div class="checkin-form">
       <p id="checkinPassengerMeta" class="muted"></p>
       <div id="checkinIdentity" class="checkin-fields identity-fields">
+        <label>Title<select id="checkinNamePrefix"><option value="">None</option><option>Mr</option><option>Mrs</option><option>Ms</option><option>Miss</option><option>Master</option></select></label>
         <label>Given name<input id="checkinGivenName" type="text" autocomplete="given-name"></label>
         <label>Surname<input id="checkinSurname" type="text" autocomplete="family-name"></label>
-        <label>Passenger type<select id="checkinPassengerType"><option value="AD">Adult</option><option value="CHD">Child</option><option value="INF">Infant</option><option value="UMNR">Unaccompanied minor</option></select></label>
+        <label>Passenger type<select id="checkinPassengerType"><option value="AD">Adult</option><option value="T">T — Adult (96 kg)</option><option value="CHD">Child</option><option value="INF">Infant</option><option value="UMNR">Unaccompanied minor</option></select></label>
         <label>Booking reference<input id="checkinPnr" type="text" autocapitalize="characters"></label>
       </div>
+      <p id="checkinPassengerWeight" class="muted"></p>
       <div class="checkin-fields">
         <label>Seat<input id="checkinSeat" type="text" maxlength="5" autocapitalize="characters"></label>
         <label>Baggage kg<input id="checkinBagKg" type="number" min="0" step="0.1"></label>
@@ -128,6 +135,6 @@
     </div>
   </dialog>
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
-  <script src="{{ url_for('static', filename='charter_checkin.js') }}?v=18"></script>
+  <script src="{{ url_for('static', filename='charter_checkin.js') }}?v=19"></script>
 </body>
 </html>

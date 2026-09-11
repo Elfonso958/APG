@@ -4218,6 +4218,7 @@ PAX_STD_WEIGHTS_KG = {
     "ADT":    86.0,
     "ADULT":  86.0,
     "A":      86.0,
+    "T":      96.0,
 
     # Children
     "CHD":    46.0,
@@ -4248,6 +4249,7 @@ def normalise_pax_type(pax_type: str | None) -> str:
         "AD": "AD",
         "ADT": "AD",
         "ADULT": "AD",
+        "T": "T",
         "C": "CHD",
         "CHD": "CHD",
         "CHILD": "CHD",
