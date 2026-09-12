@@ -1573,7 +1573,7 @@ def ops_charter_brief_print(brief_id: int):
         abort(404)
     details = _charter_brief_details(brief)
     airports = [sector.get(field) for sector in details.get("sectors", []) for field in ("dep", "arr")]
-    return render_template("charter_brief_print.html", brief=brief, details=details, handler_details=handlers_for_airports(airports))
+    return render_template("charter_brief_print.html", brief=brief, details=details, handler_details=handlers_for_airports(airports, details.get("handler_selections")))
 
 
 @ui_bp.get("/charter/check-in/<token>")

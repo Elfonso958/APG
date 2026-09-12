@@ -48,6 +48,9 @@ AIRPORT_HANDLERS = [
 ]
 
 
-def handlers_for_airports(airports):
+def handlers_for_airports(airports, selections=None):
     airport_codes = {str(code or "").upper().strip() for code in airports}
-    return [entry for entry in AIRPORT_HANDLERS if entry["airport"] in airport_codes]
+    selections = selections if isinstance(selections, dict) else {}
+    entries = [entry for entry in AIRPORT_HANDLERS if entry["airport"] in airport_codes]
+    # Keep the full directory for older briefs that pre-date handler selection.
+    return [entry for entry in entries if not selections.get(entry["airport"]) or selections[entry["airport"]] == entry["label"]]

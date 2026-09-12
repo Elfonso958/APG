@@ -34,10 +34,19 @@
   const isEnvisionCrew = (crew) => crew.source === "envision" || crew.notes === "Assigned in Envision";
   function renderTable(name) { $( `${name}Rows` ).innerHTML = details[name].map((row) => `<tr data-list-row="${name}">${fields[name].map((field) => `<td>${input(field, name === "crew" && field === "notes" && isEnvisionCrew(row) ? "" : row[field])}</td>`).join("")}<td><button type="button" class="remove-row">×</button></td></tr>`).join(""); }
   function renderCards(name) { $( `${name}Rows` ).innerHTML = details[name].map((row) => `<article class="brief-item" data-list-row="${name}"><div class="brief-item-grid">${fields[name].map((field) => `<label>${field.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())}${input(field, row[field])}</label>`).join("")}</div><button type="button" class="remove-row">×</button></article>`).join(""); }
-  function renderHandlers() {
+  function renderHandlersOld() {
     const airports = new Set(details.sectors.flatMap((sector) => [sector.dep, sector.arr]).map((code) => String(code || "").toUpperCase().trim()).filter(Boolean));
     const entries = handlerDirectory.filter((entry) => airports.has(entry.airport));
     $("handlerRows").innerHTML = entries.length ? entries.map((entry) => `<article class="handler-card"><h3>${esc(entry.label)} <span>${esc(entry.handler)}</span></h3><dl><div><dt>Contact</dt><dd>${esc(entry.contact || "—")}<br>${esc(entry.phone || "—")}${entry.additional_phone ? `<br>${esc(entry.additional_phone)}` : ""}</dd></div><div><dt>Agent frequency</dt><dd>${esc(entry.frequency || "—")}</dd></div><div><dt>GPU</dt><dd>${esc(entry.gpu || "—")}</dd></div><div><dt>Fuel</dt><dd>${esc(entry.fuel || "—")}</dd></div>${entry.emails?.length ? `<div class="handler-emails"><dt>Email</dt><dd>${entry.emails.map(esc).join("<br>")}</dd></div>` : ""}${entry.notes ? `<div class="handler-notes"><dt>Operational note</dt><dd>${esc(entry.notes)}</dd></div>` : ""}</dl></article>`).join("") : `<p class="section-help">Select a flight to show handling and fuel details for its airports.</p>`;
+  }
+  function renderHandlers() {
+    const airports = new Set(details.sectors.flatMap((sector) => [sector.dep, sector.arr]).map((code) => String(code || "").toUpperCase().trim()).filter(Boolean));
+    details.handler_selections = details.handler_selections && typeof details.handler_selections === "object" ? details.handler_selections : {};
+    const detail = (entry) => `<dl><div><dt>Contact</dt><dd>${esc(entry.contact || "-")}<br>${esc(entry.phone || "-")}${entry.additional_phone ? `<br>${esc(entry.additional_phone)}` : ""}</dd></div><div><dt>Agent frequency</dt><dd>${esc(entry.frequency || "-")}</dd></div><div><dt>GPU</dt><dd>${esc(entry.gpu || "-")}</dd></div><div><dt>Fuel</dt><dd>${esc(entry.fuel || "-")}</dd></div>${entry.emails?.length ? `<div class="handler-emails"><dt>Email</dt><dd>${entry.emails.map(esc).join("<br>")}</dd></div>` : ""}${entry.notes ? `<div class="handler-notes"><dt>Operational note</dt><dd>${esc(entry.notes)}</dd></div>` : ""}</dl>`;
+    $("handlerRows").innerHTML = airports.size ? [...airports].map((airport) => {
+      const options = handlerDirectory.filter((entry) => entry.airport === airport), selectedLabel = details.handler_selections[airport] || "", selected = options.find((entry) => entry.label === selectedLabel);
+      return `<article class="handler-card"><h3>${esc(airport)} handling</h3><label class="handler-select-label">Handling provider<select data-handler-airport="${esc(airport)}"><option value="">Select handling provider...</option>${options.map((entry) => `<option value="${esc(entry.label)}" ${entry.label === selectedLabel ? "selected" : ""}>${esc(entry.label)} — ${esc(entry.handler)}</option>`).join("")}</select></label>${selected ? detail(selected) : `<p class="section-help">Choose the handling provider for this airport.</p>`}</article>`;
+    }).join("") : `<p class="section-help">Select a flight to show handling and fuel details for its airports.</p>`;
   }
   function render() { renderSectors(); renderTable("crew"); renderHandlers(); renderCards("accommodation"); renderCards("transport"); renderCards("ports"); $("operationsNotes").value = details.operations_notes || ""; $("crewNotes").value = details.crew_notes || ""; }
   app.addEventListener("click", async (event) => {
@@ -50,6 +59,14 @@
     if (index >= 0) details[name].splice(index, 1);
     if (name === "sectors") await reconcileAssignedCrew();
     render();
+  });
+  app.addEventListener("change", (event) => {
+    const select = event.target.closest("[data-handler-airport]");
+    if (!select) return;
+    details.handler_selections = details.handler_selections || {};
+    if (select.value) details.handler_selections[select.dataset.handlerAirport] = select.value;
+    else delete details.handler_selections[select.dataset.handlerAirport];
+    renderHandlers();
   });
   $("briefForm").addEventListener("submit", () => {
     lists.filter((name) => name !== "sectors").forEach((name) => { details[name] = [...document.querySelectorAll(`[data-list-row="${name}"]`)].map((row) => Object.fromEntries(fields[name].map((field) => [field, row.querySelector(`[data-field="${field}"]`)?.value.trim() || ""]))); });
