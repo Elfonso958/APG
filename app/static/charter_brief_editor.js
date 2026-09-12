@@ -27,11 +27,12 @@
     if (flight.pax_count) return `${flight.pax_count} pax${types.length ? ` · ${types.join(" · ")}` : ""}`;
     return flight.charter_manifest_uploaded ? "Manifest uploaded · 0 pax" : "No manifest uploaded";
   };
+  const isCharterSector = (sector) => /charter/i.test(String(sector.flight_type || ""));
   function renderSectors() {
     const displayFields = fields.sectors.filter((field) => !["date", "source_flight_id"].includes(field));
     const byDay = new Map();
     details.sectors.forEach((sector) => { const day = sector.date || "Date TBC"; if (!byDay.has(day)) byDay.set(day, []); byDay.get(day).push(sector); });
-    $("sectorsRows").innerHTML = [...byDay.entries()].map(([day, sectors]) => `<tr class="duty-date-heading"><td colspan="12">${esc(longDate(day))}</td></tr>${sectors.map((sector) => `<tr data-list-row="sectors">${displayFields.map((field) => `<td>${field === "catering" ? `<select data-sector-catering="${details.sectors.indexOf(sector)}"><option value="">No catering selected</option>${cateringServices.map((service) => `<option value="${esc(service)}" ${service === sector.catering ? "selected" : ""}>${esc(service)}</option>`).join("")}</select>` : readOnly(field, field === "notes" && sector.notes === "Imported from Envision" ? "" : sector[field])}</td>`).join("")}<td><button type="button" class="remove-row">Remove</button></td></tr>`).join("")}`).join("");
+    $("sectorsRows").innerHTML = [...byDay.entries()].map(([day, sectors]) => `<tr class="duty-date-heading"><td colspan="12">${esc(longDate(day))}</td></tr>${sectors.map((sector) => `<tr data-list-row="sectors">${displayFields.map((field) => `<td>${field === "catering" ? (isCharterSector(sector) ? `<select data-sector-catering="${details.sectors.indexOf(sector)}"><option value="">No catering selected</option>${cateringServices.map((service) => `<option value="${esc(service)}" ${service === sector.catering ? "selected" : ""}>${esc(service)}</option>`).join("")}</select>` : "") : readOnly(field, field === "notes" && sector.notes === "Imported from Envision" ? "" : sector[field])}</td>`).join("")}<td><button type="button" class="remove-row">Remove</button></td></tr>`).join("")}`).join("");
   }
   const isEnvisionCrew = (crew) => crew.source === "envision" || crew.notes === "Assigned in Envision";
   function renderTable(name) { $( `${name}Rows` ).innerHTML = details[name].map((row) => `<tr data-list-row="${name}"${name === "crew" && isEnvisionCrew(row) ? ' data-source="envision"' : ""}>${fields[name].map((field) => `<td>${input(field, row[field])}</td>`).join("")}<td><button type="button" class="remove-row">×</button></td></tr>`).join(""); }
@@ -72,7 +73,7 @@
     else delete details.handler_selections[select.dataset.handlerAirport];
     renderHandlers();
   });
-  $("applyCateringAll").addEventListener("click", () => { if (!$("cateringAll").value) return alert("Choose a catering service first."); details.sectors.forEach((sector) => { sector.catering = $("cateringAll").value; }); renderSectors(); });
+  $("applyCateringAll").addEventListener("click", () => { if (!$("cateringAll").value) return alert("Choose a catering service first."); details.sectors.forEach((sector) => { if (isCharterSector(sector)) sector.catering = $("cateringAll").value; }); renderSectors(); });
   $("briefForm").addEventListener("submit", () => {
     lists.filter((name) => name !== "sectors").forEach((name) => { details[name] = [...document.querySelectorAll(`[data-list-row="${name}"]`)].map((row) => { const item = Object.fromEntries(fields[name].map((field) => [field, row.querySelector(`[data-field="${field}"]`)?.value.trim() || ""])); if (name === "crew" && row.dataset.source === "envision") item.source = "envision"; return item; }); });
     details.operations_notes = $("operationsNotes").value.trim(); details.crew_notes = $("crewNotes").value.trim(); $("detailsJson").value = JSON.stringify(details);
