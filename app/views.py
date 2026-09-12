@@ -1534,6 +1534,24 @@ def _charter_brief_details(brief: CharterBrief) -> dict:
         return {}
 
 
+def _brief_print_date(value) -> str:
+    try:
+        return date.fromisoformat(str(value)[:10]).strftime("%A %-d %B %Y")
+    except (TypeError, ValueError):
+        return str(value or "Date TBC")
+
+
+def _brief_print_time(value) -> str:
+    raw = str(value or "")
+    if not raw:
+        return "—"
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        return parsed.strftime("%I:%M %p").lstrip("0").lower()
+    except ValueError:
+        return raw[11:16] if "T" in raw and len(raw) >= 16 else raw
+
+
 @ui_bp.get("/ops/charter-briefs")
 @_login_required
 def ops_charter_briefs():
@@ -1617,7 +1635,7 @@ def ops_charter_brief_print(brief_id: int):
     airport_codes = {str(code or "").upper().strip() for code in airports}
     selections = details.get("handler_selections") if isinstance(details.get("handler_selections"), dict) else {}
     handler_details = [entry for entry in handler_directory if entry.get("airport") in airport_codes and (not selections.get(entry.get("airport")) or selections.get(entry.get("airport")) == entry.get("label"))]
-    return render_template("charter_brief_print.html", brief=brief, details=details, handler_details=handler_details)
+    return render_template("charter_brief_print.html", brief=brief, details=details, handler_details=handler_details, format_date=_brief_print_date, format_time=_brief_print_time)
 
 
 @ui_bp.get("/charter/check-in/<token>")
