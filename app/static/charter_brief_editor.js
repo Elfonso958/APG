@@ -1,66 +1,24 @@
 (() => {
-  const app = document.getElementById("briefEditor");
-  if (!app) return;
-  const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[char]));
-  let details = {};
-  try { details = JSON.parse(app.dataset.details || "{}"); } catch (_) { details = {}; }
-  const lists = ["sectors", "crew", "accommodation", "transport", "ports"];
+  const app = document.getElementById("briefEditor"); if (!app) return;
+  const esc = (v) => String(v ?? "").replace(/[&<>'"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]));
+  let details = {}; try { details = JSON.parse(app.dataset.details || "{}"); } catch (_) { details = {}; }
+  const lists = ["sectors","crew","accommodation","transport","ports"];
+  const fields = {sectors:["date","report","flight","dep","arr","std","sta","aircraft","notes"],crew:["code","name","role","phone","hotel","notes"],accommodation:["location","hotel","address","phone","notes"],transport:["location","time","service","contact","details"],ports:["airport","source","notes"]};
   lists.forEach((name) => { if (!Array.isArray(details[name])) details[name] = []; });
-  const fields = {
-    sectors:["date","report","flight","dep","arr","std","sta","aircraft","notes"],
-    crew:["name","role","phone","hotel","notes"],
-    accommodation:["location","hotel","address","phone","notes"],
-    transport:["location","time","service","contact","details"],
-    ports:["airport","source","notes"],
-  };
-  const input = (list, field, value, type="text") => `<input type="${type}" data-field="${field}" value="${esc(value)}" aria-label="${field}">`;
-  function removeButton() { return '<button type="button" class="remove-row" title="Remove this item">×</button>'; }
-  function renderTable(list) {
-    const node = document.getElementById(`${list}Rows`);
-    node.innerHTML = details[list].map((item) => `<tr data-list-row="${list}">${fields[list].map((field) => `<td>${input(list, field, item[field])}</td>`).join("")}<td>${removeButton()}</td></tr>`).join("");
-  }
-  function renderCards(list) {
-    const node = document.getElementById(`${list}Rows`);
-    node.innerHTML = details[list].map((item) => `<article class="brief-item" data-list-row="${list}"><div class="brief-item-grid">${fields[list].map((field) => `<label>${field.replace(/\b\w/g, (c) => c.toUpperCase())}${input(list, field, item[field])}</label>`).join("")}</div>${removeButton()}</article>`).join("");
-  }
-  function render() { renderTable("sectors"); renderTable("crew"); renderCards("accommodation"); renderCards("transport"); renderCards("ports"); document.getElementById("operationsNotes").value = details.operations_notes || ""; document.getElementById("crewNotes").value = details.crew_notes || ""; }
-  function addRow(list, value={}) { details[list].push(value); render(); }
-  app.addEventListener("click", (event) => {
-    const add = event.target.closest(".add-row");
-    if (add) { addRow(add.dataset.list); return; }
-    const remove = event.target.closest(".remove-row");
-    if (!remove) return;
-    const row = remove.closest("[data-list-row]");
-    const list = row?.dataset.listRow;
-    const rows = [...document.querySelectorAll(`[data-list-row="${list}"]`)];
-    const index = rows.indexOf(row);
-    if (index >= 0) details[list].splice(index, 1);
-    render();
-  });
-  document.getElementById("briefForm").addEventListener("submit", () => {
-    lists.forEach((list) => {
-      details[list] = [...document.querySelectorAll(`[data-list-row="${list}"]`)].map((row) => Object.fromEntries(fields[list].map((field) => [field, row.querySelector(`[data-field="${field}"]`)?.value.trim() || ""])));
-    });
-    details.operations_notes = document.getElementById("operationsNotes").value.trim();
-    details.crew_notes = document.getElementById("crewNotes").value.trim();
-    document.getElementById("detailsJson").value = JSON.stringify(details);
-  });
-  document.getElementById("loadFlights").addEventListener("click", async () => {
-    const date = document.querySelector('[name="start_date"]').value;
-    if (!date) return alert("Set the charter start date first.");
-    const button = document.getElementById("loadFlights"); button.disabled = true; button.textContent = "Loading…";
-    try {
-      const response = await fetch(`${app.dataset.ganttUrl}?date=${encodeURIComponent(date)}`);
-      const data = await response.json();
-      if (!response.ok || data.ok === false) throw Error(data.error || "Unable to load Envision flights");
-      const flights = data.results || data.rows || [];
-      const charterFlights = flights.filter((flight) => /charter/i.test(`${flight.service_type || ""} ${flight.flight_type || ""} ${flight.flight_number || flight.flight || ""}`));
-      const selected = charterFlights.length ? charterFlights : flights;
-      if (!selected.length) throw Error("No flights were found for this date.");
-      if (!window.confirm(`Add ${selected.length} flight${selected.length === 1 ? "" : "s"} to this tour of duty?`)) return;
-      details.sectors.push(...selected.map((flight) => ({ date, report:"", flight:flight.flight_number || flight.flight || "", dep:flight.dep || flight.adep || "", arr:flight.ades || flight.dest || "", std:flight.std_nz || flight.std || "", sta:flight.sta_nz || flight.sta || "", aircraft:flight.reg || "", notes:"Imported from Envision" })));
-      render();
-    } catch (error) { alert(error.message); } finally { button.disabled = false; button.textContent = "Load Envision flights"; }
-  });
+  const input = (field, value) => `<input type="text" data-field="${field}" value="${esc(value)}" aria-label="${field}">`;
+  const remove = () => '<button type="button" class="remove-row" title="Remove">×</button>';
+  function table(name) { document.getElementById(`${name}Rows`).innerHTML = details[name].map((row) => `<tr data-list-row="${name}">${fields[name].map((field) => `<td>${input(field,row[field])}</td>`).join("")}<td>${remove()}</td></tr>`).join(""); }
+  function cards(name) { document.getElementById(`${name}Rows`).innerHTML = details[name].map((row) => `<article class="brief-item" data-list-row="${name}"><div class="brief-item-grid">${fields[name].map((field) => `<label>${field.replace(/\b\w/g, (c) => c.toUpperCase())}${input(field,row[field])}</label>`).join("")}</div>${remove()}</article>`).join(""); }
+  function render() { table("sectors"); table("crew"); cards("accommodation"); cards("transport"); cards("ports"); document.getElementById("operationsNotes").value=details.operations_notes||""; document.getElementById("crewNotes").value=details.crew_notes||""; }
+  app.addEventListener("click", (event) => { const add=event.target.closest(".add-row"); if(add){ details[add.dataset.list].push({}); render(); return; } const button=event.target.closest(".remove-row"), row=button?.closest("[data-list-row]"); if(!row) return; const name=row.dataset.listRow, index=[...document.querySelectorAll(`[data-list-row="${name}"]`)].indexOf(row); if(index>=0) details[name].splice(index,1); render(); });
+  document.getElementById("briefForm").addEventListener("submit", () => { lists.forEach((name)=>details[name]=[...document.querySelectorAll(`[data-list-row="${name}"]`)].map((row)=>Object.fromEntries(fields[name].map((field)=>[field,row.querySelector(`[data-field="${field}"]`)?.value.trim()||""])))); details.operations_notes=document.getElementById("operationsNotes").value.trim(); details.crew_notes=document.getElementById("crewNotes").value.trim(); document.getElementById("detailsJson").value=JSON.stringify(details); });
+  const dialog=$("envisionFlightsDialog"), list=$("envisionFlightsList"), status=$("envisionFlightsStatus"); let flights=[]; function $(id){return document.getElementById(id)}
+  const fmt=(v)=>{if(!v)return"TBC";const d=new Date(v);return Number.isNaN(d)?String(v):new Intl.DateTimeFormat("en-NZ",{hour:"2-digit",minute:"2-digit",hour12:true}).format(d)};
+  function renderFlights(){const groups=new Map();flights.forEach((f,i)=>{const reg=String(f.reg||f.registration||"Aircraft TBC").toUpperCase();if(!groups.has(reg))groups.set(reg,[]);groups.get(reg).push({f,i})});list.innerHTML=[...groups.entries()].map(([reg,items])=>`<section class="envision-aircraft-group"><label class="envision-aircraft-heading"><input type="checkbox" data-aircraft="${esc(reg)}"><strong>${esc(reg)}</strong><span>${items.length} scheduled sector${items.length===1?"":"s"}</span></label>${items.map(({f,i})=>`<label class="envision-flight-row"><input type="checkbox" data-envision-flight="${i}"><span><strong>${esc(f.flight_number||f.flight||"Flight TBC")}</strong> · ${esc(f.dep||f.adep||"---")} – ${esc(f.ades||f.dest||"---")}</span><span>${esc(fmt(f.std_nz||f.std))} · ${esc(f.aircraft_type||"")}</span></label>`).join("")}</section>`).join("")||'<p class="brief-empty">No flights were returned for this date.</p>';}
+  $("loadFlights").addEventListener("click",async()=>{const date=document.querySelector('[name="start_date"]').value;if(!date)return alert("Set the charter start date first.");dialog.showModal();status.textContent="Loading scheduled flights from Envision…";list.innerHTML="";try{const r=await fetch(`${app.dataset.ganttUrl}?date=${encodeURIComponent(date)}`),d=await r.json();if(!r.ok||d.ok===false)throw Error(d.error||"Unable to load Envision flights");flights=d.results||d.rows||[];status.textContent=`${flights.length} scheduled flights for ${date}. Select the charter sectors to include.`;renderFlights()}catch(e){status.textContent=e.message}});
+  $("closeEnvisionFlights").addEventListener("click",()=>dialog.close()); list.addEventListener("change",(e)=>{const reg=e.target.dataset.aircraft;if(!reg)return;list.querySelectorAll("[data-envision-flight]").forEach((box)=>{const f=flights[Number(box.dataset.envisionFlight)];if(String(f?.reg||f?.registration||"Aircraft TBC").toUpperCase()===reg)box.checked=e.target.checked})}); $("selectAllEnvisionFlights").addEventListener("click",()=>list.querySelectorAll('input[type="checkbox"]').forEach((box)=>box.checked=true));
+  async function assignedCrew(selected){const existing=new Set(details.crew.map((c)=>String(c.code||c.name||"").toUpperCase()));const results=await Promise.all(selected.map(async(f)=>{const id=f.envision_flight_id||f.id||f.flight_id;if(!id)return[];try{const r=await fetch(`${app.dataset.flightCrewUrl}?flight_id=${encodeURIComponent(id)}&compact=1`),d=await r.json();return r.ok&&d.ok!==false?d.crew||[]:[]}catch(_){return[]}}));results.flat().forEach((c)=>{const code=String(c.employee_no||c.employeeNo||c.code||"").toUpperCase(),name=String(c.name||""),key=code||name.toUpperCase();if(!key||existing.has(key))return;details.crew.push({code,name,role:c.position||"",phone:"",hotel:"",notes:"Assigned in Envision"});existing.add(key)})}
+  $("addSelectedEnvisionFlights").addEventListener("click",async()=>{const date=document.querySelector('[name="start_date"]').value,selected=[...list.querySelectorAll('[data-envision-flight]:checked')].map((b)=>flights[Number(b.dataset.envisionFlight)]).filter(Boolean);if(!selected.length)return alert("Select at least one flight.");const b=$("addSelectedEnvisionFlights");b.disabled=true;b.textContent="Adding crew…";details.sectors.push(...selected.map((f)=>({date,report:"",flight:f.flight_number||f.flight||"",dep:f.dep||f.adep||"",arr:f.ades||f.dest||"",std:f.std_nz||f.std||"",sta:f.sta_nz||f.sta||"",aircraft:f.reg||f.registration||"",notes:"Imported from Envision"})));await assignedCrew(selected);render();dialog.close();b.disabled=false;b.textContent="Add selected flights"});
+  $("addSupplementaryCrew").addEventListener("click",async()=>{const code=window.prompt("Enter the supplementary crew member's crew code:");if(!code)return;try{const r=await fetch(`${app.dataset.crewLookupUrl}?crew_code=${encodeURIComponent(code.trim().toUpperCase())}`),d=await r.json();if(!r.ok||d.ok===false)throw Error(d.error||"Crew member not found");const c=d.crew;if(details.crew.some((x)=>String(x.code||"").toUpperCase()===c.code))return alert(`${c.code} is already on this brief.`);details.crew.push({code:c.code,name:c.name,role:"Supplementary",phone:c.phone||"",hotel:"",notes:"Supplementary crew"});render()}catch(e){alert(e.message)}});
   render();
 })();

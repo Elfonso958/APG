@@ -5322,6 +5322,29 @@ def api_envision_flight_crew():
         return jsonify(ok=False, error=str(e)), 500
 
 
+@api_bp.get("/envision/crew_member")
+def api_envision_crew_member():
+    """Resolve one supplementary crew member from their Envision crew code."""
+    crew_code = str(request.args.get("crew_code") or "").strip().upper()
+    if not crew_code:
+        return jsonify(ok=False, error="Missing crew_code"), 400
+    try:
+        token = envision_authenticate()["token"]
+        matches = envision_get_employees(token, employee_no=crew_code) or []
+        employee = next((row for row in matches if str(row.get("employeeNo") or "").strip().upper() == crew_code), None)
+        if not employee:
+            return jsonify(ok=False, error=f"No active crew member was found for code {crew_code}"), 404
+        return jsonify(ok=True, crew={
+            "code": crew_code,
+            "name": _display_employee_name(employee),
+            "phone": str(employee.get("phone") or employee.get("mobilePhone") or employee.get("mobile") or "").strip(),
+            "email": str(employee.get("email") or "").strip(),
+        })
+    except Exception as exc:
+        current_app.logger.exception("Unable to look up crew code %s", crew_code)
+        return jsonify(ok=False, error=str(exc)), 502
+
+
 @api_bp.post("/envision/crew_briefing")
 def api_envision_crew_briefing():
     """Return assigned crew only for flights operated by one crew member."""
