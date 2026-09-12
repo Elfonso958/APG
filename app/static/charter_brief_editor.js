@@ -5,6 +5,8 @@
   const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "'":"&#39;", '"':"&quot;" }[char]));
   let details = {};
   try { details = JSON.parse(app.dataset.details || "{}"); } catch (_) { details = {}; }
+  let handlerDirectory = [];
+  try { handlerDirectory = JSON.parse(app.dataset.handlerDirectory || "[]"); } catch (_) { handlerDirectory = []; }
   const lists = ["sectors", "crew", "accommodation", "transport", "ports"];
   const fields = {
     sectors:["date", "source_flight_id", "flight", "dep", "arr", "std", "sta", "aircraft", "flight_type", "passenger_info", "crew_codes", "notes"],
@@ -32,7 +34,12 @@
   const isEnvisionCrew = (crew) => crew.source === "envision" || crew.notes === "Assigned in Envision";
   function renderTable(name) { $( `${name}Rows` ).innerHTML = details[name].map((row) => `<tr data-list-row="${name}">${fields[name].map((field) => `<td>${input(field, name === "crew" && field === "notes" && isEnvisionCrew(row) ? "" : row[field])}</td>`).join("")}<td><button type="button" class="remove-row">×</button></td></tr>`).join(""); }
   function renderCards(name) { $( `${name}Rows` ).innerHTML = details[name].map((row) => `<article class="brief-item" data-list-row="${name}"><div class="brief-item-grid">${fields[name].map((field) => `<label>${field.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())}${input(field, row[field])}</label>`).join("")}</div><button type="button" class="remove-row">×</button></article>`).join(""); }
-  function render() { renderSectors(); renderTable("crew"); renderCards("accommodation"); renderCards("transport"); renderCards("ports"); $("operationsNotes").value = details.operations_notes || ""; $("crewNotes").value = details.crew_notes || ""; }
+  function renderHandlers() {
+    const airports = new Set(details.sectors.flatMap((sector) => [sector.dep, sector.arr]).map((code) => String(code || "").toUpperCase().trim()).filter(Boolean));
+    const entries = handlerDirectory.filter((entry) => airports.has(entry.airport));
+    $("handlerRows").innerHTML = entries.length ? entries.map((entry) => `<article class="handler-card"><h3>${esc(entry.label)} <span>${esc(entry.handler)}</span></h3><dl><div><dt>Contact</dt><dd>${esc(entry.contact || "—")}<br>${esc(entry.phone || "—")}${entry.additional_phone ? `<br>${esc(entry.additional_phone)}` : ""}</dd></div><div><dt>Agent frequency</dt><dd>${esc(entry.frequency || "—")}</dd></div><div><dt>GPU</dt><dd>${esc(entry.gpu || "—")}</dd></div><div><dt>Fuel</dt><dd>${esc(entry.fuel || "—")}</dd></div>${entry.emails?.length ? `<div class="handler-emails"><dt>Email</dt><dd>${entry.emails.map(esc).join("<br>")}</dd></div>` : ""}${entry.notes ? `<div class="handler-notes"><dt>Operational note</dt><dd>${esc(entry.notes)}</dd></div>` : ""}</dl></article>`).join("") : `<p class="section-help">Select a flight to show handling and fuel details for its airports.</p>`;
+  }
+  function render() { renderSectors(); renderTable("crew"); renderHandlers(); renderCards("accommodation"); renderCards("transport"); renderCards("ports"); $("operationsNotes").value = details.operations_notes || ""; $("crewNotes").value = details.crew_notes || ""; }
   app.addEventListener("click", async (event) => {
     const add = event.target.closest(".add-row");
     if (add) { details[add.dataset.list].push({}); render(); return; }

@@ -2,6 +2,7 @@
 from datetime import date, datetime, time, timezone, timedelta
 from flask import session
 from .models import SyncRun, SyncFlightLog, AppConfig, CharterManifest, CharterBrief, AppUser, EmailSettings
+from .airport_handling import AIRPORT_HANDLERS, handlers_for_airports
 from . import db
 from .kmh_auth import create_kmh_session, clear_kmh_session, get_kmh_session
 from .zenith_client import fetch_dcs_for_flight
@@ -1561,7 +1562,7 @@ def ops_charter_brief_edit(brief_id: int):
         db.session.add(brief)
         db.session.commit()
         return redirect(url_for("ui.ops_charter_brief_edit", brief_id=brief.id))
-    return render_template("charter_brief_edit.html", brief=brief, details=_charter_brief_details(brief))
+    return render_template("charter_brief_edit.html", brief=brief, details=_charter_brief_details(brief), handler_directory=AIRPORT_HANDLERS)
 
 
 @ui_bp.get("/ops/charter-briefs/<int:brief_id>/print")
@@ -1570,7 +1571,9 @@ def ops_charter_brief_print(brief_id: int):
     brief = db.session.get(CharterBrief, brief_id)
     if not brief:
         abort(404)
-    return render_template("charter_brief_print.html", brief=brief, details=_charter_brief_details(brief))
+    details = _charter_brief_details(brief)
+    airports = [sector.get(field) for sector in details.get("sectors", []) for field in ("dep", "arr")]
+    return render_template("charter_brief_print.html", brief=brief, details=details, handler_details=handlers_for_airports(airports))
 
 
 @ui_bp.get("/charter/check-in/<token>")
