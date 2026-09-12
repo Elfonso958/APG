@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block head_extra %}<link rel="stylesheet" href="{{ url_for('static', filename='charter_briefs.css') }}?v=1">{% endblock %}
+{% block content %}
+<section class="brief-page">
+  <div class="brief-heading"><div><p class="brief-kicker">Operations</p><h1>Charter Briefs</h1><p>Create, publish and retain the operational briefing for each charter.</p></div><a class="btn" href="{{ url_for('ui.ops_charter_brief_new') }}">New charter brief</a></div>
+  <div class="brief-list">
+    {% for brief in briefs %}
+    <a class="brief-card" href="{{ url_for('ui.ops_charter_brief_edit', brief_id=brief.id) }}"><div><span class="brief-status {{ brief.status|lower }}">{{ brief.status }}</span><h2>{{ brief.title }}</h2><p>{{ brief.reference }}{% if brief.charterer %} · {{ brief.charterer }}{% endif %}</p></div><div class="brief-date">{{ brief.start_date.strftime('%d %b %Y') if brief.start_date else 'Dates TBC' }}<br><small>Version {{ brief.version }}</small></div></a>
+    {% else %}<div class="brief-empty"><h2>No charter briefs yet</h2><p>Start a brief and use it as the single operational source for the charter.</p></div>{% endfor %}
+  </div>
+</section>
+{% endblock %}

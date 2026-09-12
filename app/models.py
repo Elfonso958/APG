@@ -110,6 +110,25 @@ class CharterManifest(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
 
+class CharterBrief(db.Model):
+    """A controlled operational brief. Detail is stored as JSON so the form can evolve safely."""
+    __tablename__ = "charter_briefs"
+
+    id = db.Column(db.Integer, primary_key=True)
+    reference = db.Column(db.String(48), unique=True, index=True, nullable=False)
+    title = db.Column(db.String(255), nullable=False)
+    charterer = db.Column(db.String(255), nullable=True)
+    start_date = db.Column(db.Date, nullable=True, index=True)
+    end_date = db.Column(db.Date, nullable=True, index=True)
+    status = db.Column(db.String(24), nullable=False, default="Draft")
+    version = db.Column(db.Integer, nullable=False, default=1)
+    details_json = db.Column(db.Text, nullable=False, default="{}")
+    published_at = db.Column(db.DateTime, nullable=True)
+    published_by = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class AppUser(db.Model):
     """Local APG accounts. These are deliberately separate from Envision accounts."""
     __tablename__ = "app_users"

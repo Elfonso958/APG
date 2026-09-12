@@ -1,7 +1,7 @@
 ﻿from flask import Blueprint, render_template, request, redirect, jsonify, flash, current_app,send_file, abort, url_for, make_response
 from datetime import date, datetime, time, timezone, timedelta
 from flask import session
-from .models import SyncRun, SyncFlightLog, AppConfig, CharterManifest, AppUser, EmailSettings
+from .models import SyncRun, SyncFlightLog, AppConfig, CharterManifest, CharterBrief, AppUser, EmailSettings
 from . import db
 from .kmh_auth import create_kmh_session, clear_kmh_session, get_kmh_session
 from .zenith_client import fetch_dcs_for_flight
@@ -1484,6 +1484,93 @@ def dcs_charter_checkin():
     except ValueError:
         day = _nz_today()
     return render_template("charter_checkin.html", day=day)
+
+
+def _charter_brief_details(brief: CharterBrief) -> dict:
+    try:
+        value = json.loads(brief.details_json or "{}")
+        return value if isinstance(value, dict) else {}
+    except (TypeError, ValueError):
+        return {}
+
+
+@ui_bp.get("/ops/charter-briefs")
+@_login_required
+def ops_charter_briefs():
+    briefs = CharterBrief.query.order_by(CharterBrief.start_date.desc(), CharterBrief.updated_at.desc()).all()
+    return render_template("charter_briefs.html", briefs=briefs)
+
+
+@ui_bp.route("/ops/charter-briefs/new", methods=["GET", "POST"])
+@_login_required
+def ops_charter_brief_new():
+    if request.method == "POST":
+        if not _csrf_is_valid():
+            flash("Your form expired. Please try again.", "danger")
+            return redirect(url_for("ui.ops_charter_brief_new"))
+        start = request.form.get("start_date") or None
+        try:
+            start_date = date.fromisoformat(start) if start else _nz_today()
+        except ValueError:
+            start_date = _nz_today()
+        reference = f"CB-{start_date:%Y%m%d}-{secrets.token_hex(2).upper()}"
+        brief = CharterBrief(reference=reference, title="New charter brief", start_date=start_date, end_date=start_date)
+        db.session.add(brief)
+        db.session.commit()
+        return redirect(url_for("ui.ops_charter_brief_edit", brief_id=brief.id))
+    return render_template("charter_brief_new.html", today=_nz_today())
+
+
+@ui_bp.route("/ops/charter-briefs/<int:brief_id>", methods=["GET", "POST"])
+@_login_required
+def ops_charter_brief_edit(brief_id: int):
+    brief = db.session.get(CharterBrief, brief_id)
+    if not brief:
+        abort(404)
+    if request.method == "POST":
+        if not _csrf_is_valid():
+            flash("Your form expired. Please try again.", "danger")
+            return redirect(url_for("ui.ops_charter_brief_edit", brief_id=brief.id))
+        try:
+            details = json.loads(request.form.get("details_json") or "{}")
+            if not isinstance(details, dict):
+                raise ValueError
+        except ValueError:
+            flash("The briefing detail could not be saved. Please reload and try again.", "danger")
+            return redirect(url_for("ui.ops_charter_brief_edit", brief_id=brief.id))
+        brief.title = str(request.form.get("title") or "").strip() or "Untitled charter brief"
+        brief.charterer = str(request.form.get("charterer") or "").strip() or None
+        for field in ("start_date", "end_date"):
+            value = str(request.form.get(field) or "").strip()
+            try:
+                setattr(brief, field, date.fromisoformat(value) if value else None)
+            except ValueError:
+                pass
+        brief.details_json = json.dumps(details, ensure_ascii=False)
+        action = request.form.get("action")
+        if action == "publish":
+            brief.status = "Published"
+            brief.version += 1
+            brief.published_at = datetime.utcnow()
+            user = _current_apg_user()
+            brief.published_by = user.display_name or user.email if user else None
+            flash(f"Version {brief.version} published.", "success")
+        else:
+            brief.status = "Draft"
+            flash("Charter brief saved as a draft.", "success")
+        db.session.add(brief)
+        db.session.commit()
+        return redirect(url_for("ui.ops_charter_brief_edit", brief_id=brief.id))
+    return render_template("charter_brief_edit.html", brief=brief, details=_charter_brief_details(brief))
+
+
+@ui_bp.get("/ops/charter-briefs/<int:brief_id>/print")
+@_login_required
+def ops_charter_brief_print(brief_id: int):
+    brief = db.session.get(CharterBrief, brief_id)
+    if not brief:
+        abort(404)
+    return render_template("charter_brief_print.html", brief=brief, details=_charter_brief_details(brief))
 
 
 @ui_bp.get("/charter/check-in/<token>")

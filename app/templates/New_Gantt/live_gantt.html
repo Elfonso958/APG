@@ -63,6 +63,7 @@
         {% else %}
         <a class="btn btn-ghost view-link" href="{{ url_for('ui.dcs_crew_briefing', date=day.isoformat()) }}">Crew Briefing</a>
         <a class="btn btn-ghost view-link" href="{{ url_for('ui.dcs_charter_checkin', date=day.isoformat()) }}">Charter Check-in</a>
+        <a class="btn btn-ghost view-link" href="{{ url_for('ui.ops_charter_briefs') }}">Charter Briefs</a>
         {% endif %}
         <label class="ctrl">
           <span>{{ "Starting date" if page_view == "briefing" else "Date" }}</span>
