@@ -36,7 +36,25 @@
   }
   const isEnvisionCrew = (crew) => crew.source === "envision" || crew.notes === "Assigned in Envision";
   function renderTable(name) { $( `${name}Rows` ).innerHTML = details[name].map((row) => `<tr data-list-row="${name}"${name === "crew" && isEnvisionCrew(row) ? ' data-source="envision"' : ""}>${fields[name].map((field) => `<td>${input(field, row[field])}</td>`).join("")}<td><button type="button" class="remove-row">×</button></td></tr>`).join(""); }
-  function renderCards(name) { $( `${name}Rows` ).innerHTML = details[name].map((row) => `<article class="brief-item" data-list-row="${name}"><div class="brief-item-grid">${fields[name].map((field) => `<label>${field.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())}${input(field, row[field])}</label>`).join("")}</div><button type="button" class="remove-row">×</button></article>`).join(""); }
+  function syncDailyGroundArrangements() {
+    const days = new Map();
+    details.sectors.forEach((sector) => { if (sector.date) days.set(sector.date, [...(days.get(sector.date) || []), sector]); });
+    days.forEach((sectors, day) => {
+      const finalSector = sectors[sectors.length - 1], location = String(finalSector.arr || "").toUpperCase().trim();
+      if (!location || location === "AKL") return;
+      ["accommodation", "transport"].forEach((name) => {
+        if (!details[name].some((row) => row.date === day && String(row.location || "").toUpperCase() === location)) details[name].push({ date:day, location, _auto_ground:true });
+      });
+    });
+  }
+  function renderCards(name) {
+    const isGround = ["accommodation", "transport"].includes(name);
+    $( `${name}Rows` ).innerHTML = details[name].map((row) => {
+      const contentFields = isGround ? fields[name].filter((field) => !["date", "location"].includes(field)) : fields[name];
+      const heading = isGround ? `<h3 class="ground-day-heading">${esc(longDate(row.date || "Date TBC"))} · ${esc(row.location || "Location TBC")}</h3><input type="hidden" data-field="date" value="${esc(row.date)}"><input type="hidden" data-field="location" value="${esc(row.location)}">` : "";
+      return `<article class="brief-item" data-list-row="${name}"><div class="brief-item-grid">${heading}${contentFields.map((field) => `<label>${field.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())}${input(field, row[field])}</label>`).join("")}</div>${row._auto_ground ? "" : '<button type="button" class="remove-row">×</button>'}</article>`;
+    }).join("");
+  }
   function renderHandlersOld() {
     const airports = new Set(details.sectors.flatMap((sector) => [sector.dep, sector.arr]).map((code) => String(code || "").toUpperCase().trim()).filter(Boolean));
     const entries = handlerDirectory.filter((entry) => airports.has(entry.airport));
@@ -51,7 +69,7 @@
       return `<article class="handler-card"><h3>${esc(airport)} handling</h3><label class="handler-select-label">Handling provider<select data-handler-airport="${esc(airport)}"><option value="">Select handling provider...</option>${options.map((entry) => `<option value="${esc(entry.label)}" ${entry.label === selectedLabel ? "selected" : ""}>${esc(entry.label)} — ${esc(entry.handler)}</option>`).join("")}</select></label>${selected ? detail(selected) : `<p class="section-help">Choose the handling provider for this airport.</p>`}</article>`;
     }).join("") : `<p class="section-help">Select a flight to show handling and fuel details for its airports.</p>`;
   }
-  function render() { $("cateringAll").innerHTML = `<option value="">Apply catering to all flights...</option>${cateringServices.map((service) => `<option value="${esc(service)}">${esc(service)}</option>`).join("")}`; renderSectors(); renderTable("crew"); renderHandlers(); renderCards("accommodation"); renderCards("transport"); renderCards("ports"); $("operationsNotes").value = details.operations_notes || ""; $("crewNotes").value = details.crew_notes || ""; }
+  function render() { syncDailyGroundArrangements(); $("cateringAll").innerHTML = `<option value="">Apply catering to all flights...</option>${cateringServices.map((service) => `<option value="${esc(service)}">${esc(service)}</option>`).join("")}`; renderSectors(); renderTable("crew"); renderHandlers(); renderCards("accommodation"); renderCards("transport"); renderCards("ports"); $("operationsNotes").value = details.operations_notes || ""; $("crewNotes").value = details.crew_notes || ""; }
   app.addEventListener("click", async (event) => {
     const add = event.target.closest(".add-row");
     if (add) { details[add.dataset.list].push({}); render(); return; }
