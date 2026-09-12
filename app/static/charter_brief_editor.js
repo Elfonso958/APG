@@ -7,7 +7,7 @@
   try { details = JSON.parse(app.dataset.details || "{}"); } catch (_) { details = {}; }
   const lists = ["sectors", "crew", "accommodation", "transport", "ports"];
   const fields = {
-    sectors:["date", "source_flight_id", "report", "flight", "dep", "arr", "std", "sta", "aircraft", "flight_type", "passenger_info", "crew_codes", "notes"],
+    sectors:["date", "source_flight_id", "flight", "dep", "arr", "std", "sta", "aircraft", "flight_type", "passenger_info", "crew_codes", "notes"],
     crew:["code", "name", "role", "phone", "hotel", "notes"],
     accommodation:["date", "location", "hotel", "address", "phone", "notes"],
     transport:["date", "location", "time", "service", "contact", "details"],
@@ -27,12 +27,13 @@
     const displayFields = fields.sectors.filter((field) => !["date", "source_flight_id"].includes(field));
     const byDay = new Map();
     details.sectors.forEach((sector) => { const day = sector.date || "Date TBC"; if (!byDay.has(day)) byDay.set(day, []); byDay.get(day).push(sector); });
-    $("sectorsRows").innerHTML = [...byDay.entries()].map(([day, sectors]) => `<tr class="duty-date-heading"><td colspan="12">${esc(longDate(day))}</td></tr>${sectors.map((sector) => `<tr data-list-row="sectors">${displayFields.map((field) => `<td>${readOnly(field, sector[field])}</td>`).join("")}<td><button type="button" class="remove-row">Remove</button></td></tr>`).join("")}`).join("");
+    $("sectorsRows").innerHTML = [...byDay.entries()].map(([day, sectors]) => `<tr class="duty-date-heading"><td colspan="11">${esc(longDate(day))}</td></tr>${sectors.map((sector) => `<tr data-list-row="sectors">${displayFields.map((field) => `<td>${readOnly(field, field === "notes" && sector.notes === "Imported from Envision" ? "" : sector[field])}</td>`).join("")}<td><button type="button" class="remove-row">Remove</button></td></tr>`).join("")}`).join("");
   }
-  function renderTable(name) { $( `${name}Rows` ).innerHTML = details[name].map((row) => `<tr data-list-row="${name}">${fields[name].map((field) => `<td>${input(field, row[field])}</td>`).join("")}<td><button type="button" class="remove-row">×</button></td></tr>`).join(""); }
+  const isEnvisionCrew = (crew) => crew.source === "envision" || crew.notes === "Assigned in Envision";
+  function renderTable(name) { $( `${name}Rows` ).innerHTML = details[name].map((row) => `<tr data-list-row="${name}">${fields[name].map((field) => `<td>${input(field, name === "crew" && field === "notes" && isEnvisionCrew(row) ? "" : row[field])}</td>`).join("")}<td><button type="button" class="remove-row">×</button></td></tr>`).join(""); }
   function renderCards(name) { $( `${name}Rows` ).innerHTML = details[name].map((row) => `<article class="brief-item" data-list-row="${name}"><div class="brief-item-grid">${fields[name].map((field) => `<label>${field.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())}${input(field, row[field])}</label>`).join("")}</div><button type="button" class="remove-row">×</button></article>`).join(""); }
   function render() { renderSectors(); renderTable("crew"); renderCards("accommodation"); renderCards("transport"); renderCards("ports"); $("operationsNotes").value = details.operations_notes || ""; $("crewNotes").value = details.crew_notes || ""; }
-  app.addEventListener("click", (event) => {
+  app.addEventListener("click", async (event) => {
     const add = event.target.closest(".add-row");
     if (add) { details[add.dataset.list].push({}); render(); return; }
     const row = event.target.closest(".remove-row")?.closest("[data-list-row]");
@@ -40,6 +41,7 @@
     const name = row.dataset.listRow;
     const index = [...document.querySelectorAll(`[data-list-row="${name}"]`)].indexOf(row);
     if (index >= 0) details[name].splice(index, 1);
+    if (name === "sectors") await reconcileAssignedCrew();
     render();
   });
   $("briefForm").addEventListener("submit", () => {
@@ -65,12 +67,20 @@
   async function assignedCrew(selected, sectors) {
     const known = new Set(details.crew.map((crew) => String(crew.code || crew.name || "").toUpperCase()));
     const results = await Promise.all(selected.map(async (flight) => { const id = flight.envision_flight_id || flight.id || flight.flight_id; if (!id) return []; try { const response = await fetch(`${app.dataset.flightCrewUrl}?flight_id=${encodeURIComponent(id)}&compact=1`); const data = await response.json(); return response.ok && data.ok !== false ? (data.crew || []) : []; } catch (_) { return []; } }));
-    results.forEach((crewList, index) => { const codes = []; crewList.forEach((crew) => { const code = String(crew.employee_no || crew.employeeNo || crew.code || "").toUpperCase(), name = String(crew.name || ""), key = code || name.toUpperCase(); if (code) codes.push(code); if (!key || known.has(key)) return; details.crew.push({ code, name, role:crew.position || "", phone:"", hotel:"", notes:"Assigned in Envision" }); known.add(key); }); sectors[index].crew_codes = codes.join(", "); });
+    results.forEach((crewList, index) => { const codes = []; crewList.forEach((crew) => { const code = String(crew.employee_no || crew.employeeNo || crew.code || "").toUpperCase(), name = String(crew.name || ""), key = code || name.toUpperCase(); if (code) codes.push(code); if (!key || known.has(key)) return; details.crew.push({ code, name, role:crew.position || "", phone:"", hotel:"", notes:"", source:"envision" }); known.add(key); }); sectors[index].crew_codes = codes.join(", "); });
+  }
+  async function reconcileAssignedCrew() {
+    // Preserve manually added supplementary crew, then rebuild the Envision crew
+    // from the sectors that still belong to this brief.
+    details.crew = details.crew.filter((crew) => !isEnvisionCrew(crew));
+    const remaining = details.sectors.filter((sector) => sector.source_flight_id);
+    remaining.forEach((sector) => { sector.crew_codes = ""; });
+    await assignedCrew(remaining.map((sector) => ({ envision_flight_id:sector.source_flight_id })), remaining);
   }
   $("addSelectedEnvisionFlights").addEventListener("click", async () => {
     const selected = [...flightList.querySelectorAll('[data-envision-flight]:checked')].map((box) => flights[Number(box.dataset.envisionFlight)]).filter(Boolean); if (!selected.length) return alert("Select at least one flight.");
     const button = $("addSelectedEnvisionFlights"); button.disabled = true; button.textContent = "Adding crew…";
-    const added = selected.map((flight) => ({ date:flight._briefDate, source_flight_id:flight.envision_flight_id || flight.id || flight.flight_id || "", report:"", flight:flight.flight_number || flight.flight || "", dep:flight.dep || flight.adep || "", arr:flight.ades || flight.dest || "", std:flight.std_nz || flight.std || "", sta:flight.sta_nz || flight.sta || "", aircraft:flight.reg || flight.registration || "", flight_type:flight.flight_type || flight.service_type || "", passenger_info:passengerInfo(flight), crew_codes:"", notes:"Imported from Envision" }));
+    const added = selected.map((flight) => ({ date:flight._briefDate, source_flight_id:flight.envision_flight_id || flight.id || flight.flight_id || "", flight:flight.flight_number || flight.flight || "", dep:flight.dep || flight.adep || "", arr:flight.ades || flight.dest || "", std:flight.std_nz || flight.std || "", sta:flight.sta_nz || flight.sta || "", aircraft:flight.reg || flight.registration || "", flight_type:flight.flight_type || flight.service_type || "", passenger_info:passengerInfo(flight), crew_codes:"", notes:"" }));
     details.sectors.push(...added); await assignedCrew(selected, added); render(); dialog.close(); button.disabled = false; button.textContent = "Add selected flights";
   });
   $("refreshTourData").addEventListener("click", async () => {
@@ -81,10 +91,10 @@
       details.sectors.forEach((sector) => {
         const flight = feed.find((row) => String(row.envision_flight_id || row.id || row.flight_id || "") === String(sector.source_flight_id || "")) || feed.find((row) => row._briefDate === sector.date && String(row.flight_number || row.flight || "") === String(sector.flight || ""));
         if (!flight) return;
-        Object.assign(sector, { source_flight_id:flight.envision_flight_id || flight.id || flight.flight_id || sector.source_flight_id, flight:flight.flight_number || flight.flight || sector.flight, dep:flight.dep || flight.adep || sector.dep, arr:flight.ades || flight.dest || sector.arr, std:flight.std_nz || flight.std || sector.std, sta:flight.sta_nz || flight.sta || sector.sta, aircraft:flight.reg || flight.registration || sector.aircraft, flight_type:flight.flight_type || flight.service_type || sector.flight_type, passenger_info:passengerInfo(flight), crew_codes:"", notes:"Imported from Envision" });
+        Object.assign(sector, { source_flight_id:flight.envision_flight_id || flight.id || flight.flight_id || sector.source_flight_id, flight:flight.flight_number || flight.flight || sector.flight, dep:flight.dep || flight.adep || sector.dep, arr:flight.ades || flight.dest || sector.arr, std:flight.std_nz || flight.std || sector.std, sta:flight.sta_nz || flight.sta || sector.sta, aircraft:flight.reg || flight.registration || sector.aircraft, flight_type:flight.flight_type || flight.service_type || sector.flight_type, passenger_info:passengerInfo(flight), crew_codes:"", notes:"" });
         refreshed.push(sector); selected.push(flight);
       });
-      details.crew = details.crew.filter((crew) => crew.notes !== "Assigned in Envision"); await assignedCrew(selected, refreshed); render();
+      details.crew = details.crew.filter((crew) => !isEnvisionCrew(crew)); await assignedCrew(selected, refreshed); render();
     } catch (error) { alert(error.message); } finally { button.disabled = false; button.classList.remove("is-loading"); }
   });
   $("addSupplementaryCrew").addEventListener("click", async () => { const code = window.prompt("Enter the supplementary crew member's crew code:"); if (!code) return; try { const response = await fetch(`${app.dataset.crewLookupUrl}?crew_code=${encodeURIComponent(code.trim().toUpperCase())}`); const data = await response.json(); if (!response.ok || data.ok === false) throw Error(data.error || "Crew member not found"); const crew = data.crew; if (details.crew.some((item) => String(item.code || "").toUpperCase() === crew.code)) return alert(`${crew.code} is already on this brief.`); details.crew.push({ code:crew.code, name:crew.name, role:"Supplementary", phone:crew.phone || "", hotel:"", notes:"Supplementary crew" }); render(); } catch (error) { alert(error.message); } });
