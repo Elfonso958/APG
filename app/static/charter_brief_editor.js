@@ -10,7 +10,7 @@
   const lists = ["sectors", "crew", "accommodation", "transport", "ports"];
   const fields = {
     sectors:["date", "source_flight_id", "flight", "dep", "arr", "std", "sta", "aircraft", "flight_type", "passenger_info", "crew_codes", "notes"],
-    crew:["code", "name", "role", "phone", "hotel", "notes"],
+    crew:["code", "name", "role", "phone"],
     accommodation:["date", "location", "hotel", "address", "phone", "notes"],
     transport:["date", "location", "time", "service", "contact", "details"],
     ports:["airport", "source", "notes"],
@@ -32,7 +32,7 @@
     $("sectorsRows").innerHTML = [...byDay.entries()].map(([day, sectors]) => `<tr class="duty-date-heading"><td colspan="11">${esc(longDate(day))}</td></tr>${sectors.map((sector) => `<tr data-list-row="sectors">${displayFields.map((field) => `<td>${readOnly(field, field === "notes" && sector.notes === "Imported from Envision" ? "" : sector[field])}</td>`).join("")}<td><button type="button" class="remove-row">Remove</button></td></tr>`).join("")}`).join("");
   }
   const isEnvisionCrew = (crew) => crew.source === "envision" || crew.notes === "Assigned in Envision";
-  function renderTable(name) { $( `${name}Rows` ).innerHTML = details[name].map((row) => `<tr data-list-row="${name}">${fields[name].map((field) => `<td>${input(field, name === "crew" && field === "notes" && isEnvisionCrew(row) ? "" : row[field])}</td>`).join("")}<td><button type="button" class="remove-row">×</button></td></tr>`).join(""); }
+  function renderTable(name) { $( `${name}Rows` ).innerHTML = details[name].map((row) => `<tr data-list-row="${name}"${name === "crew" && isEnvisionCrew(row) ? ' data-source="envision"' : ""}>${fields[name].map((field) => `<td>${input(field, row[field])}</td>`).join("")}<td><button type="button" class="remove-row">×</button></td></tr>`).join(""); }
   function renderCards(name) { $( `${name}Rows` ).innerHTML = details[name].map((row) => `<article class="brief-item" data-list-row="${name}"><div class="brief-item-grid">${fields[name].map((field) => `<label>${field.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())}${input(field, row[field])}</label>`).join("")}</div><button type="button" class="remove-row">×</button></article>`).join(""); }
   function renderHandlersOld() {
     const airports = new Set(details.sectors.flatMap((sector) => [sector.dep, sector.arr]).map((code) => String(code || "").toUpperCase().trim()).filter(Boolean));
@@ -69,7 +69,7 @@
     renderHandlers();
   });
   $("briefForm").addEventListener("submit", () => {
-    lists.filter((name) => name !== "sectors").forEach((name) => { details[name] = [...document.querySelectorAll(`[data-list-row="${name}"]`)].map((row) => Object.fromEntries(fields[name].map((field) => [field, row.querySelector(`[data-field="${field}"]`)?.value.trim() || ""]))); });
+    lists.filter((name) => name !== "sectors").forEach((name) => { details[name] = [...document.querySelectorAll(`[data-list-row="${name}"]`)].map((row) => { const item = Object.fromEntries(fields[name].map((field) => [field, row.querySelector(`[data-field="${field}"]`)?.value.trim() || ""])); if (name === "crew" && row.dataset.source === "envision") item.source = "envision"; return item; }); });
     details.operations_notes = $("operationsNotes").value.trim(); details.crew_notes = $("crewNotes").value.trim(); $("detailsJson").value = JSON.stringify(details);
   });
 
