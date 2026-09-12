@@ -33,6 +33,7 @@
         {% if apg_is_admin %}
           <a href="{{ url_for('ui.admin_users') }}" class="{{ 'nav-active' if request.path.startswith('/admin/users') else '' }}">Users</a>
           <a href="{{ url_for('ui.admin_email_settings') }}" class="{{ 'nav-active' if request.path.startswith('/admin/email-settings') else '' }}">Email settings</a>
+          <a href="{{ url_for('ui.admin_charter_operations') }}" class="{{ 'nav-active' if request.path.startswith('/admin/charter-operations') else '' }}">Charter operations</a>
         {% endif %}
         <button id="run-once-btn" type="button" class="btn btn-sm">
           Run Sync (once)

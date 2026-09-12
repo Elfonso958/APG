@@ -2,7 +2,7 @@
 from datetime import date, datetime, time, timezone, timedelta
 from flask import session
 from .models import SyncRun, SyncFlightLog, AppConfig, CharterManifest, CharterBrief, AppUser, EmailSettings
-from .airport_handling import AIRPORT_HANDLERS, handlers_for_airports
+from .airport_handling import AIRPORT_HANDLERS, DEFAULT_CATERING_SERVICES, handlers_for_airports
 from . import db
 from .kmh_auth import create_kmh_session, clear_kmh_session, get_kmh_session
 from .zenith_client import fetch_dcs_for_flight
@@ -147,6 +147,20 @@ def _inject_apg_account_context():
         "apg_is_admin": bool(user and user.is_admin),
         "apg_csrf_token": _csrf_token(),
     }
+
+
+def _charter_operations_directory():
+    cfg = db.session.get(AppConfig, 1)
+    try:
+        catering = json.loads(cfg.catering_services_json or "[]") if cfg else []
+    except (TypeError, ValueError):
+        catering = []
+    try:
+        handlers = json.loads(cfg.airport_handling_json or "[]") if cfg else []
+    except (TypeError, ValueError):
+        handlers = []
+    return (catering if isinstance(catering, list) and catering else DEFAULT_CATERING_SERVICES,
+            handlers if isinstance(handlers, list) and handlers else AIRPORT_HANDLERS)
 
 
 def _safe_apg_next(value: str | None) -> str:
@@ -944,6 +958,31 @@ def sync_run_detail(rid):
     flights = SyncFlightLog.query.filter_by(sync_run_id=rid).order_by(SyncFlightLog.id.asc()).all()
     return render_template("sync_run_detail.html", r=r, flights=flights)
 
+@ui_bp.route("/admin/charter-operations", methods=["GET", "POST"])
+@_admin_required
+def admin_charter_operations():
+    cfg = db.session.get(AppConfig, 1) or AppConfig(id=1)
+    if request.method == "POST":
+        if not _csrf_is_valid():
+            flash("Your form expired. Please try again.", "danger")
+            return redirect(url_for("ui.admin_charter_operations"))
+        catering = [line.strip() for line in str(request.form.get("catering_services") or "").splitlines() if line.strip()]
+        try:
+            handlers = json.loads(request.form.get("airport_handling_json") or "[]")
+            if not isinstance(handlers, list):
+                raise ValueError
+        except ValueError:
+            flash("Airport handling directory must be valid JSON containing a list of entries.", "danger")
+            return redirect(url_for("ui.admin_charter_operations"))
+        cfg.catering_services_json = json.dumps(catering)
+        cfg.airport_handling_json = json.dumps(handlers)
+        db.session.add(cfg); db.session.commit()
+        flash("Charter operations directory saved.", "success")
+        return redirect(url_for("ui.admin_charter_operations"))
+    catering, handlers = _charter_operations_directory()
+    return render_template("admin_charter_operations.html", catering_services="\n".join(catering), airport_handling_json=json.dumps(handlers, indent=2))
+
+
 @ui_bp.route("/settings", methods=["GET", "POST"])
 def settings_page():
     cfg = AppConfig.query.get(1)
@@ -1562,7 +1601,8 @@ def ops_charter_brief_edit(brief_id: int):
         db.session.add(brief)
         db.session.commit()
         return redirect(url_for("ui.ops_charter_brief_edit", brief_id=brief.id))
-    return render_template("charter_brief_edit.html", brief=brief, details=_charter_brief_details(brief), handler_directory=AIRPORT_HANDLERS)
+    catering_services, handler_directory = _charter_operations_directory()
+    return render_template("charter_brief_edit.html", brief=brief, details=_charter_brief_details(brief), handler_directory=handler_directory, catering_services=catering_services)
 
 
 @ui_bp.get("/ops/charter-briefs/<int:brief_id>/print")
@@ -1573,7 +1613,11 @@ def ops_charter_brief_print(brief_id: int):
         abort(404)
     details = _charter_brief_details(brief)
     airports = [sector.get(field) for sector in details.get("sectors", []) for field in ("dep", "arr")]
-    return render_template("charter_brief_print.html", brief=brief, details=details, handler_details=handlers_for_airports(airports, details.get("handler_selections")))
+    _, handler_directory = _charter_operations_directory()
+    airport_codes = {str(code or "").upper().strip() for code in airports}
+    selections = details.get("handler_selections") if isinstance(details.get("handler_selections"), dict) else {}
+    handler_details = [entry for entry in handler_directory if entry.get("airport") in airport_codes and (not selections.get(entry.get("airport")) or selections.get(entry.get("airport")) == entry.get("label"))]
+    return render_template("charter_brief_print.html", brief=brief, details=details, handler_details=handler_details)
 
 
 @ui_bp.get("/charter/check-in/<token>")

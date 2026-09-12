@@ -177,6 +177,8 @@ class AppConfig(db.Model):
     apg_create_ahead_hours = db.Column(db.Integer, default=48, nullable=False)
     seat_bag_tare_kg = db.Column(db.Float, default=7.0, nullable=False)
     charter_passenger_weights_json = db.Column(db.Text, default="{}", nullable=False)
+    catering_services_json = db.Column(db.Text, default="[]", nullable=False)
+    airport_handling_json = db.Column(db.Text, default="[]", nullable=False)
     last_auto_started = db.Column(db.DateTime, nullable=True)
     last_auto_finished = db.Column(db.DateTime, nullable=True)
 

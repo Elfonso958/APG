@@ -47,6 +47,16 @@ AIRPORT_HANDLERS = [
     {"airport":"ZQN","label":"ZQN (Cap)","handler":"Capital Jet Services","contact":"Rachael Jackson","phone":"03 441 4091","frequency":"131.700","gpu":"Available","fuel":"Air BP Jet A1 — 03 441 2740 / 133.900 (0800–1800 only)","emails":["ops@qcjets.com"]},
 ]
 
+DEFAULT_CATERING_SERVICES = [
+    "No Service",
+    "Standard Air Chathams Service (Tea, Coffee and Tim Tam)",
+    "Bar Service",
+    "Tauck Snacks and Bar Service (Cookie, Musili Bars, Cheese and Crackers)",
+    "Lunch Box and Bar Service",
+    "Lunch Box Only",
+    "Tauck Snacks Only (Cookie, Musili Bars, Cheese and Crackers)",
+]
+
 
 def handlers_for_airports(airports, selections=None):
     airport_codes = {str(code or "").upper().strip() for code in airports}
