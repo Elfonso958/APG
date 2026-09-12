@@ -1,0 +1,1 @@
+.refresh-spinner{display:none;width:12px;height:12px;margin-right:6px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;vertical-align:-2px}.is-loading .refresh-spinner{display:inline-block;animation:charter-spin .75s linear infinite}@keyframes charter-spin{to{transform:rotate(360deg)}}
