@@ -72,6 +72,7 @@
   const btnPreviewManifest = document.getElementById("btnPreviewManifest");
   const btnPaxList = document.getElementById("btnPaxList");
   const btnCargo = document.getElementById("btnCargo");
+  const btnCargoTest = document.getElementById("btnCargoTest");
   const btnSubmitApg = document.getElementById("btnSubmitApg");
   const btnResetApg = document.getElementById("btnResetApg");
   const btnSeatmap = document.getElementById("btnSeatmap");
@@ -499,7 +500,7 @@
   }
 
   function setActionsEnabled(enabled) {
-    [btnPaxList, btnCargo, btnPreviewManifest, btnSubmitApg, btnResetApg, btnSeatmap, btnMovementMsg, btnCharterManifest, btnPrintBriefing].forEach((b) => {
+    [btnPaxList, btnCargo, btnCargoTest, btnPreviewManifest, btnSubmitApg, btnResetApg, btnSeatmap, btnMovementMsg, btnCharterManifest, btnPrintBriefing].forEach((b) => {
       if (b) b.disabled = !enabled;
     });
     if (btnCharterManifest && enabled) {
@@ -2540,10 +2541,9 @@
     const rows = Array.isArray(f.apgCargoAllocations) ? f.apgCargoAllocations : [];
     const atrRows = Array.isArray(f.apgAtrRowFreightAllocations) ? f.apgAtrRowFreightAllocations : [];
     const isFullFreighter = isFullFreighterFlight(f);
+    const isTestLayout = Boolean(f.cargoTestMode);
     normalizeAtrRowFreightForOccupancy(f);
     const showAtrRows = false;
-    f.apgCargoEditorTab = "freight";
-    const activeTab = "freight";
     const totals = cargoTotalsForFlight(f);
     const renderHoldPanel = () => rows.length ? `
       <div class="cargo-hold-grid">
@@ -2758,18 +2758,18 @@
         ${f.cargoAllocationStale ? `<div class="cargo-stale-warning"><div><strong>Out of date</strong><span>Cargo or seat-bag weights were updated on another device.</span></div><button type="button" class="btn btn-primary" data-refresh-saved-cargo>Refresh</button></div>` : ""}
         <div class="cargo-editor-head">
           <div>
-            <div class="card-title">${isFullFreighter ? "Freight Allocation" : "Cargo Allocation"}</div>
-            <div class="card-sub">${isFullFreighter ? "Allocate cargo by aircraft zone, then check the live limit warning above." : "Split baggage and cargo by hold, then check the live limit warning above."}</div>
+            <div class="card-title">${isTestLayout ? "Cargo Test Layout" : (isFullFreighter ? "Freight Allocation" : "Cargo Allocation")}</div>
+            <div class="card-sub">${isTestLayout ? "Experimental hold layout using this flight's current cargo allocations." : (isFullFreighter ? "Allocate cargo by aircraft zone, then check the live limit warning above." : "Split baggage and cargo by hold, then check the live limit warning above.")}</div>
           </div>
           ${isFullFreighter ? "" : `<div class="weight-status-pill ${Math.abs(totals.remaining) < 0.05 ? "is-ok" : totals.remaining > 0 ? "is-near" : "is-over"}" id="cargoRemainingBadge">
             ${Math.abs(totals.remaining) < 0.05 ? "Baggage complete" : totals.remaining > 0 ? "Baggage remaining" : "Over allocated"}
           </div>`}
           </div>
-          <div class="cargo-editor-tabs" role="tablist" aria-label="Cargo allocation mode">
+          ${isTestLayout ? "" : `<div class="cargo-editor-tabs" role="tablist" aria-label="Cargo allocation mode">
             <button type="button" class="cargo-editor-tab is-active" data-cargo-tab="freight">Freight</button>
-          </div>
-        <div class="cargo-editor-panel" data-cargo-panel="freight">
-          ${renderFreightPanel()}
+          </div>`}
+        <div class="cargo-editor-panel" data-cargo-panel="${isTestLayout ? "test" : "freight"}">
+          ${isTestLayout ? renderHoldPanel() : renderFreightPanel()}
         </div>
       </div>
     `;
@@ -3336,11 +3336,12 @@
     if (selectedFlight === f) renderCargoWeightsSummary(f);
   }
 
-  async function openCargoDialog() {
+  async function openCargoDialog(testMode = false) {
     const f = selectedFlight;
     if (!f || !cargoDialog) return;
+    f.cargoTestMode = testMode;
     const planId = getApgPlanId(f.apg_plan_id);
-    cargoTitle.textContent = `Cargo - ${flightCode(f)} ${f.dep || ""}-${f.ades || ""}${planId ? ` - APG ${planId}` : ""}`;
+    cargoTitle.textContent = `${testMode ? "Cargo (Test)" : "Cargo"} - ${flightCode(f)} ${f.dep || ""}-${f.ades || ""}${planId ? ` - APG ${planId}` : ""}`;
     renderCargoWeightsSummary(f);
     if (f.apgCargoStationsLoaded) {
       renderCargoEditor(f);
@@ -3350,6 +3351,10 @@
     cargoDialog.showModal();
     await populateFreightAllocation(f).catch((err) => { console.warn(err); });
     await Promise.allSettled([populateCargoWeightsSummary(f), populateCargoEditor(f)]);
+  }
+
+  async function openCargoTestDialog() {
+    return openCargoDialog(true);
   }
 
   async function refreshCargoDialog() {
@@ -5628,6 +5633,7 @@
 
   if (btnPreviewManifest) btnPreviewManifest.addEventListener("click", withBusy(btnPreviewManifest, "Loading...", previewManifest));
   if (btnCargo) btnCargo.addEventListener("click", withBusy(btnCargo, "Loading...", openCargoDialog));
+  if (btnCargoTest) btnCargoTest.addEventListener("click", withBusy(btnCargoTest, "Loading...", openCargoTestDialog));
   if (btnCargoRefresh) btnCargoRefresh.addEventListener("click", withBusy(btnCargoRefresh, "Refreshing...", refreshCargoDialog));
   if (saveFreightSettings) saveFreightSettings.addEventListener("click", async () => {
     saveFreightSettings.disabled = true;
