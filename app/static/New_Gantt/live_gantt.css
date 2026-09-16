@@ -2041,6 +2041,14 @@ body[data-theme="dark"] .wb-inline-status.is-over {
 .view-briefing #zoomInBtn,
 .view-briefing #syncPaxBtn { display: none; }
 .view-briefing .gantt-only { display: none; }
+.crew-topbar-search { display: flex; align-items: end; gap: 8px; }
+.crew-topbar-search .ctrl { min-width: 112px; }
+.crew-topbar-search .ctrl input { width: 96px; text-transform: uppercase; }
+.crew-topbar-search .ctrl select { width: 92px; }
+.crew-topbar-search .crew-search-btn { min-height: 38px; white-space: nowrap; }
+.refresh-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
+.refresh-button-spinner { display: none; width: 13px; height: 13px; border: 2px solid rgba(255,255,255,.45); border-top-color: #fff; border-radius: 50%; animation: crew-search-spin .7s linear infinite; }
+.refresh-button.is-loading .refresh-button-spinner { display: inline-block; }
 .briefing-search-card,
 .briefing-flights { max-width: 1060px; margin-inline: auto; }
 .briefing-search-card {
@@ -2131,6 +2139,8 @@ body[data-theme="dark"] .wb-inline-status.is-over {
   .view-briefing .controls { display: grid; grid-template-columns: 1fr auto auto; width: 100%; }
   .view-briefing .controls .ctrl { min-width: 0; }
   .view-briefing .controls .ctrl input { width: 100%; }
+  .crew-topbar-search { display: contents; }
+  .crew-topbar-search .crew-search-btn { min-height: 44px; }
   .view-briefing .stats { grid-template-columns: repeat(2, 1fr); padding: 10px 12px; }
   .view-briefing .briefing-view { padding: 10px 12px; }
   .briefing-sticky-header { top: 6px; align-items: flex-start; margin-top: 10px; padding: 10px 12px; }

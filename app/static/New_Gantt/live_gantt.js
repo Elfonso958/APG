@@ -52,6 +52,7 @@
   const boardSpinner = document.getElementById("boardSpinner");
   const crewSearchForm = document.getElementById("crewSearchForm");
   const crewCodeInput = document.getElementById("crewCodeInput");
+  const crewSearchDays = document.getElementById("crewSearchDays");
   const crewSearchBtn = document.getElementById("crewSearchBtn");
   const crewSearchBtnLabel = document.getElementById("crewSearchBtnLabel");
   const crewSearchSpinner = document.getElementById("crewSearchSpinner");
@@ -247,6 +248,7 @@
   let windowEndMin = minuteInDay;
   let flights = [];
   let flightDataReady = !isBriefingView;
+  let briefingLoadedDays = 0;
   let crewSearchQueued = false;
   let lastBriefingRefreshAt = null;
   let briefingRefreshTimer = null;
@@ -4384,7 +4386,8 @@
     }
     if (!items.length) {
       if (briefingStickyHeader) briefingStickyHeader.hidden = true;
-      briefingFlights.innerHTML = `<div class="briefing-empty"><strong>No flights found</strong><span>No sectors in this two-day period include crew code ${escapeHtml(crewCode)}.</span></div>`;
+      const period = Math.max(1, Math.min(7, Number(crewSearchDays?.value || 2)));
+      briefingFlights.innerHTML = `<div class="briefing-empty"><strong>No flights found</strong><span>No sectors in this ${period}-day period include crew code ${escapeHtml(crewCode)}.</span></div>`;
       return;
     }
     updateBriefingStickyHeader(items);
@@ -4571,16 +4574,18 @@
     const showSpinner = opts.showSpinner !== false;
     const forceRefresh = opts.force === true;
     const backgroundRefresh = opts.background === true;
-    const refreshLabel = refreshBtn.textContent;
     const day = dayInput.value || app.dataset.day;
-    const days = isBriefingView ? [day, addDaysIso(day, 1)] : [day];
+    const briefingDays = Math.max(1, Math.min(7, Number(crewSearchDays?.value || 2)));
+    const days = isBriefingView
+      ? Array.from({ length: briefingDays }, (_unused, index) => addDaysIso(day, index))
+      : [day];
     const urls = days.map((dateValue) => `${apiUrl}?date=${encodeURIComponent(dateValue)}&include_delays=1${forceRefresh ? "&force=1" : ""}`);
     if (isBriefingView) {
       flightDataReady = false;
       if (!backgroundRefresh) setCrewSearchLoading(true);
     }
     refreshBtn.disabled = true;
-    refreshBtn.textContent = backgroundRefresh ? "Updating…" : "Refreshing…";
+    refreshBtn.classList.add("is-loading");
     if (isBriefingView && freshnessDot) {
       freshnessDot.classList.remove("is-fresh", "is-stale", "is-offline");
       freshnessDot.classList.add("is-loading");
@@ -4623,13 +4628,14 @@
       if (failedIndex >= 0) {
         showMessage(payloads[failedIndex]?.error || `Request failed (${responses[failedIndex].status})`, true);
       } else if (!flights.length) {
-        showMessage(isBriefingView ? "No flights returned for this two-day period." : "No flights returned for this date.", false);
+        showMessage(isBriefingView ? `No flights returned for this ${briefingDays}-day period.` : "No flights returned for this date.", false);
       } else {
         showMessage("", false);
       }
       updateStats();
       renderRows();
       flightDataReady = true;
+      if (isBriefingView) briefingLoadedDays = briefingDays;
       if (isBriefingView && crewCodeInput?.value.trim()) await findCrewBriefingFlights({ silent: backgroundRefresh });
       preloadRegistrationMaintenance().catch(() => {});
       updateLiveNowBar();
@@ -4659,7 +4665,7 @@
       if (isBriefingView && crewSearchStatus && !restored) crewSearchStatus.textContent = "Unable to load flights. Tap Refresh to try again.";
     } finally {
       refreshBtn.disabled = false;
-      refreshBtn.textContent = refreshLabel;
+      refreshBtn.classList.remove("is-loading");
       if (isBriefingView && !backgroundRefresh) setCrewSearchLoading(false);
       if (showSpinner) setBoardLoading(false);
       if (isBriefingView) updateBriefingFreshness();
@@ -5544,7 +5550,8 @@
       findCrewBriefingFlights();
       return;
     }
-    const runSearch = flightDataReady
+    const requestedDays = Math.max(1, Math.min(7, Number(crewSearchDays?.value || 2)));
+    const runSearch = flightDataReady && briefingLoadedDays === requestedDays
       ? findCrewBriefingFlights()
       : loadData({ showSpinner: true, force: false });
     runSearch.catch((err) => {

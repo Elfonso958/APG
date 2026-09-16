@@ -52,14 +52,20 @@
        data-day="{{ day.isoformat() }}">
     <header class="topbar">
       <div class="topbar-meta">
-        <div class="topbar-label">{{ "Crew Briefing" if page_view == "briefing" else "Flight Board Controls" }}</div>
+        <div class="topbar-label">{{ "Live Crew Briefing" if page_view == "briefing" else "Flight Board Controls" }}</div>
+        {% if page_view != "briefing" %}
         <div id="envisionEnvPill" class="envision-env-pill envision-env-{{ (envision_env_key or 'base')|lower }}">
           Envision: {{ envision_env_name or "PROD" }}{% if envision_env_host %} - {{ envision_env_host }}{% endif %}
         </div>
+        {% endif %}
       </div>
       <div class="controls">
         {% if page_view == "briefing" %}
-        <a class="btn btn-ghost view-link" href="{{ url_for('ui.dcs_new_live_gantt', date=day.isoformat()) }}">Gantt View</a>
+        <form id="crewSearchForm" class="crew-topbar-search">
+          <label class="ctrl"><span>Employer code</span><input id="crewCodeInput" type="text" inputmode="text" autocomplete="username" autocapitalize="characters" spellcheck="false" placeholder="EMP code" maxlength="20"></label>
+          <label class="ctrl"><span>Search period</span><select id="crewSearchDays"><option value="1">1 day</option><option value="2" selected>2 days</option><option value="3">3 days</option><option value="4">4 days</option><option value="5">5 days</option><option value="6">6 days</option><option value="7">7 days</option></select></label>
+          <button id="crewSearchBtn" class="btn btn-ghost crew-search-btn" type="submit"><span id="crewSearchBtnLabel">Show flights</span><span id="crewSearchSpinner" class="crew-search-spinner" aria-hidden="true" hidden></span></button>
+        </form>
         {% else %}
         <a class="btn btn-ghost view-link" href="{{ url_for('ui.dcs_crew_briefing', date=day.isoformat()) }}">Crew Briefing</a>
         <a class="btn btn-ghost view-link" href="{{ url_for('ui.dcs_charter_checkin', date=day.isoformat()) }}">Charter Check-in</a>
@@ -83,7 +89,7 @@
             <option value="">All Stations</option>
           </select>
         </label>
-        <button id="refreshBtn" class="btn btn-primary" type="button">Refresh</button>
+        <button id="refreshBtn" class="btn btn-primary refresh-button" type="button"><span>Refresh</span><i class="refresh-button-spinner" aria-hidden="true"></i></button>
         <button id="syncPaxBtn" class="btn btn-ghost" type="button">Sync Pax (Test)</button>
         <button id="zoomOutBtn" class="btn btn-ghost" type="button">-</button>
         <button id="zoomInBtn" class="btn btn-ghost" type="button">+</button>
@@ -116,19 +122,9 @@
         <div>
           <div class="briefing-eyebrow">Your flying programme</div>
           <h1>Flight briefing</h1>
-          <p>Enter the code shown after <strong>EMP</strong> in Envision to see two days of sectors and passenger information.</p>
+          <p>Use your employer code in the top bar to view your selected flight period and passenger information.</p>
         </div>
-        <form id="crewSearchForm" class="crew-search-form">
-          <label for="crewCodeInput">EMP crew code</label>
-          <div class="crew-search-row">
-            <input id="crewCodeInput" type="text" inputmode="text" autocomplete="username" autocapitalize="characters" spellcheck="false" placeholder="e.g. PS" maxlength="20">
-            <button id="crewSearchBtn" class="btn btn-primary crew-search-btn" type="submit">
-              <span id="crewSearchBtnLabel">Show my flights</span>
-              <span id="crewSearchSpinner" class="crew-search-spinner" aria-hidden="true" hidden></span>
-            </button>
-          </div>
-          <div id="crewSearchStatus" class="crew-search-status" aria-live="polite">Enter your code to begin.</div>
-        </form>
+        <div id="crewSearchStatus" class="crew-search-status" aria-live="polite">Enter your employer code to begin.</div>
       </div>
       <div id="briefingStickyHeader" class="briefing-sticky-header" hidden>
         <div class="briefing-sticky-main">
