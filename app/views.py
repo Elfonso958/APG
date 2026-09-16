@@ -1665,7 +1665,10 @@ def dcs_crew_briefing():
             day = _nz_today()
     else:
         day = _nz_today()
-    env = get_envision_environment()
+    # Crew briefing is operational-only.  Always start it on the live Envision
+    # environment, rather than inheriting a test selection from the Gantt view.
+    session["envision_env"] = "base"
+    env = set_envision_environment("base")
     return render_template(
         "New_Gantt/live_gantt.html",
         day=day,
@@ -1680,9 +1683,9 @@ def dcs_crew_briefing():
 @ui_bp.get("/crew-briefing.webmanifest")
 def crew_briefing_manifest():
     response = jsonify({
-        "name": "Air Chathams Crew Briefing",
-        "short_name": "Crew Briefing",
-        "description": "Two-day mobile flight briefing for Air Chathams crew.",
+        "name": "Air Chathams AC Crew Brief",
+        "short_name": "AC Crew Brief",
+        "description": "Live mobile flight briefing for Air Chathams crew.",
         "start_url": url_for("ui.dcs_crew_briefing"),
         "scope": request.script_root.rstrip("/") + "/",
         "display": "standalone",

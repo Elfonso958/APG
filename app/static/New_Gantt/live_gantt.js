@@ -3460,6 +3460,15 @@
   }
 
   async function ensureEnvisionEnvironment() {
+    if (isBriefingView) {
+      // AC Crew Brief is deliberately live-only.  Do not reuse a test choice
+      // left in browser storage by the operational Gantt.
+      activeEnvisionEnv = "base";
+      sessionStorage.setItem(ENV_STORAGE_KEY, "base");
+      await setEnvisionEnvironment("base");
+      return;
+    }
+
     updateEnvisionEnvPill({
       key: activeEnvisionEnv,
       name: activeEnvisionEnv === "test" ? "TEST" : "BASE",

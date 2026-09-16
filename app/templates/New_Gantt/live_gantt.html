@@ -7,11 +7,11 @@
   {% if page_view == "briefing" %}
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="apple-mobile-web-app-title" content="Crew Briefing">
+  <meta name="apple-mobile-web-app-title" content="AC Crew Brief">
   <link rel="manifest" href="{{ url_for('ui.crew_briefing_manifest') }}">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='New_Gantt/crew_briefing_icon.svg') }}">
   {% endif %}
-  <title>{{ "Crew Briefing" if page_view == "briefing" else "Live Gantt" }}</title>
+  <title>{{ "AC Crew Brief" if page_view == "briefing" else "Live Gantt" }}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet">
@@ -52,7 +52,7 @@
        data-day="{{ day.isoformat() }}">
     <header class="topbar">
       <div class="topbar-meta">
-        <div class="topbar-label">{{ "Live Crew Briefing" if page_view == "briefing" else "Flight Board Controls" }}</div>
+        <div class="topbar-label">{{ "AC Crew Brief" if page_view == "briefing" else "Flight Board Controls" }}</div>
         {% if page_view != "briefing" %}
         <div id="envisionEnvPill" class="envision-env-pill envision-env-{{ (envision_env_key or 'base')|lower }}">
           Envision: {{ envision_env_name or "PROD" }}{% if envision_env_host %} - {{ envision_env_host }}{% endif %}
@@ -631,6 +631,6 @@
     </form>
   </dialog>
 
-  <script src="{{ url_for('static', filename='New_Gantt/live_gantt.js') }}?v=crew-apg-2"></script>
+  <script src="{{ url_for('static', filename='New_Gantt/live_gantt.js') }}?v=crew-apg-3"></script>
 </body>
 </html>
