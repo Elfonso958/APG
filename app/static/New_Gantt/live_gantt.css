@@ -1173,6 +1173,31 @@ body {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
 }
+
+.crew-brief-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.crew-brief-brand-logo {
+  display: block;
+  width: 46px;
+  height: 46px;
+  flex: 0 0 46px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  overflow: hidden;
+  background: #fff;
+}
+
+.crew-brief-brand-logo img {
+  display: block;
+  width: 130%;
+  height: 130%;
+  max-width: none;
+  transform: translate(-11%, -4%);
+}
 .cargo-test-workspace { display: grid; gap: 18px; padding: clamp(16px, 3vw, 30px); border: 1px solid #cbd5e1; border-radius: 22px; background: linear-gradient(145deg, #f8fafc, #eef6ff); color: #10233e; }
 .cargo-test-intro { display: flex; align-items: flex-start; justify-content: space-between; gap: 22px; }
 .cargo-test-eyebrow { display: block; margin-bottom: 6px; color: #2563eb; font-size: .72rem; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; }
@@ -2136,6 +2161,7 @@ body[data-theme="dark"] .wb-inline-status.is-over {
 @media (max-width: 760px) {
   .view-briefing .topbar { padding: 12px; }
   .view-briefing .topbar-meta { width: 100%; }
+  .crew-brief-brand-logo { width: 40px; height: 40px; flex-basis: 40px; }
   .view-briefing .controls { display: grid; grid-template-columns: 1fr auto auto; width: 100%; }
   .view-briefing .controls .ctrl { min-width: 0; }
   .view-briefing .controls .ctrl input { width: 100%; }

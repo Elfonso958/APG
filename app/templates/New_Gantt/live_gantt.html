@@ -3,19 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0f6fff">
+  <meta name="theme-color" content="#009f4d">
   {% if page_view == "briefing" %}
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="AC Crew Brief">
   <link rel="manifest" href="{{ url_for('ui.crew_briefing_manifest') }}">
-  <link rel="apple-touch-icon" href="{{ url_for('static', filename='New_Gantt/crew_briefing_icon.svg') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='images/ac-crew-brief-logo.jpg') }}">
   {% endif %}
   <title>{{ "AC Crew Brief" if page_view == "briefing" else "Live Gantt" }}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='New_Gantt/live_gantt.css') }}?v=crew-apg-4">
+  <link rel="stylesheet" href="{{ url_for('static', filename='New_Gantt/live_gantt.css') }}?v=crew-apg-5">
 </head>
 <body data-theme="light" class="view-{{ page_view or 'gantt' }}">
   <div id="new-gantt-app"
@@ -52,7 +52,14 @@
        data-day="{{ day.isoformat() }}">
     <header class="topbar">
       <div class="topbar-meta">
-        <div class="topbar-label">{{ "AC Crew Brief" if page_view == "briefing" else "Flight Board Controls" }}</div>
+        {% if page_view == "briefing" %}
+        <div class="crew-brief-brand">
+          <span class="crew-brief-brand-logo"><img src="{{ url_for('static', filename='images/ac-crew-brief-logo.jpg') }}" alt="Air Chathams"></span>
+          <div class="topbar-label">AC Crew Brief</div>
+        </div>
+        {% else %}
+        <div class="topbar-label">Flight Board Controls</div>
+        {% endif %}
         {% if page_view != "briefing" %}
         <div id="envisionEnvPill" class="envision-env-pill envision-env-{{ (envision_env_key or 'base')|lower }}">
           Envision: {{ envision_env_name or "PROD" }}{% if envision_env_host %} - {{ envision_env_host }}{% endif %}

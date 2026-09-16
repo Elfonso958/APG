@@ -1689,12 +1689,12 @@ def crew_briefing_manifest():
         "start_url": url_for("ui.dcs_crew_briefing"),
         "scope": request.script_root.rstrip("/") + "/",
         "display": "standalone",
-        "background_color": "#f4f7fb",
-        "theme_color": "#0f6fff",
+        "background_color": "#ffffff",
+        "theme_color": "#009f4d",
         "icons": [{
-            "src": url_for("static", filename="New_Gantt/crew_briefing_icon.svg"),
-            "sizes": "any",
-            "type": "image/svg+xml",
+            "src": url_for("static", filename="images/ac-crew-brief-logo.jpg"),
+            "sizes": "1181x1181",
+            "type": "image/jpeg",
             "purpose": "any maskable",
         }],
     })
