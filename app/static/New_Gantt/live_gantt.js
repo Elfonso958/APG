@@ -2567,6 +2567,42 @@
         `).join("")}
       </div>
     ` : '<div class="muted">No APG hold stations found on this plan.</div>';
+    const renderCargoTestPanel = () => rows.length ? `
+      <section class="cargo-test-workspace" aria-label="Cargo test loading workspace">
+        <header class="cargo-test-intro">
+          <div>
+            <span class="cargo-test-eyebrow">Loadmaster workspace</span>
+            <h4>Hold loading plan</h4>
+            <p>Enter the physical load by hold. The live weight and balance check above updates as you work.</p>
+          </div>
+          <div class="cargo-test-total">
+            <span>Total hold load</span>
+            <strong>${(totals.baggageTotal + totals.holdFreightTotal).toFixed(0)} <small>kg</small></strong>
+          </div>
+        </header>
+        <div class="cargo-test-checklist" aria-label="Loading steps">
+          <span><b>1</b> Confirm baggage</span>
+          <span><b>2</b> Load C1 and C2</span>
+          <span><b>3</b> Check live limits</span>
+        </div>
+        <div class="cargo-test-holds">
+          ${rows.map((row, index) => `
+            <section class="cargo-test-hold" data-cargo-row="${escapeHtml(row.label)}">
+              <div class="cargo-test-hold-head">
+                <span class="cargo-test-hold-number">${String(index + 1).padStart(2, "0")}</span>
+                <div><span>Aircraft hold</span><h5>${escapeHtml(row.label)}</h5></div>
+                <strong data-cargo-total="${escapeHtml(row.label)}">${(Number(row.baggage_kg || 0) + Number(row.freight_kg || 0)).toFixed(1)} kg</strong>
+              </div>
+              <div class="cargo-test-fields">
+                <label><span>Baggage</span><div><input type="number" min="0" step="0.1" inputmode="decimal" class="form-control cargo-baggage-input" data-label="${escapeHtml(row.label)}" value="${Number(row.baggage_kg || 0).toFixed(1)}"><em>kg</em></div></label>
+                <label><span>Freight</span><div><input type="number" min="0" step="0.1" inputmode="decimal" class="form-control cargo-freight-input" data-label="${escapeHtml(row.label)}" value="${Number(row.freight_kg || 0).toFixed(1)}"><em>kg</em></div></label>
+              </div>
+            </section>
+          `).join("")}
+        </div>
+        <footer class="cargo-test-footnote">Test layout: values use the flight’s normal saved cargo allocation.</footer>
+      </section>
+    ` : '<div class="muted">No C1 or C2 hold stations found on this plan.</div>';
     const sideInput = (row, side) => {
       const rowNumber = Number(row.row_number || 0);
       const seats = side === "left" ? [`${rowNumber}A`, `${rowNumber}B`] : [`${rowNumber}C`, `${rowNumber}D`];
@@ -2769,7 +2805,7 @@
             <button type="button" class="cargo-editor-tab is-active" data-cargo-tab="freight">Freight</button>
           </div>`}
         <div class="cargo-editor-panel" data-cargo-panel="${isTestLayout ? "test" : "freight"}">
-          ${isTestLayout ? renderHoldPanel() : renderFreightPanel()}
+          ${isTestLayout ? renderCargoTestPanel() : renderFreightPanel()}
         </div>
       </div>
     `;

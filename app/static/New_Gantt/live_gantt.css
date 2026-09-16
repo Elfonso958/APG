@@ -1173,6 +1173,42 @@ body {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
 }
+.cargo-test-workspace { display: grid; gap: 18px; padding: clamp(16px, 3vw, 30px); border: 1px solid #cbd5e1; border-radius: 22px; background: linear-gradient(145deg, #f8fafc, #eef6ff); color: #10233e; }
+.cargo-test-intro { display: flex; align-items: flex-start; justify-content: space-between; gap: 22px; }
+.cargo-test-eyebrow { display: block; margin-bottom: 6px; color: #2563eb; font-size: .72rem; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; }
+.cargo-test-intro h4 { margin: 0; font-size: clamp(1.35rem, 3vw, 1.9rem); letter-spacing: -.03em; }
+.cargo-test-intro p { max-width: 620px; margin: 7px 0 0; color: #52657d; font-size: .9rem; line-height: 1.45; }
+.cargo-test-total { min-width: 178px; padding: 14px 16px; border-radius: 14px; background: #102a4c; color: #fff; box-shadow: 0 10px 24px rgba(15, 42, 76, .2); }
+.cargo-test-total span { display: block; color: #bfdbfe; font-size: .72rem; font-weight: 800; text-transform: uppercase; letter-spacing: .07em; }
+.cargo-test-total strong { display: block; margin-top: 4px; font-size: 1.8rem; line-height: 1; }
+.cargo-test-total small { font-size: .8rem; font-weight: 700; }
+.cargo-test-checklist { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: hidden; border: 1px solid #cbd5e1; border-radius: 12px; background: #fff; }
+.cargo-test-checklist span { display: flex; align-items: center; gap: 9px; min-height: 48px; padding: 8px 12px; border-right: 1px solid #dbe5f1; color: #38506c; font-size: .82rem; font-weight: 750; }
+.cargo-test-checklist span:last-child { border-right: 0; }
+.cargo-test-checklist b { display: grid; place-items: center; width: 23px; height: 23px; border-radius: 50%; background: #dbeafe; color: #1d4ed8; font-size: .73rem; }
+.cargo-test-holds { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.cargo-test-hold { overflow: hidden; border: 2px solid #b8cbe2; border-radius: 18px; background: #fff; box-shadow: 0 10px 20px rgba(15, 42, 76, .08); }
+.cargo-test-hold:focus-within { border-color: #2563eb; box-shadow: 0 0 0 4px rgba(37, 99, 235, .14), 0 10px 20px rgba(15, 42, 76, .08); }
+.cargo-test-hold-head { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; padding: 16px; background: #eaf2fb; border-bottom: 1px solid #cbd5e1; }
+.cargo-test-hold-number { color: #6b7f96; font-size: .75rem; font-weight: 900; letter-spacing: .1em; }
+.cargo-test-hold-head div > span { display: block; color: #64748b; font-size: .68rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.cargo-test-hold-head h5 { margin: 2px 0 0; color: #102a4c; font-size: 1.28rem; }
+.cargo-test-hold-head > strong { color: #0f4c81; font-size: 1.1rem; white-space: nowrap; }
+.cargo-test-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; padding: 16px; }
+.cargo-test-fields label { display: grid; gap: 7px; color: #52657d; font-size: .74rem; font-weight: 850; letter-spacing: .06em; text-transform: uppercase; }
+.cargo-test-fields label > div { position: relative; }
+.cargo-test-fields input { width: 100%; min-height: 62px; padding: 10px 42px 10px 12px; border: 2px solid #c8d6e5; border-radius: 11px; background: #fff; color: #102a4c; font-size: 1.42rem; font-weight: 850; }
+.cargo-test-fields input:focus { border-color: #2563eb; outline: 0; box-shadow: 0 0 0 3px rgba(37, 99, 235, .13); }
+.cargo-test-fields em { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); color: #64748b; font-size: .82rem; font-style: normal; font-weight: 800; }
+.cargo-test-footnote { color: #64748b; font-size: .75rem; text-align: center; }
+body[data-theme="dark"] .cargo-test-workspace { border-color: #38506c; background: linear-gradient(145deg, #14243a, #102033); color: #eff6ff; }
+body[data-theme="dark"] .cargo-test-intro h4, body[data-theme="dark"] .cargo-test-hold-head h5 { color: #f8fafc; }
+body[data-theme="dark"] .cargo-test-intro p, body[data-theme="dark"] .cargo-test-footnote { color: #a9bbcf; }
+body[data-theme="dark"] .cargo-test-checklist, body[data-theme="dark"] .cargo-test-hold, body[data-theme="dark"] .cargo-test-fields input { background: #172a42; border-color: #38506c; color: #f8fafc; }
+body[data-theme="dark"] .cargo-test-checklist span { color: #dbeafe; border-color: #38506c; }
+body[data-theme="dark"] .cargo-test-hold-head { background: #1c3552; border-color: #38506c; }
+body[data-theme="dark"] .cargo-test-hold-head > strong { color: #93c5fd; }
+@media (max-width: 700px) { .cargo-test-intro, .cargo-test-holds { grid-template-columns: 1fr; display: grid; } .cargo-test-total { min-width: 0; } .cargo-test-checklist { grid-template-columns: 1fr; } .cargo-test-checklist span { border-right: 0; border-bottom: 1px solid #dbe5f1; } .cargo-test-checklist span:last-child { border-bottom: 0; } }
 .cargo-row-freight-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
