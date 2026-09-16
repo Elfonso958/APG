@@ -9,7 +9,8 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="AC Crew Brief">
   <link rel="manifest" href="{{ url_for('ui.crew_briefing_manifest') }}">
-  <link rel="apple-touch-icon" href="{{ url_for('static', filename='images/ac-crew-brief-logo.jpg') }}">
+  <link rel="icon" type="image/png" sizes="512x512" href="{{ url_for('static', filename='images/ac-crew-brief-icon.png') }}?v=1">
+  <link rel="apple-touch-icon" sizes="512x512" href="{{ url_for('static', filename='images/ac-crew-brief-icon.png') }}?v=1">
   {% endif %}
   <title>{{ "AC Crew Brief" if page_view == "briefing" else "Live Gantt" }}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">

@@ -1692,10 +1692,15 @@ def crew_briefing_manifest():
         "background_color": "#ffffff",
         "theme_color": "#009f4d",
         "icons": [{
-            "src": url_for("static", filename="images/ac-crew-brief-logo.jpg"),
-            "sizes": "1181x1181",
-            "type": "image/jpeg",
-            "purpose": "any maskable",
+            "src": url_for("static", filename="images/ac-crew-brief-icon.png"),
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "any",
+        }, {
+            "src": url_for("static", filename="images/ac-crew-brief-icon.png"),
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "maskable",
         }],
     })
     response.headers["Content-Type"] = "application/manifest+json"

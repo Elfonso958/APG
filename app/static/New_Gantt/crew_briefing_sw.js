@@ -1,9 +1,9 @@
-const CACHE_NAME = "crew-briefing-shell-v12";
+const CACHE_NAME = "crew-briefing-shell-v13";
 const SHELL_PATHS = [
   "/APG/dcs/crew-briefing",
   "/APG/static/New_Gantt/live_gantt.css?v=crew-apg-5",
   "/APG/static/New_Gantt/live_gantt.js?v=crew-apg-3",
-  "/APG/static/images/ac-crew-brief-logo.jpg",
+  "/APG/static/images/ac-crew-brief-icon.png",
 ];
 
 self.addEventListener("install", (event) => {
