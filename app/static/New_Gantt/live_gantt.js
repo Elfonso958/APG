@@ -622,6 +622,22 @@
     return /\bfreight(?:er)?\b/.test(text);
   }
 
+  function cargoZoneCode(label) {
+    // APG may label these as "C1" or "Cargo C1". Normalise both forms
+    // before applying the passenger-flight cargo-zone rule.
+    return String(label || "").toUpperCase().replace(/^CARGO\s*/, "").replace(/\s+/g, "");
+  }
+
+  function cargoStationsForFlight(f, stations) {
+    const cargoStations = (Array.isArray(stations) ? stations : [])
+      .filter((st) => isApgCargoStationLabel(st.label));
+    if (isFullFreighterFlight(f)) return cargoStations;
+
+    // Passenger flights use only the C1 and C2 holds. All APG cargo zones
+    // remain available only when the flight type is Freighter.
+    return cargoStations.filter((st) => /^(C1|C2)$/.test(cargoZoneCode(st.label)));
+  }
+
   function canUseCharterManifest(f) {
     return Boolean(f?.envision_flight_id) && isCharterFlight(f);
   }
@@ -2168,7 +2184,7 @@
   }
 
   function ensureCargoAllocations(f, stations) {
-    const cargoStations = (Array.isArray(stations) ? stations : []).filter((st) => isApgCargoStationLabel(st.label));
+    const cargoStations = cargoStationsForFlight(f, stations);
     ensureAtrRowFreightAllocations(f, stations);
     const priorRows = (
       Array.isArray(f.apgCargoAllocations) && f.apgCargoAllocations.length
@@ -2937,7 +2953,12 @@
     } finally {
       f.apgCargoLoading = false;
     }
-    if (selectedFlight === f) renderCargoEditor(f);
+    if (selectedFlight === f) {
+      renderCargoEditor(f);
+      // The weight/trim card may have rendered while allocations were still
+      // loading. Re-render it now so hold baggage and freight are included.
+      renderCargoWeightsSummary(f);
+    }
   }
 
   function projectedLoadedTrim(f, apgTrim) {
@@ -2973,7 +2994,10 @@
       seats.forEach((seat) => {
         const load = loads.get(`passenger ${String(seat).trim().toLowerCase()}`);
         if (load) {
-          load.mass = perSeat;
+          // A seat bag is an additional load at the passenger station.  The
+          // passenger mass has already been rebuilt from DCS above, so
+          // replacing it here made the trim and weight cards disagree.
+          load.mass += perSeat;
           usedIndividualStations = true;
         }
       });

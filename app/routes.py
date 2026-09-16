@@ -3884,11 +3884,20 @@ def api_apg_plan_cargo_summary(plan_id: int):
 
     if route_masses:
         # APG OFP route masses are the best source for operational TOW/LDW.
+        # Do not back-calculate ZFW from the planning fuel figure here: that
+        # figure can be stale or represent a different fuel stage.  The
+        # station loads above are the authoritative APG ZFW.
         current_tow = route_masses[0]
         current_ldw = route_masses[-1]
-        takeoff_fuel_mass = max(0.0, fuel_mass - taxi_fuel)
-        if takeoff_fuel_mass > 0:
-            current_zfw = current_tow - takeoff_fuel_mass
+
+    # Keep the fuel reference internally consistent with APG's published
+    # masses.  This also makes the loader projection use the same take-off
+    # and landing fuel as the APG loading certificate.
+    takeoff_fuel_mass = max(0.0, current_tow - current_zfw)
+    if current_tow > current_zfw:
+        fuel_mass = takeoff_fuel_mass + taxi_fuel
+    if current_ldw >= current_zfw:
+        landing_fuel = current_ldw - current_zfw
     mzfw = to_float(limits.get("mzfm"))
     mtom = to_float(limits.get("mtom"))
     mldgm = to_float(limits.get("mldgm"))
