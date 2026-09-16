@@ -1174,6 +1174,30 @@ body {
   gap: 14px;
 }
 
+.topbar { position: relative; }
+
+.theme-toggle {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  display: inline-grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.theme-toggle:hover,
+.theme-toggle:focus-visible { border-color: var(--accent); color: var(--accent); }
+
 .crew-brief-brand {
   display: flex;
   align-items: center;
@@ -2066,11 +2090,13 @@ body[data-theme="dark"] .wb-inline-status.is-over {
 .view-briefing #zoomInBtn,
 .view-briefing #syncPaxBtn { display: none; }
 .view-briefing .gantt-only { display: none; }
+.view-briefing .controls { padding-right: 48px; }
 .crew-topbar-search { display: flex; align-items: end; gap: 8px; }
 .crew-topbar-search .ctrl { min-width: 112px; }
 .crew-topbar-search .ctrl input { width: 96px; text-transform: uppercase; }
 .crew-topbar-search .ctrl select { width: 92px; }
 .crew-topbar-search .crew-search-btn { min-height: 38px; white-space: nowrap; }
+.briefing-search-status { max-width: 1060px; margin: 0 auto 10px; color: var(--muted); font-size: 12px; }
 .refresh-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
 .refresh-button-spinner { display: none; width: 13px; height: 13px; border: 2px solid rgba(255,255,255,.45); border-top-color: #fff; border-radius: 50%; animation: crew-search-spin .7s linear infinite; }
 .refresh-button.is-loading .refresh-button-spinner { display: inline-block; }
@@ -2159,13 +2185,19 @@ body[data-theme="dark"] .wb-inline-status.is-over {
 .briefing-empty strong { color: var(--text); font-size: 18px; }
 
 @media (max-width: 760px) {
-  .view-briefing .topbar { padding: 12px; }
+  .view-briefing .topbar { grid-template-columns: 1fr; padding: 12px 58px 12px 12px; }
   .view-briefing .topbar-meta { width: 100%; }
   .crew-brief-brand-logo { width: 40px; height: 40px; flex-basis: 40px; }
-  .view-briefing .controls { display: grid; grid-template-columns: 1fr auto auto; width: 100%; }
+  .view-briefing .controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); width: 100%; gap: 10px; padding-right: 0; }
   .view-briefing .controls .ctrl { min-width: 0; }
   .view-briefing .controls .ctrl input { width: 100%; }
   .crew-topbar-search { display: contents; }
+  .crew-topbar-search .ctrl { min-width: 0; }
+  .crew-topbar-search .ctrl input,
+  .crew-topbar-search .ctrl select { width: 100%; min-width: 0; }
+  .crew-topbar-search .crew-search-btn { grid-column: 1 / -1; }
+  .view-briefing .controls > .ctrl { grid-column: 1; }
+  .view-briefing #refreshBtn { grid-column: 2; }
   .crew-topbar-search .crew-search-btn { min-height: 44px; }
   .view-briefing .stats { grid-template-columns: repeat(2, 1fr); padding: 10px 12px; }
   .view-briefing .briefing-view { padding: 10px 12px; }

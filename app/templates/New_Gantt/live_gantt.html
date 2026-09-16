@@ -16,7 +16,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='New_Gantt/live_gantt.css') }}?v=crew-apg-5">
+  <link rel="stylesheet" href="{{ url_for('static', filename='New_Gantt/live_gantt.css') }}?v=crew-apg-6">
 </head>
 <body data-theme="light" class="view-{{ page_view or 'gantt' }}">
   <div id="new-gantt-app"
@@ -113,8 +113,8 @@
           <input id="maintenanceToggle" type="checkbox">
           <span>Maintenance</span>
         </label>
-        <button id="themeBtn" class="btn btn-ghost" type="button">Dark Mode</button>
       </div>
+      <button id="themeBtn" class="theme-toggle" type="button" aria-label="Switch to dark mode" title="Switch to dark mode"><span aria-hidden="true">☾</span></button>
     </header>
 
     <section class="stats" id="statsRow"{% if page_view == "briefing" %} style="display:none"{% endif %}>
@@ -126,14 +126,7 @@
     <div id="loadMessage" class="load-message" hidden></div>
 
     <section id="briefingView" class="briefing-view" aria-label="Crew flight briefing">
-      <div class="briefing-search-card">
-        <div>
-          <div class="briefing-eyebrow">Your flying programme</div>
-          <h1>Flight briefing</h1>
-          <p>Use your employer code in the top bar to view your selected flight period and passenger information.</p>
-        </div>
-        <div id="crewSearchStatus" class="crew-search-status" aria-live="polite">Enter your employer code to begin.</div>
-      </div>
+      <p id="crewSearchStatus" class="briefing-search-status" aria-live="polite">Enter your employer code to begin.</p>
       <div id="briefingStickyHeader" class="briefing-sticky-header" hidden>
         <div class="briefing-sticky-main">
           <span id="briefingDateRange" class="briefing-date-range"></span>
@@ -639,6 +632,6 @@
     </form>
   </dialog>
 
-  <script src="{{ url_for('static', filename='New_Gantt/live_gantt.js') }}?v=crew-apg-3"></script>
+  <script src="{{ url_for('static', filename='New_Gantt/live_gantt.js') }}?v=crew-apg-4"></script>
 </body>
 </html>

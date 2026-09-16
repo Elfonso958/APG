@@ -5506,7 +5506,11 @@
 
   function applyTheme(theme) {
     document.body.setAttribute("data-theme", theme);
-    themeBtn.textContent = theme === "dark" ? "Light Mode" : "Dark Mode";
+    const useLightMode = theme === "dark";
+    const label = useLightMode ? "Switch to light mode" : "Switch to dark mode";
+    themeBtn.innerHTML = `<span aria-hidden="true">${useLightMode ? "☀" : "☾"}</span>`;
+    themeBtn.setAttribute("aria-label", label);
+    themeBtn.setAttribute("title", label);
     localStorage.setItem("new_gantt_theme", theme);
   }
 
