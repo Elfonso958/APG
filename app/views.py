@@ -2601,7 +2601,19 @@ def _fetch_registration_scheduled_maintenance(token: str, registration_id: int) 
     return data if isinstance(data, list) else []
 
 
-def _fetch_maintenance_registration_snapshot(token: str, registration: dict, status_ids_raw: str) -> dict:
+def _fetch_components(token: str) -> list[dict]:
+    """Return Envision's fitted-component index for matching life-code assets."""
+    response = requests.get(
+        f"{_runtime_envision_base()}/Components",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=30,
+    )
+    response.raise_for_status()
+    data = response.json()
+    return data if isinstance(data, list) else []
+
+
+def _fetch_maintenance_registration_snapshot(token: str, registration: dict, status_ids_raw: str, components: list[dict]) -> dict:
     """Build one dashboard card from the registration-scoped Envision endpoints."""
     registration_id = int(registration["id"])
     life_values = _fetch_registration_life_values(token, registration_id)
@@ -2613,6 +2625,7 @@ def _fetch_maintenance_registration_snapshot(token: str, registration: dict, sta
         "status": registration.get("status") or "",
         "life_values": life_values,
         "life_codes": _fetch_registration_life_codes(token, registration_id),
+        "components": components,
         "scheduled_maintenance": _fetch_registration_scheduled_maintenance(token, registration_id),
         "work_orders": _fetch_work_orders_for_registration(token, registration_id, status_ids_raw),
     }
@@ -2649,6 +2662,13 @@ def api_maintenance_dashboard():
             row for row in registrations
             if isinstance(row, dict) and str(row.get("status") or "").strip().casefold() == "active"
         ]
+        try:
+            components = _fetch_components(token)
+        except Exception:
+            # Components are an enrichment only; retain the life-code dashboard
+            # if an Envision role cannot access this optional endpoint.
+            current_app.logger.warning("Maintenance dashboard could not load the Envision Components index", exc_info=True)
+            components = []
     except Exception as exc:
         if getattr(getattr(exc, "response", None), "status_code", None) == 401:
             clear_kmh_session(session.get("apg_envision_session_id"))
@@ -2657,12 +2677,28 @@ def api_maintenance_dashboard():
         current_app.logger.exception("Maintenance dashboard could not load registrations")
         return jsonify({"ok": False, "error": f"Envision registrations could not be loaded: {exc}"}), 502
 
+    components_by_registration: dict[int, list[dict]] = {}
+    for component in components:
+        if not isinstance(component, dict):
+            continue
+        try:
+            component_registration_id = int(component.get("registrationId"))
+        except (TypeError, ValueError):
+            continue
+        components_by_registration.setdefault(component_registration_id, []).append(component)
+
     snapshots, errors = [], []
     status_ids_raw = str(current_app.config.get("ENVISION_WORK_ORDER_STATUS_IDS") or "").strip()
     # Registration endpoints are independent. Parallel reads keep fleet refreshes responsive.
     with ThreadPoolExecutor(max_workers=min(8, max(1, len(registrations)))) as executor:
         futures = {
-            executor.submit(_fetch_maintenance_registration_snapshot, token, row, status_ids_raw): row
+            executor.submit(
+                _fetch_maintenance_registration_snapshot,
+                token,
+                row,
+                status_ids_raw,
+                components_by_registration.get(int(row["id"]), []),
+            ): row
             for row in registrations if isinstance(row, dict) and row.get("id") is not None
         }
         for future in as_completed(futures):
