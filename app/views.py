@@ -2613,10 +2613,26 @@ def _fetch_components(token: str) -> list[dict]:
     return data if isinstance(data, list) else []
 
 
+def _fetch_registration_configuration(token: str, registration_id: int) -> list[dict]:
+    """Return the fitted asset tree, including asset-parent relationships."""
+    response = requests.get(
+        f"{_runtime_envision_base()}/Registrations/{registration_id}/Configuration",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=30,
+    )
+    response.raise_for_status()
+    data = response.json()
+    return data if isinstance(data, list) else []
+
+
 def _fetch_maintenance_registration_snapshot(token: str, registration: dict, status_ids_raw: str, components: list[dict]) -> dict:
     """Build one dashboard card from the registration-scoped Envision endpoints."""
     registration_id = int(registration["id"])
     life_values = _fetch_registration_life_values(token, registration_id)
+    try:
+        configuration = _fetch_registration_configuration(token, registration_id)
+    except requests.RequestException:
+        configuration = []
     return {
         "id": registration_id,
         "registration": registration.get("registration") or "Unassigned",
@@ -2626,6 +2642,7 @@ def _fetch_maintenance_registration_snapshot(token: str, registration: dict, sta
         "life_values": life_values,
         "life_codes": _fetch_registration_life_codes(token, registration_id),
         "components": components,
+        "configuration": configuration,
         "scheduled_maintenance": _fetch_registration_scheduled_maintenance(token, registration_id),
         "work_orders": _fetch_work_orders_for_registration(token, registration_id, status_ids_raw),
     }
