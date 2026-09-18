@@ -2547,12 +2547,13 @@ def _fetch_defects_for_registration(token: str, registration_id: int) -> list[di
     return data if isinstance(data, list) else []
 
 
-def _fetch_work_orders_for_registration(token: str, registration_id: int) -> list[dict]:
+def _fetch_work_orders_for_registration(token: str, registration_id: int, status_ids_raw: str | None = None) -> list[dict]:
     """Return work orders list for one Envision registration id."""
     url = f"{_runtime_envision_base()}/Registrations/{registration_id}/WorkOrders"
     headers = {"Authorization": f"Bearer {token}"}
     # Optional status filter can be supplied via ENV var, e.g. "1,2,3"
-    status_ids_raw = str(current_app.config.get("ENVISION_WORK_ORDER_STATUS_IDS") or "").strip()
+    if status_ids_raw is None:
+        status_ids_raw = str(current_app.config.get("ENVISION_WORK_ORDER_STATUS_IDS") or "").strip()
     params = None
     if status_ids_raw:
         ids = []
@@ -2600,7 +2601,7 @@ def _fetch_registration_scheduled_maintenance(token: str, registration_id: int) 
     return data if isinstance(data, list) else []
 
 
-def _fetch_maintenance_registration_snapshot(token: str, registration: dict) -> dict:
+def _fetch_maintenance_registration_snapshot(token: str, registration: dict, status_ids_raw: str) -> dict:
     """Build one dashboard card from the registration-scoped Envision endpoints."""
     registration_id = int(registration["id"])
     life_values = _fetch_registration_life_values(token, registration_id)
@@ -2613,7 +2614,7 @@ def _fetch_maintenance_registration_snapshot(token: str, registration: dict) -> 
         "life_values": life_values,
         "life_codes": _fetch_registration_life_codes(token, registration_id),
         "scheduled_maintenance": _fetch_registration_scheduled_maintenance(token, registration_id),
-        "work_orders": _fetch_work_orders_for_registration(token, registration_id),
+        "work_orders": _fetch_work_orders_for_registration(token, registration_id, status_ids_raw),
     }
 
 
@@ -2651,10 +2652,11 @@ def api_maintenance_dashboard():
         return jsonify({"ok": False, "error": f"Envision registrations could not be loaded: {exc}"}), 502
 
     snapshots, errors = [], []
+    status_ids_raw = str(current_app.config.get("ENVISION_WORK_ORDER_STATUS_IDS") or "").strip()
     # Registration endpoints are independent. Parallel reads keep fleet refreshes responsive.
     with ThreadPoolExecutor(max_workers=min(8, max(1, len(registrations)))) as executor:
         futures = {
-            executor.submit(_fetch_maintenance_registration_snapshot, token, row): row
+            executor.submit(_fetch_maintenance_registration_snapshot, token, row, status_ids_raw): row
             for row in registrations if isinstance(row, dict) and row.get("id") is not None
         }
         for future in as_completed(futures):
