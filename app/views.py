@@ -2643,6 +2643,12 @@ def api_maintenance_dashboard():
         registrations = response.json()
         if not isinstance(registrations, list):
             registrations = []
+        # The fleet dashboard is operationally scoped: do not show or query
+        # retired, stored, or otherwise inactive registrations.
+        registrations = [
+            row for row in registrations
+            if isinstance(row, dict) and str(row.get("status") or "").strip().casefold() == "active"
+        ]
     except Exception as exc:
         if getattr(getattr(exc, "response", None), "status_code", None) == 401:
             clear_kmh_session(session.get("apg_envision_session_id"))
