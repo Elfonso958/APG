@@ -317,6 +317,15 @@ def create_app():
                 except Exception:
                     logging.exception("Passenger sync scheduled job failed")
 
+        def _run_envision_user_directory_sync():
+            with app.app_context():
+                try:
+                    from .views import sync_envision_user_directory
+                    outcome = sync_envision_user_directory()
+                    app.logger.info("Envision user directory refreshed: %s", outcome)
+                except Exception:
+                    logging.exception("Envision user directory scheduled refresh failed")
+
         def _run_otp_cache_refresh_job():
             from .otp_cache_job import rolling_otp_cache_dates, start_otp_cache_job
 
@@ -382,6 +391,16 @@ def create_app():
                     id="envision_pax_sync_daily",
                     replace_existing=True,
                 )
+                _scheduler.add_job(
+                    _run_envision_user_directory_sync,
+                    "cron",
+                    hour=1,
+                    minute=0,
+                    timezone="Pacific/Auckland",
+                    id="envision_user_directory_daily",
+                    replace_existing=True,
+                    max_instances=1,
+                )
                 _scheduler.add_job(_send_charter_precheckin_invites, "interval", minutes=15, id="charter_precheckin_invites", replace_existing=True, max_instances=1)
                 _ensure_otp_cache_job()
                 if _should_start_scheduler(app):
@@ -406,6 +425,17 @@ def create_app():
                         timezone="Pacific/Auckland",
                         id="envision_pax_sync_daily",
                         replace_existing=True,
+                    )
+                if _scheduler.get_job("envision_user_directory_daily") is None:
+                    _scheduler.add_job(
+                        _run_envision_user_directory_sync,
+                        "cron",
+                        hour=1,
+                        minute=0,
+                        timezone="Pacific/Auckland",
+                        id="envision_user_directory_daily",
+                        replace_existing=True,
+                        max_instances=1,
                     )
                 if _scheduler.get_job("charter_precheckin_invites") is None:
                     _scheduler.add_job(_send_charter_precheckin_invites, "interval", minutes=15, id="charter_precheckin_invites", replace_existing=True, max_instances=1)

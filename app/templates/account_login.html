@@ -7,8 +7,8 @@
       {% if error %}<div class="flash-message danger">{{ error }}</div>{% endif %}
       <form method="post" class="settings-form">
         <input type="hidden" name="csrf_token" value="{{ apg_csrf_token }}"><input type="hidden" name="next" value="{{ next_url }}">
-        <label class="form-field"><span>Email address</span><input name="email" type="email" required autocomplete="username" autofocus></label>
-        <label class="form-field mt-2"><span>Password</span><input name="password" type="password" required autocomplete="current-password"></label>
+        <label class="form-field"><span>Envision username</span><input name="identity" required autocomplete="username" autofocus></label>
+        <label class="form-field mt-2"><span>Envision password</span><input name="password" type="password" required autocomplete="current-password"></label>
         <div class="mt-2"><button class="btn" type="submit">Sign in to APG</button></div>
       </form>
     </div>

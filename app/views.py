@@ -47,6 +47,7 @@ from .sync.envision_apg_sync import (
     envision_get_flight_times,
     fetch_flights_for_day,       #add
     envision_get_delays,
+    envision_get_employees,
     calculate_dcs_passenger_seat_loads,
 )
 
@@ -67,9 +68,103 @@ from .zenith_client import fetch_dcs_for_flight
 
 ui_bp = Blueprint("ui", __name__)
 
+APP_PERMISSIONS = {
+    "crew_briefing": "Crew Briefing",
+    "live_gantt": "Live Gantt",
+    "charter_checkin": "Charter Check-in",
+    "maintenance_dashboard": "Maintenance Dashboard",
+}
+
 
 def _normalise_user_email(value: str | None) -> str:
     return str(value or "").strip().lower()
+
+
+def _normalise_envision_username(value: str | None) -> str:
+    return str(value or "").strip().lower()
+
+
+def _directory_value(employee: dict, *keys: str) -> str:
+    for key in keys:
+        value = employee.get(key)
+        if value not in (None, ""):
+            return str(value).strip()
+    return ""
+
+
+def sync_envision_user_directory() -> dict:
+    """Discover Envision users without granting access or retaining their passwords."""
+    auth = envision_authenticate()
+    employees = envision_get_employees(auth["token"], ttl_seconds=0)
+    now = datetime.utcnow()
+    discovered = updated = skipped = 0
+    seen_usernames: set[str] = set()
+    seen_employee_ids: set[str] = set()
+    for employee in employees:
+        if not isinstance(employee, dict):
+            skipped += 1
+            continue
+        username = _normalise_envision_username(_directory_value(employee, "username", "userName", "employeeUsername", "loginName", "employeeNo"))
+        if not username:
+            skipped += 1
+            continue
+        employee_id = _directory_value(employee, "id", "employeeId") or None
+        seen_usernames.add(username)
+        if employee_id:
+            seen_employee_ids.add(employee_id)
+        email = _normalise_user_email(_directory_value(employee, "email", "emailAddress", "workEmail"))
+        first = _directory_value(employee, "firstName", "givenName")
+        last = _directory_value(employee, "surname", "lastName", "familyName")
+        display_name = " ".join(part for part in (first, last) if part).strip() or _directory_value(employee, "displayName", "employeeName", "shortDisplayName") or username
+        user = None
+        if employee_id:
+            user = AppUser.query.filter_by(envision_employee_id=employee_id).first()
+        if not user:
+            user = AppUser.query.filter(db.func.lower(AppUser.envision_username) == username).first()
+        if not user and email:
+            user = AppUser.query.filter_by(email=email).first()
+        if user:
+            user.envision_username = username
+            user.envision_employee_id = employee_id
+            user.auth_provider = "envision"
+            user.display_name = display_name
+            user.directory_last_seen_at = now
+            updated += 1
+        else:
+            # Some Envision records do not contain an email. A private placeholder
+            # keeps the existing non-null APG email schema intact and is never used to sign in.
+            local_email = email or f"{username}@envision.local"
+            if AppUser.query.filter_by(email=local_email).first():
+                local_email = f"{username}-{employee_id or secrets.token_hex(3)}@envision.local"
+            db.session.add(AppUser(
+                email=local_email,
+                display_name=display_name,
+                password_hash=generate_password_hash(secrets.token_urlsafe(32)),
+                auth_provider="envision",
+                envision_username=username,
+                envision_employee_id=employee_id,
+                directory_last_seen_at=now,
+                is_active=False,
+                permissions_json="[]",
+            ))
+            discovered += 1
+
+    # Envision does not return an explicit active/invalid status. Its employee
+    # directory is authoritative instead: a previously synced Envision identity
+    # that is absent from a completed refresh can no longer sign in to APG.
+    deactivated = 0
+    for user in AppUser.query.filter_by(auth_provider="envision", is_active=True).all():
+        username = _normalise_envision_username(user.envision_username)
+        employee_id = str(user.envision_employee_id or "").strip()
+        if (username and username in seen_usernames) or (employee_id and employee_id in seen_employee_ids):
+            continue
+        user.is_active = False
+        deactivated += 1
+    cfg = db.session.get(AppConfig, 1) or AppConfig(id=1)
+    cfg.last_envision_user_sync_at = now
+    db.session.add(cfg)
+    db.session.commit()
+    return {"discovered": discovered, "updated": updated, "deactivated": deactivated, "skipped": skipped, "total": len(employees)}
 
 
 def _bootstrap_initial_admin() -> None:
@@ -104,6 +199,22 @@ def _current_apg_user() -> AppUser | None:
         return None
 
 
+def _user_permissions(user: AppUser | None) -> set[str]:
+    if not user:
+        return set()
+    if user.is_admin:
+        return set(APP_PERMISSIONS)
+    try:
+        raw = json.loads(user.permissions_json or "[]")
+    except (TypeError, ValueError):
+        raw = []
+    return {value for value in raw if value in APP_PERMISSIONS}
+
+
+def _can_access(permission: str, user: AppUser | None = None) -> bool:
+    return permission in _user_permissions(user or _current_apg_user())
+
+
 def _csrf_token() -> str:
     token = session.get("apg_csrf_token")
     if not token:
@@ -122,7 +233,7 @@ def _login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
         if not _current_apg_user():
-            return redirect(url_for("ui.apg_login", next=request.full_path))
+            return redirect(url_for("ui.apg_login", next=_request_next_url()))
         return view(*args, **kwargs)
     return wrapped
 
@@ -132,8 +243,49 @@ def _admin_required(view):
     def wrapped(*args, **kwargs):
         user = _current_apg_user()
         if not user:
-            return redirect(url_for("ui.apg_login", next=request.full_path))
+            return redirect(url_for("ui.apg_login", next=_request_next_url()))
         if not user.is_admin:
+            abort(403)
+        return view(*args, **kwargs)
+    return wrapped
+
+
+def _permission_required(permission: str):
+    def decorator(view):
+        @wraps(view)
+        def wrapped(*args, **kwargs):
+            user = _current_apg_user()
+            if not user:
+                return redirect(url_for("ui.apg_login", next=_request_next_url()))
+            if not _can_access(permission, user):
+                return redirect(url_for("ui.dcs_landing", denied=permission))
+            return view(*args, **kwargs)
+        return wrapped
+    return decorator
+
+
+def _any_permission_required(*permissions: str):
+    """Allow a shared read-only page/API to be used by any listed role."""
+    def decorator(view):
+        @wraps(view)
+        def wrapped(*args, **kwargs):
+            user = _current_apg_user()
+            if not user:
+                return redirect(url_for("ui.apg_login", next=_request_next_url()))
+            if not any(_can_access(permission, user) for permission in permissions):
+                return redirect(url_for("ui.dcs_landing", denied=permissions[0] if permissions else "module"))
+            return view(*args, **kwargs)
+        return wrapped
+    return decorator
+
+
+def _operations_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        user = _current_apg_user()
+        if not user:
+            return redirect(url_for("ui.apg_login", next=_request_next_url()))
+        if not _user_permissions(user):
             abort(403)
         return view(*args, **kwargs)
     return wrapped
@@ -145,6 +297,7 @@ def _inject_apg_account_context():
     return {
         "apg_current_user": user,
         "apg_is_admin": bool(user and user.is_admin),
+        "apg_permissions": _user_permissions(user),
         "apg_csrf_token": _csrf_token(),
     }
 
@@ -165,7 +318,22 @@ def _charter_operations_directory():
 
 def _safe_apg_next(value: str | None) -> str:
     candidate = str(value or "").strip()
-    return candidate if candidate.startswith("/") and not candidate.startswith("//") else url_for("ui.home")
+    if not candidate.startswith("/") or candidate.startswith("//"):
+        return url_for("ui.home")
+
+    # Older sign-in pages may still carry a pre-proxy next value such as
+    # ``/dcs/charter-checkin``. Keep those links within the mounted /APG app.
+    prefix = request.script_root.rstrip("/")
+    if prefix and candidate != prefix and not candidate.startswith(f"{prefix}/"):
+        return f"{prefix}{candidate}"
+    return candidate
+
+
+def _request_next_url() -> str:
+    """Preserve the reverse-proxy prefix when returning from sign-in."""
+    prefix = request.script_root.rstrip("/")
+    path = request.full_path if request.full_path.startswith("/") else f"/{request.full_path}"
+    return f"{prefix}{path}" if prefix and not path.startswith(f"{prefix}/") else path
 
 
 @ui_bp.route("/account/login", methods=["GET", "POST"])
@@ -177,12 +345,36 @@ def apg_login():
         if not _csrf_is_valid():
             error = "Your sign-in form expired. Please try again."
         else:
-            user = AppUser.query.filter_by(email=_normalise_user_email(request.form.get("email"))).first()
-            if not user or not user.is_active or not check_password_hash(user.password_hash, request.form.get("password") or ""):
-                error = "Incorrect email address or password."
+            identity = str(request.form.get("identity") or request.form.get("email") or "").strip()
+            password = request.form.get("password") or ""
+            user = AppUser.query.filter(db.func.lower(AppUser.envision_username) == _normalise_envision_username(identity)).first()
+            if not user:
+                user = AppUser.query.filter_by(email=_normalise_user_email(identity)).first()
+            authenticated = False
+            if user and user.is_active:
+                if user.auth_provider == "envision" and user.envision_username:
+                    try:
+                        envision_auth = envision_authenticate_with_credentials(user.envision_username, password)
+                        authenticated = True
+                    except Exception:
+                        authenticated = False
+                else:
+                    authenticated = check_password_hash(user.password_hash, password)
+            if not authenticated:
+                error = "Incorrect Envision username or password, or you have not been granted APG access."
             else:
                 session.clear()
                 session["apg_user_id"] = user.id
+                if user.auth_provider == "envision":
+                    # Flask's default session is a signed browser cookie, so never put the
+                    # Envision bearer token in it. Store only an opaque server-side ID.
+                    session["apg_envision_session_id"] = create_kmh_session(
+                        token=envision_auth["token"],
+                        username=user.envision_username,
+                        refresh_token=envision_auth.get("refreshToken"),
+                        expires_at=envision_auth.get("expires_at"),
+                    )
+                    session.permanent = True
                 _csrf_token()
                 user.last_login_at = datetime.utcnow()
                 db.session.add(user)
@@ -194,6 +386,7 @@ def apg_login():
 @ui_bp.post("/account/logout")
 @_login_required
 def apg_logout():
+    clear_kmh_session(session.get("apg_envision_session_id"))
     session.clear()
     return redirect(url_for("ui.apg_login"))
 
@@ -206,7 +399,14 @@ def admin_users():
             flash("Your form expired. Please try again.", "danger")
             return redirect(url_for("ui.admin_users"))
         action = str(request.form.get("action") or "").strip()
-        if action == "create":
+        if action == "sync_directory":
+            try:
+                outcome = sync_envision_user_directory()
+                flash(f"Envision directory refreshed: {outcome['discovered']} new, {outcome['updated']} updated, {outcome['deactivated']} deactivated.", "success")
+            except Exception:
+                current_app.logger.exception("Envision user directory refresh failed")
+                flash("Envision directory refresh failed. Check the server Envision connection and try again.", "danger")
+        elif action == "create":
             email = _normalise_user_email(request.form.get("email"))
             password = request.form.get("password") or ""
             if not email or "@" not in email or len(password) < 8:
@@ -219,6 +419,7 @@ def admin_users():
                     display_name=str(request.form.get("display_name") or "").strip() or None,
                     password_hash=generate_password_hash(password),
                     is_admin=bool(request.form.get("is_admin")),
+                    permissions_json=json.dumps(list(APP_PERMISSIONS) if request.form.get("is_admin") else [key for key in APP_PERMISSIONS if request.form.get(f"permission_{key}")]),
                     is_active=True,
                 ))
                 db.session.commit()
@@ -241,6 +442,7 @@ def admin_users():
                     user.display_name = str(request.form.get("display_name") or "").strip() or None
                     user.is_admin = requested_admin
                     user.is_active = requested_active
+                    user.permissions_json = json.dumps(list(APP_PERMISSIONS) if requested_admin else [key for key in APP_PERMISSIONS if request.form.get(f"permission_{key}")])
                     new_password = request.form.get("new_password") or ""
                     if new_password:
                         if len(new_password) < 8:
@@ -251,7 +453,15 @@ def admin_users():
                     db.session.commit()
                     flash("APG user account updated.", "success")
         return redirect(url_for("ui.admin_users"))
-    return render_template("admin_users.html", users=AppUser.query.order_by(AppUser.is_admin.desc(), AppUser.email.asc()).all())
+    users = AppUser.query.order_by(AppUser.is_admin.desc(), AppUser.email.asc()).all()
+    cfg = db.session.get(AppConfig, 1)
+    return render_template(
+        "admin_users.html",
+        users=users,
+        permissions=APP_PERMISSIONS,
+        user_permissions={user.id: _user_permissions(user) for user in users},
+        last_directory_sync_at=cfg.last_envision_user_sync_at if cfg else None,
+    )
 
 
 @ui_bp.route("/admin/email-settings", methods=["GET", "POST"])
@@ -1495,7 +1705,14 @@ def dcs_from_envision():
     return render_template("dcs_from_envision.html", day=day)
 
 
+@ui_bp.route("/dcs")
+def dcs_landing():
+    """Operations entry point for Charter Check-in, Live Gantt, and Crew Briefing."""
+    return render_template("dcs_landing.html", day=_nz_today())
+
+
 @ui_bp.route("/dcs/new-live-gantt")
+@_permission_required("live_gantt")
 def dcs_new_live_gantt():
     day_str = request.args.get("date")
     if day_str:
@@ -1505,6 +1722,11 @@ def dcs_new_live_gantt():
             day = _nz_today()
     else:
         day = _nz_today()
+    # Production is the default for every non-admin session.  Only admins may
+    # retain a test-session selection.
+    if not _current_apg_user().is_admin:
+        session["envision_env"] = "base"
+        set_envision_environment("base")
     env = get_envision_environment()
     return render_template(
         "New_Gantt/live_gantt.html",
@@ -1517,6 +1739,7 @@ def dcs_new_live_gantt():
 
 
 @ui_bp.route("/dcs/charter-checkin")
+@_permission_required("charter_checkin")
 def dcs_charter_checkin():
     day_str = request.args.get("date")
     try:
@@ -1656,6 +1879,7 @@ def charter_brand_asset(asset: str):
 
 
 @ui_bp.route("/dcs/crew-briefing")
+@_permission_required("crew_briefing")
 def dcs_crew_briefing():
     day_str = request.args.get("date")
     if day_str:
@@ -1718,6 +1942,7 @@ def crew_briefing_service_worker():
 
 
 @ui_bp.get("/api/dcs/gantt_data")
+@_any_permission_required("live_gantt", "crew_briefing")
 def api_dcs_gantt_data():
     """
     JSON endpoint used by the Gantt auto-refresh.
@@ -2068,6 +2293,7 @@ def api_dcs_gantt_data():
     return jsonify({"ok": True, "results": json_rows})
 
 @ui_bp.get("/api/envision/flight_delays")
+@_permission_required("live_gantt")
 def api_envision_flight_delays():
     """
     /api/envision/flight_delays?flight_id=12345
@@ -2094,6 +2320,7 @@ def api_envision_flight_delays():
 
 
 @ui_bp.get("/api/envision/registration_defects")
+@_permission_required("live_gantt")
 def api_envision_registration_defects():
     """
     /api/envision/registration_defects?registration_id=123
@@ -2153,6 +2380,7 @@ def api_envision_registration_defects():
 
 
 @ui_bp.get("/api/envision/registration_maintenance")
+@_permission_required("live_gantt")
 def api_envision_registration_maintenance():
     """
     /api/envision/registration_maintenance?registration_id=123
@@ -2344,7 +2572,104 @@ def _fetch_work_orders_for_registration(token: str, registration_id: int) -> lis
     data = resp.json()
     return data if isinstance(data, list) else []
 
+
+def _fetch_registration_life_codes(token: str, registration_id: int) -> list[dict]:
+    """Return installed life-coded parts and their current Envision life totals."""
+    url = f"{_runtime_envision_base()}/Registrations/{registration_id}/LifeCodes"
+    response = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=30)
+    response.raise_for_status()
+    data = response.json()
+    return data if isinstance(data, list) else []
+
+
+def _fetch_registration_life_values(token: str, registration_id: int) -> dict:
+    """Return the aircraft's current flying hours and cycles."""
+    url = f"{_runtime_envision_base()}/Registrations/{registration_id}/LifeValues"
+    response = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=30)
+    response.raise_for_status()
+    data = response.json()
+    return data if isinstance(data, dict) else {}
+
+
+def _fetch_registration_scheduled_maintenance(token: str, registration_id: int) -> list[dict]:
+    """Return Envision maintenance intervals, including its remaining-life calculation."""
+    url = f"{_runtime_envision_base()}/Registrations/{registration_id}/ScheduledMaintenance"
+    response = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=30)
+    response.raise_for_status()
+    data = response.json()
+    return data if isinstance(data, list) else []
+
+
+def _fetch_maintenance_registration_snapshot(token: str, registration: dict) -> dict:
+    """Build one dashboard card from the registration-scoped Envision endpoints."""
+    registration_id = int(registration["id"])
+    life_values = _fetch_registration_life_values(token, registration_id)
+    return {
+        "id": registration_id,
+        "registration": registration.get("registration") or "Unassigned",
+        "model": registration.get("model") or "",
+        "serial_no": registration.get("serialNo") or "",
+        "status": registration.get("status") or "",
+        "life_values": life_values,
+        "life_codes": _fetch_registration_life_codes(token, registration_id),
+        "scheduled_maintenance": _fetch_registration_scheduled_maintenance(token, registration_id),
+        "work_orders": _fetch_work_orders_for_registration(token, registration_id),
+    }
+
+
+@ui_bp.route("/maintenance")
+@_login_required
+def maintenance_dashboard():
+    """Fleet maintenance overview; detail data is loaded on demand by the page."""
+    return render_template("maintenance_dashboard.html")
+
+
+@ui_bp.get("/api/maintenance/dashboard")
+@_login_required
+def api_maintenance_dashboard():
+    """Read-only fleet maintenance data sourced from Envision's v1 API."""
+    try:
+        user_session = get_kmh_session(session.get("apg_envision_session_id"))
+        token = str((user_session or {}).get("token") or "").strip()
+        if not token:
+            return jsonify({"ok": False, "session_expired": True, "error": "Your Envision session expired. Please sign in again."}), 401
+        response = requests.get(
+            f"{_runtime_envision_base()}/Registrations",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+        )
+        response.raise_for_status()
+        registrations = response.json()
+        if not isinstance(registrations, list):
+            registrations = []
+    except Exception as exc:
+        if getattr(getattr(exc, "response", None), "status_code", None) == 401:
+            clear_kmh_session(session.get("apg_envision_session_id"))
+            session.pop("apg_envision_session_id", None)
+            return jsonify({"ok": False, "session_expired": True, "error": "Your Envision session expired. Please sign in again."}), 401
+        current_app.logger.exception("Maintenance dashboard could not load registrations")
+        return jsonify({"ok": False, "error": f"Envision registrations could not be loaded: {exc}"}), 502
+
+    snapshots, errors = [], []
+    # Registration endpoints are independent. Parallel reads keep fleet refreshes responsive.
+    with ThreadPoolExecutor(max_workers=min(8, max(1, len(registrations)))) as executor:
+        futures = {
+            executor.submit(_fetch_maintenance_registration_snapshot, token, row): row
+            for row in registrations if isinstance(row, dict) and row.get("id") is not None
+        }
+        for future in as_completed(futures):
+            row = futures[future]
+            try:
+                snapshots.append(future.result())
+            except Exception as exc:
+                current_app.logger.warning("Maintenance snapshot failed for registration %s: %s", row.get("id"), exc)
+                errors.append({"registration": row.get("registration") or str(row.get("id")), "error": str(exc)})
+
+    snapshots.sort(key=lambda item: item["registration"])
+    return jsonify({"ok": True, "aircraft": snapshots, "errors": errors, "generated_at": datetime.now(timezone.utc).isoformat()})
+
 @ui_bp.get("/api/envision/flight_times")
+@_permission_required("live_gantt")
 def api_envision_flight_times():
     """
     Return Envision actual times for a single flight.

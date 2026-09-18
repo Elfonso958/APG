@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block head_extra %}<link rel="stylesheet" href="{{ url_for('static', filename='css/maintenance_dashboard.css') }}?v=1">{% endblock %}
+{% block content %}
+<section class="maintenance-hero">
+  <div><div class="page-kicker">Envision · Fleet status</div><h1>Maintenance Dashboard</h1><p>Aircraft utilisation, installed life-coded parts, and work orders in one fleet view.</p></div>
+  <div class="maintenance-actions"><span id="lastUpdated">Loading live Envision data…</span><button class="btn" id="refreshButton" type="button">Refresh</button></div>
+</section>
+<p class="maintenance-notice">Life-code totals and scheduled-maintenance remaining life are live Envision values. Remaining life is shown only where Envision has a scheduled maintenance interval.</p>
+<div class="maintenance-filters"><label>Find aircraft or part <input id="searchInput" type="search" placeholder="Registration, part no., serial…"></label><label>Show <select id="categoryFilter"><option value="all">All life-coded parts</option><option value="engine">Engines</option><option value="prop">Propellers</option><option value="gear">Landing gear</option><option value="other">Other components</option></select></label></div>
+<div id="dashboardError" class="maintenance-error" hidden></div>
+<div id="fleetSummary" class="fleet-summary" aria-live="polite"></div>
+<section id="aircraftList" class="aircraft-list" aria-live="polite"><div class="maintenance-loading">Loading fleet maintenance data…</div></section>
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+  const list = document.getElementById('aircraftList'), error = document.getElementById('dashboardError');
+  const summary = document.getElementById('fleetSummary'), updated = document.getElementById('lastUpdated');
+  const search = document.getElementById('searchInput'), category = document.getElementById('categoryFilter');
+  let aircraft = [];
+  const esc = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+  const number = value => value === null || value === undefined || value === '' ? '—' : new Intl.NumberFormat('en-NZ', {maximumFractionDigits: 1}).format(Number(value));
+  const date = value => value ? new Intl.DateTimeFormat('en-NZ', {day:'2-digit', month:'short', year:'numeric'}).format(new Date(value)) : '—';
+  const partCategory = part => {
+    const text = [part.location, part.locationPosition, part.partNo, part.lifeCode].join(' ').toLowerCase();
+    if (/engine|eng\b|n1|n2/.test(text)) return 'engine';
+    if (/prop|propeller/.test(text)) return 'prop';
+    if (/gear|landing|lg\b|wheel|brake/.test(text)) return 'gear';
+    return 'other';
+  };
+  const workOrders = orders => !orders?.length ? '<p class="empty">No work orders returned by Envision.</p>' : `<div class="table-wrap"><table><thead><tr><th>Order</th><th>Description</th><th>Status</th><th>Planned finish</th></tr></thead><tbody>${orders.map(order => `<tr><td>${esc(order.orderNo || order.id)}</td><td>${esc(order.description)}</td><td><span class="status">${esc(order.workOrderStatus)}</span></td><td>${date(order.plannedFinishDate || order.actualFinishDate)}</td></tr>`).join('')}</tbody></table></div>`;
+  const scheduledMaintenance = rows => !rows?.length ? '<p class="empty">No scheduled maintenance intervals returned by Envision.</p>' : `<div class="table-wrap"><table><thead><tr><th>Maintenance item</th><th>Life code</th><th>Current</th><th>Remaining</th><th>Next due</th><th>Work order</th></tr></thead><tbody>${rows.map(item => `<tr><td>${esc(item.mi || item.title)}</td><td>${esc(item.lifeCode)}</td><td>${esc(item.currentLife)}</td><td><strong>${esc(item.remaining)}</strong></td><td>${esc(item.nextDue || date(item.dueDate))}</td><td>${esc(item.workOrderNo)}</td></tr>`).join('')}</tbody></table></div>`;
+  function render() {
+    const query = search.value.trim().toLowerCase(), filter = category.value;
+    const visible = aircraft.map(ac => ({...ac, life_codes: (ac.life_codes || []).filter(part => {
+      const matchesCategory = filter === 'all' || partCategory(part) === filter;
+      const text = [ac.registration, ac.model, part.location, part.locationPosition, part.partNo, part.serialNo, part.lifeCode].join(' ').toLowerCase();
+      return matchesCategory && (!query || text.includes(query));
+    })})).filter(ac => !query || ac.life_codes.length || [ac.registration, ac.model].join(' ').toLowerCase().includes(query));
+    summary.innerHTML = `<div><strong>${visible.length}</strong><span>aircraft shown</span></div><div><strong>${visible.reduce((sum, ac) => sum + (ac.work_orders || []).length, 0)}</strong><span>work orders</span></div><div><strong>${visible.reduce((sum, ac) => sum + ac.life_codes.length, 0)}</strong><span>life-coded parts</span></div>`;
+    list.innerHTML = visible.length ? visible.map(ac => {
+      const values = ac.life_values || {};
+      const parts = ac.life_codes.length ? `<div class="table-wrap"><table><thead><tr><th>Component / position</th><th>Part no.</th><th>Serial no.</th><th>Life code</th><th class="right">Current total</th></tr></thead><tbody>${ac.life_codes.map(part => `<tr><td><span class="part-category ${partCategory(part)}">${partCategory(part)}</span> ${esc(part.locationPosition || part.location)}</td><td>${esc(part.partNo)}</td><td>${esc(part.serialNo)}</td><td>${esc(part.lifeCode)}</td><td class="right">${number(part.lifeTotal)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">No matching life-coded parts.</p>';
+      return `<article class="aircraft-card"><header><div><h2>${esc(ac.registration)}</h2><p>${esc(ac.model)}${ac.serial_no ? ' · S/N ' + esc(ac.serial_no) : ''}</p></div><span class="aircraft-status">${esc(ac.status)}</span></header><div class="utilisation"><div><span>Flight hours</span><strong>${esc(values.flyingHours || number(values.flyingHoursRaw))}</strong></div><div><span>Flight cycles</span><strong>${esc(values.flyingCycles || number(values.flyingCyclesRaw))}</strong></div><div><span>Last take-off</span><strong>${date(values.lastTakeOffTime)}</strong></div></div><details open><summary>Life-limited parts <b>${ac.life_codes.length}</b></summary>${parts}</details><details open><summary>Scheduled maintenance & remaining life <b>${(ac.scheduled_maintenance || []).length}</b></summary>${scheduledMaintenance(ac.scheduled_maintenance)}</details><details><summary>Work orders <b>${(ac.work_orders || []).length}</b></summary>${workOrders(ac.work_orders)}</details></article>`;
+    }).join('') : '<div class="maintenance-loading">No aircraft or parts match these filters.</div>';
+  }
+  async function load() {
+    error.hidden = true; document.getElementById('refreshButton').disabled = true; updated.textContent = 'Refreshing live Envision data…';
+    try {
+      const response = await fetch('{{ url_for("ui.api_maintenance_dashboard") }}', {headers: {Accept: 'application/json'}});
+      const payload = await response.json();
+      if (payload.session_expired) { window.location.assign('{{ url_for("ui.apg_login") }}?next=' + encodeURIComponent(window.location.pathname)); return; }
+      if (!response.ok || !payload.ok) throw new Error(payload.error || 'Unable to load maintenance data.');
+      aircraft = payload.aircraft || []; render();
+      updated.textContent = `Updated ${new Intl.DateTimeFormat('en-NZ', {dateStyle:'medium', timeStyle:'short'}).format(new Date(payload.generated_at))}`;
+      if (payload.errors?.length) { error.textContent = `${payload.errors.length} aircraft could not be refreshed. Check the server log for details.`; error.hidden = false; }
+    } catch (err) { list.innerHTML = '<div class="maintenance-loading">Maintenance data is not available.</div>'; error.textContent = err.message; error.hidden = false; updated.textContent = 'Update failed'; }
+    finally { document.getElementById('refreshButton').disabled = false; }
+  }
+  search.addEventListener('input', render); category.addEventListener('change', render); document.getElementById('refreshButton').addEventListener('click', load); load();
+})();
+</script>
+{% endblock %}

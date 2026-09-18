@@ -27,6 +27,7 @@
         <a href="{{ url_for('ui.home') }}" class="{{ 'nav-active' if request.path in ['/', '/sync/runs', '/sync/runs/'] else '' }}">Sync runs</a>
         <a href="{{ url_for('ui.settings_page') }}" class="{{ 'nav-active' if request.path.startswith('/settings') else '' }}">Schedule</a>
         <a href="{{ url_for('ui.dcs_from_envision') }}" class="{{ 'nav-active' if request.path.startswith('/dcs/from-envision') else '' }}">DCS &rarr; Schedule</a>
+        {% if apg_current_user %}<a href="{{ url_for('ui.maintenance_dashboard') }}" class="{{ 'nav-active' if request.path.startswith('/maintenance') else '' }}">Maintenance</a>{% endif %}
         <a href="{{ url_for('ui.ops_kmh_calendar') }}" class="{{ 'nav-active' if request.path.startswith('/ops/kmh-calendar') else '' }}">KMH Calendar</a>
         <a href="{{ url_for('ui.ops_otp_cache') }}" class="{{ 'nav-active' if request.path.startswith('/ops/otp-cache') else '' }}">OTP Cache</a>
         <a href="{{ url_for('ui.ops_charter_briefs') }}" class="{{ 'nav-active' if request.path.startswith('/ops/charter-briefs') else '' }}">Charter Briefs</a>

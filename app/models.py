@@ -130,14 +130,19 @@ class CharterBrief(db.Model):
 
 
 class AppUser(db.Model):
-    """Local APG accounts. These are deliberately separate from Envision accounts."""
+    """APG access assignments, optionally authenticated by Envision."""
     __tablename__ = "app_users"
 
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(255), unique=True, index=True, nullable=False)
     display_name = db.Column(db.String(120), nullable=True)
     password_hash = db.Column(db.String(255), nullable=False)
+    auth_provider = db.Column(db.String(24), nullable=False, default="local")
+    envision_username = db.Column(db.String(120), unique=True, index=True, nullable=True)
+    envision_employee_id = db.Column(db.String(64), unique=True, index=True, nullable=True)
+    directory_last_seen_at = db.Column(db.DateTime, nullable=True)
     is_admin = db.Column(db.Boolean, nullable=False, default=False)
+    permissions_json = db.Column(db.Text, nullable=False, default="[]")
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     last_login_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
@@ -181,6 +186,7 @@ class AppConfig(db.Model):
     airport_handling_json = db.Column(db.Text, default="[]", nullable=False)
     last_auto_started = db.Column(db.DateTime, nullable=True)
     last_auto_finished = db.Column(db.DateTime, nullable=True)
+    last_envision_user_sync_at = db.Column(db.DateTime, nullable=True)
 
 
 class FlightFreightAllocation(db.Model):
