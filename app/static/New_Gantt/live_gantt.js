@@ -5,7 +5,7 @@
   const apiUrl = app.dataset.apiUrl;
   const pageView = app.dataset.view || "gantt";
   const isBriefingView = pageView === "briefing";
-  const isCabinCrewRestricted = app.dataset.cabinCrewRestricted === "1";
+  let isCabinCrewRestricted = app.dataset.cabinCrewRestricted === "1";
   const signedInCrewCode = String(app.dataset.signedInCrewCode || "").trim().toUpperCase();
   const apgPushUrl = app.dataset.apgPushUrl;
   const apgPlanUrlTemplate = app.dataset.apgPlanUrlTemplate;
@@ -81,7 +81,6 @@
   const btnResetApg = document.getElementById("btnResetApg");
   const btnSeatmap = document.getElementById("btnSeatmap");
   const btnMovementMsg = document.getElementById("btnMovementMsg");
-  const btnPrintBriefing = document.getElementById("btnPrintBriefing");
   const btnCharterManifest = document.getElementById("btnCharterManifest");
 
   const seatmapDialog = document.getElementById("seatmapDialog");
@@ -506,7 +505,7 @@
   }
 
   function setActionsEnabled(enabled) {
-    [btnPaxList, btnCargo, btnCargoTest, btnPreviewManifest, btnSubmitApg, btnResetApg, btnSeatmap, btnMovementMsg, btnCharterManifest, btnPrintBriefing].forEach((b) => {
+    [btnPaxList, btnCargo, btnCargoTest, btnPreviewManifest, btnSubmitApg, btnResetApg, btnSeatmap, btnMovementMsg, btnCharterManifest].forEach((b) => {
       if (b) b.disabled = !enabled;
     });
     if (btnCharterManifest && enabled) {
@@ -622,6 +621,26 @@
   function isCharterFlight(f) {
     const text = `${f?.service_type || ""} ${f?.flight_type || ""}`.toLowerCase();
     return text.includes("charter");
+  }
+
+  function applyCabinCrewRestriction(restricted) {
+    isCabinCrewRestricted = Boolean(restricted);
+    [btnCargo, btnCargoTest, btnCharterManifest, btnResetApg, btnSeatmap, btnMovementMsg, btnSubmitApg]
+      .forEach((button) => {
+        if (button) button.hidden = isCabinCrewRestricted;
+      });
+  }
+
+  function isCabinCrewRole(role) {
+    const value = String(role || "").trim().toUpperCase();
+    return value === "FA" || value.includes("CABIN CREW") || value.includes("FLIGHT ATTENDANT");
+  }
+
+  function applySignedInCrewRoleRestriction(items, crewCode) {
+    if (!signedInCrewCode || signedInCrewCode !== crewCode) return;
+    const signedInRole = (items || []).flatMap((flight) => flight.crew || [])
+      .find((crewMember) => String(crewMember.employee_no || "").trim().toUpperCase() === signedInCrewCode)?.position;
+    if (isCabinCrewRole(signedInRole)) applyCabinCrewRestriction(true);
   }
 
   function isFullFreighterFlight(f) {
@@ -4595,6 +4614,7 @@
         f.crew = crew;
         return true;
       });
+      applySignedInCrewRoleRestriction(matches, crewCode);
       briefingOfflineMode = false;
       renderBriefingFlights(matches, crewCode);
       lastBriefingRefreshAt = new Date();
@@ -5444,64 +5464,6 @@
     return row * 100 + col;
   }
 
-  function printSelectedBriefing() {
-    const f = selectedFlight;
-    if (!f) return;
-    const printWindow = window.open("", "_blank");
-    if (!printWindow) {
-      alert("Please allow pop-ups to print this briefing.");
-      return;
-    }
-    const counts = briefingPaxBreakdown(f);
-    const crew = (f.crew || []).filter((c) => c.is_operating !== false);
-    const passengers = Array.isArray(f.pax_list) ? [...f.pax_list] : [];
-    passengers.sort((a, b) => seatSortValue(a.Seat || a.SeatNumber) - seatSortValue(b.Seat || b.SeatNumber));
-    const crewRows = crew.length ? crew.map((c) => `
-      <tr><td>${escapeHtml(c.position || "Crew")}</td><td>${escapeHtml(c.name || "-")}</td><td>${escapeHtml(c.employee_no ? `EMP ${c.employee_no}` : "-")}</td><td>${c.is_pilot_flying ? "Yes" : ""}</td></tr>
-    `).join("") : '<tr><td colspan="4">No operating crew returned.</td></tr>';
-    const passengerRows = passengers.length ? passengers.map((p) => `
-      <tr>
-        <td>${escapeHtml(String(p.Seat || p.SeatNumber || "-"))}</td>
-        <td>${escapeHtml(paxName(p) || "-")}</td>
-        <td>${escapeHtml(String(p.PassengerType || p.passengerType || "AD"))}</td>
-        <td>${escapeHtml(classifyPaxStatus(p))}</td>
-        <td>${Number(p.BaggageWeight || 0).toFixed(1)} kg</td>
-        <td>${escapeHtml(ssrText(p) || String(p.SSR || ""))}</td>
-      </tr>
-    `).join("") : '<tr><td colspan="6">No passenger rows available.</td></tr>';
-    const generated = new Date().toLocaleString("en-NZ", { dateStyle: "medium", timeStyle: "short" });
-    printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(flightCode(f))} Crew Briefing</title><style>
-      @page { size: A4 portrait; margin: 12mm; }
-      * { box-sizing: border-box; } body { margin: 0; color: #172033; font: 11px Arial, sans-serif; }
-      header { display:flex; justify-content:space-between; gap:20px; padding-bottom:12px; border-bottom:3px solid #0f6fff; }
-      h1 { margin:0; font-size:24px; } h2 { margin:18px 0 7px; font-size:15px; color:#0f5fc7; }
-      .muted { color:#667085; } .route { margin-top:5px; font-size:18px; font-weight:700; }
-      .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-top:12px; }
-      .cell { padding:8px; border:1px solid #d9e2ef; border-radius:7px; } .cell small { display:block; color:#667085; text-transform:uppercase; } .cell strong { display:block; margin-top:3px; font-size:13px; }
-      table { width:100%; border-collapse:collapse; } th,td { padding:6px; border:1px solid #cfd8e5; text-align:left; vertical-align:top; } th { background:#edf4ff; font-size:9px; text-transform:uppercase; }
-      tr { break-inside:avoid; } footer { margin-top:14px; color:#667085; font-size:9px; }
-      .return-link { margin: 0 0 14px; border: 1px solid #0f6fff; border-radius: 6px; padding: 7px 10px; background: #fff; color: #0f5fc7; font: 700 12px Arial, sans-serif; cursor: pointer; }
-      @media print { .no-print { display:none; } }
-    </style></head><body>
-      <button class="return-link no-print" type="button" onclick="if(window.opener){window.opener.focus();window.close()}else{history.back()}">← Back to Crew Briefing</button>
-      <header><div><h1>${escapeHtml(flightCode(f))} Crew Briefing</h1><div class="route">${escapeHtml(f.dep || "-")} → ${escapeHtml(f.ades || "-")}</div><div class="muted">${escapeHtml(briefingDateLabel(f))}</div></div><div><strong>${escapeHtml(f.reg || "TBA")}</strong><br><span class="muted">${escapeHtml(f.flight_status || "-")}</span></div></header>
-      <section class="grid">
-        <div class="cell"><small>STD / STA</small><strong>${fmtTime(f.std_sched_nz)} / ${fmtTime(f.sta_sched_nz)}</strong></div>
-        <div class="cell"><small>ETD / ETA</small><strong>${fmtTime(f.std_nz)} / ${fmtTime(f.sta_nz)}</strong></div>
-        <div class="cell"><small>Aircraft</small><strong>${escapeHtml(f.reg || "TBA")}</strong></div>
-        <div class="cell"><small>Baggage</small><strong>${Number(f.bags_kg || 0).toFixed(1)} kg</strong></div>
-        <div class="cell"><small>Total pax</small><strong>${counts.total}</strong></div>
-        <div class="cell"><small>Adults</small><strong>${counts.adults}</strong></div>
-        <div class="cell"><small>Children</small><strong>${counts.children}</strong></div>
-        <div class="cell"><small>Infants</small><strong>${counts.infants}</strong></div>
-      </section>
-      <h2>Operating crew</h2><table><thead><tr><th>Position</th><th>Name</th><th>Crew code</th><th>Pilot flying</th></tr></thead><tbody>${crewRows}</tbody></table>
-      <h2>Passengers</h2><table><thead><tr><th>Seat</th><th>Name</th><th>Type</th><th>Status</th><th>Baggage</th><th>SSR</th></tr></thead><tbody>${passengerRows}</tbody></table>
-      <footer>Generated ${escapeHtml(generated)} · Live operational information should be rechecked before departure.</footer>
-      <script>window.addEventListener('load',()=>setTimeout(()=>window.print(),150));<\/script>
-    </body></html>`);
-    printWindow.document.close();
-  }
 
   function openPassengerList() {
     const f = selectedFlight;
@@ -5815,7 +5777,6 @@
   if (btnResetApg) btnResetApg.addEventListener("click", withBusy(btnResetApg, "Resetting...", resetApgPassengers));
   if (btnSeatmap) btnSeatmap.addEventListener("click", () => openSeatmap());
   if (btnMovementMsg) btnMovementMsg.addEventListener("click", openMovementDialog);
-  if (btnPrintBriefing) btnPrintBriefing.addEventListener("click", printSelectedBriefing);
   if (btnCharterManifest) btnCharterManifest.addEventListener("click", openCharterManifestDialog);
   if (btnAddCharterPax) btnAddCharterPax.addEventListener("click", () => {
     charterManifestRows.push(newEmptyCharterRow(charterManifestFlight || selectedFlight));
@@ -5882,6 +5843,7 @@
     setupLiveNowTimer();
     setupCargoRevisionTimer();
     setActionsEnabled(false);
+    applyCabinCrewRestriction(isCabinCrewRestricted);
     if (isBriefingView && crewCodeInput) crewCodeInput.value = signedInCrewCode || localStorage.getItem("crew_briefing_code") || "";
     if (isBriefingView && "serviceWorker" in navigator && app.dataset.serviceWorkerUrl) {
       navigator.serviceWorker.register(app.dataset.serviceWorkerUrl).catch((err) => console.warn("Crew briefing service worker unavailable", err));

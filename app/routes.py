@@ -5097,6 +5097,7 @@ def _build_manifest_html_and_ctx(
             },
             passengers=[],
             crew=[],
+            generated_at=datetime.now(NZ_TZ).strftime("%-d %b %Y, %-I:%M %p %Z"),
         ), {
             "designator": designator,
             "number": number,
@@ -5313,6 +5314,7 @@ def _build_manifest_html_and_ctx(
         flight=flight_ctx,
         passengers=passengers,
         crew=crew,
+        generated_at=datetime.now(NZ_TZ).strftime("%-d %b %Y, %-I:%M %p %Z"),
     )
     return html, flight_ctx
 
