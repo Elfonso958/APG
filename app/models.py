@@ -140,6 +140,7 @@ class AppUser(db.Model):
     auth_provider = db.Column(db.String(24), nullable=False, default="local")
     envision_username = db.Column(db.String(120), unique=True, index=True, nullable=True)
     envision_employee_id = db.Column(db.String(64), unique=True, index=True, nullable=True)
+    envision_job_title = db.Column(db.String(160), nullable=True)
     directory_last_seen_at = db.Column(db.DateTime, nullable=True)
     is_admin = db.Column(db.Boolean, nullable=False, default=False)
     permissions_json = db.Column(db.Text, nullable=False, default="[]")

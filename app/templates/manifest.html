@@ -280,6 +280,19 @@
         width: 28%;
       }
 
+      .return-link {
+        display: inline-block;
+        margin-bottom: 14px;
+        border: 1px solid #006c5b;
+        border-radius: 4px;
+        padding: 7px 10px;
+        background: #fff;
+        color: #00493c;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
       .pax-table th:nth-child(2),
       .pax-table td:nth-child(2),
       .pax-table th:nth-child(3),
@@ -313,10 +326,12 @@
         body {
           margin: 12mm;
         }
+        .no-print { display: none; }
       }
     </style>
   </head>
   <body>
+    <button class="return-link no-print" type="button" onclick="if (window.opener) { window.opener.focus(); window.close(); } else { history.back(); }">← Back to Crew Briefing</button>
     {# =========================
        HEADER
        ========================= #}

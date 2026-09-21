@@ -92,6 +92,14 @@ def _directory_value(employee: dict, *keys: str) -> str:
     return ""
 
 
+def _is_cabin_crew_user(user: AppUser | None) -> bool:
+    """Cabin crew receive the read-only, passenger-focused briefing view."""
+    if not user or user.is_admin or user.auth_provider != "envision":
+        return False
+    title = " ".join(str(user.envision_job_title or "").casefold().split())
+    return "cabin crew" in title
+
+
 def sync_envision_user_directory() -> dict:
     """Discover Envision users without granting access or retaining their passwords."""
     auth = envision_authenticate()
@@ -116,6 +124,7 @@ def sync_envision_user_directory() -> dict:
         first = _directory_value(employee, "firstName", "givenName")
         last = _directory_value(employee, "surname", "lastName", "familyName")
         display_name = " ".join(part for part in (first, last) if part).strip() or _directory_value(employee, "displayName", "employeeName", "shortDisplayName") or username
+        job_title = _directory_value(employee, "jobTitle", "job_title", "title", "role", "roleName", "jobRole", "position", "positionName", "crewPosition", "crewPositionDescription") or None
         user = None
         if employee_id:
             user = AppUser.query.filter_by(envision_employee_id=employee_id).first()
@@ -128,6 +137,7 @@ def sync_envision_user_directory() -> dict:
             user.envision_employee_id = employee_id
             user.auth_provider = "envision"
             user.display_name = display_name
+            user.envision_job_title = job_title
             user.directory_last_seen_at = now
             updated += 1
         else:
@@ -143,6 +153,7 @@ def sync_envision_user_directory() -> dict:
                 auth_provider="envision",
                 envision_username=username,
                 envision_employee_id=employee_id,
+                envision_job_title=job_title,
                 directory_last_seen_at=now,
                 is_active=False,
                 permissions_json="[]",
@@ -298,6 +309,7 @@ def _inject_apg_account_context():
         "apg_current_user": user,
         "apg_is_admin": bool(user and user.is_admin),
         "apg_permissions": _user_permissions(user),
+        "apg_is_cabin_crew": _is_cabin_crew_user(user),
         "apg_csrf_token": _csrf_token(),
     }
 
@@ -1901,6 +1913,7 @@ def dcs_crew_briefing():
         envision_env_host=env.get("host"),
         envision_env_key=env.get("key"),
         envision_test_available=env.get("test_available"),
+        is_cabin_crew=_is_cabin_crew_user(_current_apg_user()),
     )
 
 

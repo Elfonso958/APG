@@ -115,6 +115,32 @@ def _apply_session_envision_environment():
     except Exception:
         current_app.logger.exception("Failed to apply session Envision environment")
 
+
+@api_bp.before_request
+def _require_authenticated_operations_api():
+    """Keep operational data APIs behind the same role controls as their UI."""
+    # A passenger's signed self-check-in URL is intentionally public; every
+    # other operations endpoint requires an APG account.
+    if request.path.startswith("/api/dcs/charter-self-checkin/"):
+        return None
+
+    from .views import _current_apg_user, _can_access, _user_permissions
+
+    user = _current_apg_user()
+    if not user:
+        return jsonify(ok=False, error="Sign in is required."), 401
+    if user.is_admin:
+        return None
+
+    path = request.path
+    required = "crew_briefing" if "/envision/crew_briefing" in path else (
+        "charter_checkin" if "/dcs/charter" in path else None
+    )
+    if required and not _can_access(required, user):
+        return jsonify(ok=False, error="You do not have permission for this operation."), 403
+    if not required and not _user_permissions(user):
+        return jsonify(ok=False, error="You do not have permission for this operation."), 403
+
 # APG (RocketRoute / FlightPlan API)
 APG_BASE = os.getenv("APG_BASE", "https://fly.rocketroute.com/api")
 APG_APP_KEY = os.getenv("APG_APP_KEY", "")             # Provisioned by APG
@@ -2845,6 +2871,11 @@ def api_envision_environment():
     env_name = str(data.get("environment") or data.get("env") or "").strip().lower()
     if env_name not in {"base", "live", "prod", "test", "uat", "staging"}:
         return jsonify({"ok": False, "error": "environment must be 'base' or 'test'"}), 400
+
+    from .views import _current_apg_user
+    user = _current_apg_user()
+    if not user or not user.is_admin:
+        return jsonify({"ok": False, "error": "Only administrators can change the Envision environment."}), 403
 
     try:
         effective = "test" if env_name in {"test", "uat", "staging"} else "base"

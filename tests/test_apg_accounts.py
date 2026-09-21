@@ -1,4 +1,5 @@
 import os
+import json
 import unittest
 from unittest.mock import patch
 
@@ -76,3 +77,26 @@ class ApgAccountTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn("/account/login", response.location)
 
+    def test_cabin_crew_only_see_passenger_and_manifest_tools_in_crew_briefing(self):
+        user = AppUser(
+            email="crew@example.test",
+            display_name="Cabin Crew",
+            password_hash="unused",
+            auth_provider="envision",
+            envision_username="cc1",
+            envision_job_title="Cabin Crew",
+            is_active=True,
+            permissions_json=json.dumps(["crew_briefing"]),
+        )
+        db.session.add(user)
+        db.session.commit()
+        with self.client.session_transaction() as session:
+            session["apg_user_id"] = user.id
+
+        response = self.client.get("/dcs/crew-briefing")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Passenger List", response.data)
+        self.assertIn(b"Preview Manifest", response.data)
+        self.assertNotIn(b'id="btnCargo"', response.data)
+        self.assertNotIn(b'id="btnPrintBriefing"', response.data)

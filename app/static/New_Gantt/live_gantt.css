@@ -48,9 +48,9 @@ body {
 .topbar {
   padding: 16px 18px;
   display: grid;
-  grid-template-columns: minmax(220px, 300px) 1fr;
+  grid-template-columns: minmax(200px, 260px) minmax(360px, 1fr) auto;
   gap: 16px;
-  align-items: end;
+  align-items: center;
 }
 
 .topbar-meta {
@@ -66,6 +66,13 @@ body {
   letter-spacing: .1em;
   font-weight: 800;
 }
+
+.gantt-brand { display: flex; align-items: center; gap: 8px; color: #fff; font-size: 1.18rem; font-weight: 800; letter-spacing: -.02em; }
+.gantt-brand-mark { font-size: 1.35rem; transform: rotate(-12deg); }
+.topbar-stats { display: grid; grid-template-columns: repeat(4, minmax(68px, 1fr)); gap: 7px; }
+.topbar-stats .stat { min-width: 0; padding: 7px 9px; background: color-mix(in srgb, var(--panel) 85%, var(--accent) 15%); }
+.topbar-stats .stat .label { font-size: .68rem; white-space: nowrap; }
+.topbar-stats .stat .value { margin-top: 1px; font-size: 1.05rem; }
 
 .envision-env-pill {
   display: inline-flex;
@@ -170,6 +177,7 @@ body {
     grid-template-columns: 1fr;
     align-items: stretch;
   }
+  .topbar-stats { max-width: 620px; }
   .controls {
     justify-content: flex-start;
   }

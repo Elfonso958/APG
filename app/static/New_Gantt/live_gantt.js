@@ -5,6 +5,7 @@
   const apiUrl = app.dataset.apiUrl;
   const pageView = app.dataset.view || "gantt";
   const isBriefingView = pageView === "briefing";
+  const isCabinCrewRestricted = app.dataset.cabinCrewRestricted === "1";
   const apgPushUrl = app.dataset.apgPushUrl;
   const apgPlanUrlTemplate = app.dataset.apgPlanUrlTemplate;
   const apgCargoSummaryUrlTemplate = app.dataset.apgCargoSummaryUrlTemplate;
@@ -29,6 +30,7 @@
   const saveTimesUrl = app.dataset.saveTimesUrl;
   const initialEnvisionEnvKey = (app.dataset.envisionEnvKey || "base").toLowerCase();
   const envisionTestAvailable = app.dataset.envisionTestAvailable === "1";
+  const canSwitchEnvisionEnvironment = app.dataset.canSwitchEnvironment === "1";
 
   const dayInput = document.getElementById("dayInput");
   const tzSelect = document.getElementById("tzSelect");
@@ -116,6 +118,7 @@
   const saveSeatBagWeight = document.getElementById("saveSeatBagWeight");
   const removeSeatBag = document.getElementById("removeSeatBag");
   const envPickerDialog = document.getElementById("envPickerDialog");
+  const envSwitchBtn = document.getElementById("envSwitchBtn");
   const envBaseBtn = document.getElementById("envBaseBtn");
   const envTestBtn = document.getElementById("envTestBtn");
   const apgStatusDialog = document.getElementById("apgStatusDialog");
@@ -2076,6 +2079,12 @@
     return Number.isFinite(id) && id > 0 ? id : 0;
   }
 
+  function apgRouteUrl(f, planId) {
+    const status = String(f?.flight_status || "").trim().toLowerCase();
+    const routePath = status === "post flight complete" ? "route/details" : "route";
+    return `https://fly.rocketroute.com/${routePath}/${encodeURIComponent(planId)}`;
+  }
+
   function buildApgPlanUrl(template, planId) {
     const resolvedPlanId = getApgPlanId(planId);
     if (!template || !resolvedPlanId) return "";
@@ -3460,6 +3469,14 @@
   }
 
   async function ensureEnvisionEnvironment() {
+    // Standard users always use the server's live/default environment.  They
+    // must not POST an environment change simply by opening a workspace.
+    if (!canSwitchEnvisionEnvironment) {
+      activeEnvisionEnv = "base";
+      sessionStorage.removeItem(ENV_STORAGE_KEY);
+      return;
+    }
+
     if (isBriefingView) {
       // AC Crew Brief is deliberately live-only.  Do not reuse a test choice
       // left in browser storage by the operational Gantt.
@@ -3469,20 +3486,19 @@
       return;
     }
 
-    updateEnvisionEnvPill({
-      key: activeEnvisionEnv,
-      name: activeEnvisionEnv === "test" ? "TEST" : "BASE",
-      host: (envisionEnvPill?.textContent || "").split(" - ").slice(1).join(" - "),
-    });
-
-    let preferred = (sessionStorage.getItem(ENV_STORAGE_KEY) || "").toLowerCase();
-    if (preferred === "test" && !envisionTestAvailable) preferred = "base";
-    if (!preferred) {
-      preferred = await chooseEnvisionEnvironment();
-    }
-    if (!preferred) preferred = activeEnvisionEnv || "base";
-    await setEnvisionEnvironment(preferred);
+    // Each page load begins on live. An administrator can switch to test for
+    // the current open page only.
+    activeEnvisionEnv = "base";
+    sessionStorage.removeItem(ENV_STORAGE_KEY);
+    await setEnvisionEnvironment("base");
   }
+
+  envSwitchBtn?.addEventListener("click", async () => {
+    const choice = await chooseEnvisionEnvironment();
+    if (!choice) return;
+    await setEnvisionEnvironment(choice);
+    await loadData();
+  });
 
   async function fetchEnvisionCrew(envisionFlightId) {
     if (!envisionFlightId || !envisionCrewUrl) return null;
@@ -3814,6 +3830,10 @@
       btnCharterManifest.hidden = !charter;
       btnCharterManifest.disabled = !charter;
     }
+    if (isCabinCrewRestricted) {
+      detailList.innerHTML = '<p class="muted">Choose Passenger List or Preview Manifest for this flight.</p>';
+      return;
+    }
     const pax = Array.isArray(f.pax_list) ? f.pax_list : [];
     const booked = pax.filter((p) => classifyPaxStatus(p) === "BOOKED").length;
     const checked = pax.filter((p) => classifyPaxStatus(p) === "CHECKED").length;
@@ -3836,7 +3856,7 @@
 
     const apgPlanId = getApgPlanId(f.apg_plan_id);
     const apgLinkedHtml = apgPlanId
-      ? `<a class="apg-route-link" href="https://fly.rocketroute.com/route/${apgPlanId}" target="_blank" rel="noopener noreferrer" title="Open APG route ${apgPlanId}">APG Linked</a>`
+      ? `<a class="apg-route-link" href="${apgRouteUrl(f, apgPlanId)}" target="_blank" rel="noopener noreferrer" title="Open APG route ${apgPlanId}">APG Linked</a>`
       : `<span title="No APG plan">No APG</span>`;
     const dcsLinked = Boolean(f.dcs_linked);
 
@@ -4237,6 +4257,7 @@
   }
 
   function updateStats() {
+    if (!statFlights || !statPax || !statNoApg || !statBags) return;
     const visibleFlights = getVisibleFlights();
     statFlights.textContent = String(visibleFlights.length);
     statPax.textContent = String(visibleFlights.reduce((n, f) => n + Number(f.pax_count || 0), 0));
@@ -4459,7 +4480,7 @@
         <div class="briefing-quick-actions">
           <button class="briefing-seatmap-button" type="button" data-seatmap-flight-id="${escapeHtml(String(f.envision_flight_id || ""))}">Seatmap</button>
           ${defectCount > 0 ? `<button class="briefing-mel-button" type="button" data-mel-reg="${escapeHtml(String(f.reg || ""))}" data-mel-reg-id="${escapeHtml(String(f.registration_id || ""))}" aria-label="View ${defectCount} open aircraft defect${defectCount === 1 ? "" : "s"}">MEL ${defectCount}</button>` : ""}
-          ${apgPlanId ? `<a class="briefing-apg-button" href="https://fly.rocketroute.com/route/${encodeURIComponent(apgPlanId)}" target="_blank" rel="noopener noreferrer" aria-label="Open ${escapeHtml(flightCode(f))} in APG">APG</a>` : ""}
+          ${apgPlanId ? `<a class="briefing-apg-button" href="${apgRouteUrl(f, apgPlanId)}" target="_blank" rel="noopener noreferrer" aria-label="Open ${escapeHtml(flightCode(f))} in APG">APG</a>` : ""}
         </div>
         </article>`;
     }).join("");
@@ -5450,8 +5471,10 @@
       .cell { padding:8px; border:1px solid #d9e2ef; border-radius:7px; } .cell small { display:block; color:#667085; text-transform:uppercase; } .cell strong { display:block; margin-top:3px; font-size:13px; }
       table { width:100%; border-collapse:collapse; } th,td { padding:6px; border:1px solid #cfd8e5; text-align:left; vertical-align:top; } th { background:#edf4ff; font-size:9px; text-transform:uppercase; }
       tr { break-inside:avoid; } footer { margin-top:14px; color:#667085; font-size:9px; }
+      .return-link { margin: 0 0 14px; border: 1px solid #0f6fff; border-radius: 6px; padding: 7px 10px; background: #fff; color: #0f5fc7; font: 700 12px Arial, sans-serif; cursor: pointer; }
       @media print { .no-print { display:none; } }
     </style></head><body>
+      <button class="return-link no-print" type="button" onclick="if(window.opener){window.opener.focus();window.close()}else{history.back()}">← Back to Crew Briefing</button>
       <header><div><h1>${escapeHtml(flightCode(f))} Crew Briefing</h1><div class="route">${escapeHtml(f.dep || "-")} → ${escapeHtml(f.ades || "-")}</div><div class="muted">${escapeHtml(briefingDateLabel(f))}</div></div><div><strong>${escapeHtml(f.reg || "TBA")}</strong><br><span class="muted">${escapeHtml(f.flight_status || "-")}</span></div></header>
       <section class="grid">
         <div class="cell"><small>STD / STA</small><strong>${fmtTime(f.std_sched_nz)} / ${fmtTime(f.sta_sched_nz)}</strong></div>

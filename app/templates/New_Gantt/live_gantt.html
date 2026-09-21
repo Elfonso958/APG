@@ -50,6 +50,8 @@
        data-freight-settings-url="{{ url_for('api.api_dcs_freight_settings') }}"
        data-envision-env-key="{{ envision_env_key or 'base' }}"
        data-envision-test-available="{{ '1' if envision_test_available else '0' }}"
+       data-can-switch-environment="{{ '1' if apg_is_admin else '0' }}"
+       data-cabin-crew-restricted="{{ '1' if is_cabin_crew else '0' }}"
        data-day="{{ day.isoformat() }}">
     <header class="topbar">
       <div class="topbar-meta">
@@ -59,14 +61,18 @@
           <div class="topbar-label">AC Crew Brief</div>
         </div>
         {% else %}
-        <div class="topbar-label">Flight Board Controls</div>
-        {% endif %}
-        {% if page_view != "briefing" %}
-        <div id="envisionEnvPill" class="envision-env-pill envision-env-{{ (envision_env_key or 'base')|lower }}">
-          Envision: {{ envision_env_name or "PROD" }}{% if envision_env_host %} - {{ envision_env_host }}{% endif %}
-        </div>
+        <div class="gantt-brand" aria-label="Air Chathams"><span class="gantt-brand-mark">✈</span><span>Air Chathams</span></div>
+        <div class="topbar-label">Live flight board</div>
         {% endif %}
       </div>
+      {% if page_view != "briefing" %}
+      <section class="topbar-stats" aria-label="Flight summary">
+        <article class="stat"><div class="label">Flights</div><div class="value" id="statFlights">0</div></article>
+        <article class="stat"><div class="label">Passengers</div><div class="value" id="statPax">0</div></article>
+        <article class="stat"><div class="label">No APG</div><div class="value" id="statNoApg">0</div></article>
+        <article class="stat"><div class="label">Baggage Kg</div><div class="value" id="statBags">0</div></article>
+      </section>
+      {% endif %}
       <div class="controls">
         {% if page_view == "briefing" %}
         <form id="crewSearchForm" class="crew-topbar-search">
@@ -75,9 +81,10 @@
           <button id="crewSearchBtn" class="btn btn-ghost crew-search-btn" type="submit"><span id="crewSearchBtnLabel">Show flights</span><span id="crewSearchSpinner" class="crew-search-spinner" aria-hidden="true" hidden></span></button>
         </form>
         {% else %}
-        <a class="btn btn-ghost view-link" href="{{ url_for('ui.dcs_crew_briefing', date=day.isoformat()) }}">Crew Briefing</a>
-        <a class="btn btn-ghost view-link" href="{{ url_for('ui.dcs_charter_checkin', date=day.isoformat()) }}">Charter Check-in</a>
-        <a class="btn btn-ghost view-link" href="{{ url_for('ui.ops_charter_briefs') }}">Charter Briefs</a>
+        {% if 'crew_briefing' in apg_permissions %}<a class="btn btn-ghost view-link" href="{{ url_for('ui.dcs_crew_briefing', date=day.isoformat()) }}">Crew Briefing</a>{% endif %}
+        {% if 'charter_checkin' in apg_permissions %}<a class="btn btn-ghost view-link" href="{{ url_for('ui.dcs_charter_checkin', date=day.isoformat()) }}">Charter Check-in</a>{% endif %}
+        {% if apg_is_admin %}<a class="btn btn-ghost view-link" href="{{ url_for('ui.ops_charter_briefs') }}">Charter Briefs</a>{% endif %}
+        {% if apg_is_admin %}<button id="envSwitchBtn" class="btn btn-ghost view-link" type="button">Envision Test</button>{% endif %}
         {% endif %}
         <label class="ctrl">
           <span>{{ "Starting date" if page_view == "briefing" else "Date" }}</span>
@@ -98,7 +105,7 @@
           </select>
         </label>
         <button id="refreshBtn" class="btn btn-primary refresh-button" type="button"><span>Refresh</span><i class="refresh-button-spinner" aria-hidden="true"></i></button>
-        <button id="syncPaxBtn" class="btn btn-ghost" type="button">Sync Pax (Test)</button>
+        {% if apg_is_admin %}<button id="syncPaxBtn" class="btn btn-ghost" type="button">Sync Pax (Test)</button>{% endif %}
         <button id="zoomOutBtn" class="btn btn-ghost" type="button">-</button>
         <button id="zoomInBtn" class="btn btn-ghost" type="button">+</button>
         <label class="switch">
@@ -117,12 +124,6 @@
       <button id="themeBtn" class="theme-toggle" type="button" aria-label="Switch to dark mode" title="Switch to dark mode"><span aria-hidden="true">☾</span></button>
     </header>
 
-    <section class="stats" id="statsRow"{% if page_view == "briefing" %} style="display:none"{% endif %}>
-      <article class="stat"><div class="label">Flights</div><div class="value" id="statFlights">0</div></article>
-      <article class="stat"><div class="label">Passengers</div><div class="value" id="statPax">0</div></article>
-      <article class="stat"><div class="label">No APG</div><div class="value" id="statNoApg">0</div></article>
-      <article class="stat"><div class="label">Baggage Kg</div><div class="value" id="statBags">0</div></article>
-    </section>
     <div id="loadMessage" class="load-message" hidden></div>
 
     <section id="briefingView" class="briefing-view" aria-label="Crew flight briefing">
@@ -162,15 +163,17 @@
         <div class="muted">{{ "Select a flight from the list." if page_view == "briefing" else "Select a bar on the timeline." }}</div>
         <div class="detail-actions">
           <button id="btnPaxList" class="btn btn-ghost" type="button">Passenger List</button>
+          <button id="btnPreviewManifest" class="btn btn-ghost" type="button">Preview Manifest</button>
+          {% if not is_cabin_crew %}
           <button id="btnCargo" class="btn btn-ghost" type="button">Cargo</button>
           <button id="btnCargoTest" class="btn btn-ghost" type="button">Cargo (Test)</button>
-          <button id="btnPreviewManifest" class="btn btn-ghost" type="button">Preview Manifest</button>
           <button id="btnCharterManifest" class="btn btn-ghost" type="button">Charter Manifest</button>
           <button id="btnResetApg" class="btn btn-ghost" type="button">Reset APG Pax</button>
           <button id="btnSeatmap" class="btn btn-ghost" type="button">Seatmap</button>
           <button id="btnMovementMsg" class="btn btn-ghost" type="button">Movement Message</button>
           {% if page_view == "briefing" %}<button id="btnPrintBriefing" class="btn btn-ghost" type="button">Print / Save PDF</button>{% endif %}
           <button id="btnSubmitApg" class="btn btn-primary" type="button">Submit to APG</button>
+          {% endif %}
         </div>
         <div id="detailList"></div>
       </aside>
@@ -366,13 +369,13 @@
   <dialog id="envPickerDialog" class="status-dialog">
     <form method="dialog" class="status-shell">
       <header>
-        <h3>Choose Environment</h3>
+        <h3>Envision environment</h3>
       </header>
       <div class="status-body">
-        <div>Select which Envision environment to use for this session.</div>
+        <div>Live operations are used by default. Administrators can temporarily switch to the test server.</div>
       </div>
       <div class="env-picker-actions">
-        <button id="envBaseBtn" class="btn btn-primary" value="base" type="button">Live (BASE)</button>
+        <button id="envBaseBtn" class="btn btn-primary" value="base" type="button">Live</button>
         <button id="envTestBtn" class="btn btn-ghost" value="test" type="button" {% if not envision_test_available %}disabled{% endif %}>Test</button>
       </div>
     </form>
@@ -632,6 +635,6 @@
     </form>
   </dialog>
 
-  <script src="{{ url_for('static', filename='New_Gantt/live_gantt.js') }}?v=crew-apg-4"></script>
+  <script src="{{ url_for('static', filename='New_Gantt/live_gantt.js') }}?v=crew-apg-8"></script>
 </body>
 </html>
