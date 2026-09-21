@@ -5400,10 +5400,11 @@ def api_envision_crew_briefing():
     from .views import _current_apg_user
     requester = _current_apg_user()
     private_user = AppUser.query.filter(
-        db.func.upper(AppUser.envision_crew_code) == crew_code
+        AppUser.crew_briefing_private.is_(True),
+        (db.func.upper(AppUser.envision_crew_code) == crew_code)
+        | (db.func.upper(AppUser.envision_username) == crew_code),
     ).first()
-    requester_code = str((requester.envision_crew_code if requester else "") or (requester.envision_username if requester else "")).strip().upper()
-    if private_user and private_user.crew_briefing_private and requester_code != crew_code:
+    if private_user and (not requester or private_user.id != requester.id):
         return jsonify(ok=True, matches=[])
 
     flight_ids: list[int] = []
@@ -5429,6 +5430,17 @@ def api_envision_crew_briefing():
             and str(row.get("employeeNo") or "").strip().upper() == crew_code
         }
         if not employee_ids:
+            return jsonify(ok=True, matches=[])
+
+        # Existing accounts created before ``envision_crew_code`` was stored
+        # may have a username that differs from their EMP code. The employee
+        # ID is the authoritative final match for those accounts.
+        if not private_user:
+            private_user = AppUser.query.filter(
+                AppUser.crew_briefing_private.is_(True),
+                AppUser.envision_employee_id.in_([str(employee_id) for employee_id in employee_ids]),
+            ).first()
+        if private_user and (not requester or private_user.id != requester.id):
             return jsonify(ok=True, matches=[])
 
         ttl = max(15, int(current_app.config.get("CREW_BRIEFING_ASSIGNMENT_CACHE_TTL", 120)))

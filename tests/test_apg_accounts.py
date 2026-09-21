@@ -132,7 +132,7 @@ class ApgAccountTest(unittest.TestCase):
     def test_private_crew_code_cannot_be_used_to_search_another_roster(self):
         private_user = AppUser(
             email="hidden@example.test", password_hash="unused", auth_provider="envision",
-            envision_username="hidden1", envision_crew_code="HID", crew_briefing_private=True,
+            envision_username="HID", crew_briefing_private=True,
             is_active=True, permissions_json=json.dumps(["crew_briefing"]),
         )
         requester = AppUser(
