@@ -4579,6 +4579,14 @@
       });
       const payload = await response.json();
       if (!response.ok || !payload.ok) throw new Error(payload.error || `Crew lookup failed (${response.status})`);
+      if (payload.private) {
+        renderBriefingFlights([], crewCode);
+        if (briefingFlights) {
+          briefingFlights.innerHTML = `<div class="briefing-empty"><strong>Roster private</strong><span>${escapeHtml(crewCode)} has chosen not to share their roster.</span></div>`;
+        }
+        if (crewSearchStatus) crewSearchStatus.textContent = `Roster private for ${crewCode}.`;
+        return;
+      }
       const matchById = new Map((payload.matches || []).map((row) => [String(row.flight_id), row.crew || []]));
       const matches = flights.filter((f) => {
         const crew = matchById.get(String(f.envision_flight_id));

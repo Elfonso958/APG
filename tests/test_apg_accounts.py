@@ -150,4 +150,4 @@ class ApgAccountTest(unittest.TestCase):
         })
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_json(), {"ok": True, "matches": []})
+        self.assertEqual(response.get_json(), {"ok": True, "matches": [], "private": True})

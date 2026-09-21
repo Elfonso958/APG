@@ -5405,7 +5405,7 @@ def api_envision_crew_briefing():
         | (db.func.upper(AppUser.envision_username) == crew_code),
     ).first()
     if private_user and (not requester or private_user.id != requester.id):
-        return jsonify(ok=True, matches=[])
+        return jsonify(ok=True, matches=[], private=True)
 
     flight_ids: list[int] = []
     seen: set[int] = set()
@@ -5441,7 +5441,7 @@ def api_envision_crew_briefing():
                 AppUser.envision_employee_id.in_([str(employee_id) for employee_id in employee_ids]),
             ).first()
         if private_user and (not requester or private_user.id != requester.id):
-            return jsonify(ok=True, matches=[])
+            return jsonify(ok=True, matches=[], private=True)
 
         ttl = max(15, int(current_app.config.get("CREW_BRIEFING_ASSIGNMENT_CACHE_TTL", 120)))
         now = _time.time()
