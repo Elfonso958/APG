@@ -84,10 +84,8 @@
         <form class="crew-privacy-form" method="post" action="{{ url_for('ui.crew_briefing_privacy') }}">
           <input type="hidden" name="csrf_token" value="{{ apg_csrf_token }}">
           <input type="hidden" name="next" value="{{ request.full_path }}">
-          <label class="switch" title="When enabled, other people cannot search for your roster by crew code. You still appear in the crew list for their flights.">
-            <input name="crew_briefing_private" type="checkbox" value="1" {% if apg_current_user.crew_briefing_private %}checked{% endif %} onchange="this.form.submit()">
-            <span>Keep my roster private</span>
-          </label>
+          <input name="crew_briefing_private" type="hidden" value="{{ '0' if apg_current_user.crew_briefing_private else '1' }}">
+          <button class="btn btn-ghost crew-privacy-button" type="submit" title="Other people cannot search for your roster by crew code. You still appear in the crew list for their flights.">{% if apg_current_user.crew_briefing_private %}Make my roster visible{% else %}Make my roster private{% endif %}</button>
         </form>
         {% else %}
         {% if 'crew_briefing' in apg_permissions %}<a class="btn btn-ghost view-link" href="{{ url_for('ui.dcs_crew_briefing', date=day.isoformat()) }}">Crew Briefing</a>{% endif %}

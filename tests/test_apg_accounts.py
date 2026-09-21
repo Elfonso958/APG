@@ -100,6 +100,7 @@ class ApgAccountTest(unittest.TestCase):
         self.assertIn(b"Passenger List", response.data)
         self.assertIn(b"Preview Manifest", response.data)
         self.assertIn(b'data-signed-in-crew-code="FEM"', response.data)
+        self.assertIn(b"Make my roster private", response.data)
         self.assertNotIn(b'id="btnCargo"', response.data)
         self.assertNotIn(b'id="btnPrintBriefing"', response.data)
 
