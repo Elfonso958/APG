@@ -6,6 +6,7 @@
   const pageView = app.dataset.view || "gantt";
   const isBriefingView = pageView === "briefing";
   const isCabinCrewRestricted = app.dataset.cabinCrewRestricted === "1";
+  const signedInCrewCode = String(app.dataset.signedInCrewCode || "").trim().toUpperCase();
   const apgPushUrl = app.dataset.apgPushUrl;
   const apgPlanUrlTemplate = app.dataset.apgPlanUrlTemplate;
   const apgCargoSummaryUrlTemplate = app.dataset.apgCargoSummaryUrlTemplate;
@@ -5873,7 +5874,7 @@
     setupLiveNowTimer();
     setupCargoRevisionTimer();
     setActionsEnabled(false);
-    if (isBriefingView && crewCodeInput) crewCodeInput.value = localStorage.getItem("crew_briefing_code") || "";
+    if (isBriefingView && crewCodeInput) crewCodeInput.value = signedInCrewCode || localStorage.getItem("crew_briefing_code") || "";
     if (isBriefingView && "serviceWorker" in navigator && app.dataset.serviceWorkerUrl) {
       navigator.serviceWorker.register(app.dataset.serviceWorkerUrl).catch((err) => console.warn("Crew briefing service worker unavailable", err));
     }
@@ -5882,6 +5883,11 @@
     if (isBriefingView) {
       flightDataReady = false;
       if (crewSearchBtn) crewSearchBtn.disabled = false;
+      if (signedInCrewCode) {
+        if (crewSearchStatus) crewSearchStatus.textContent = "Loading your roster…";
+        await loadData({ showSpinner: true, force: true });
+        return;
+      }
       if (crewSearchStatus) crewSearchStatus.textContent = "Enter your EMP crew code, then tap Show my flights.";
       crewCodeInput?.focus();
       return;

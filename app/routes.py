@@ -5394,6 +5394,18 @@ def api_envision_crew_briefing():
     if not crew_code:
         return jsonify(ok=False, error="Missing crew_code"), 400
 
+    # A crew member may hide their own roster from crew-code searches. This
+    # restriction applies only to finding their flight list: their name remains
+    # in the operating-crew data shown when another crew member opens a flight.
+    from .views import _current_apg_user
+    requester = _current_apg_user()
+    private_user = AppUser.query.filter(
+        db.func.upper(AppUser.envision_crew_code) == crew_code
+    ).first()
+    requester_code = str((requester.envision_crew_code if requester else "") or (requester.envision_username if requester else "")).strip().upper()
+    if private_user and private_user.crew_briefing_private and requester_code != crew_code:
+        return jsonify(ok=True, matches=[])
+
     flight_ids: list[int] = []
     seen: set[int] = set()
     for value in raw_flight_ids:

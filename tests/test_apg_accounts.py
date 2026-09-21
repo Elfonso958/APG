@@ -84,6 +84,7 @@ class ApgAccountTest(unittest.TestCase):
             password_hash="unused",
             auth_provider="envision",
             envision_username="cc1",
+            envision_crew_code="FEM",
             envision_job_title="Cabin Crew",
             is_active=True,
             permissions_json=json.dumps(["crew_briefing"]),
@@ -98,5 +99,54 @@ class ApgAccountTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Passenger List", response.data)
         self.assertIn(b"Preview Manifest", response.data)
+        self.assertIn(b'data-signed-in-crew-code="FEM"', response.data)
         self.assertNotIn(b'id="btnCargo"', response.data)
         self.assertNotIn(b'id="btnPrintBriefing"', response.data)
+
+    def test_crew_member_can_enable_roster_privacy(self):
+        user = AppUser(
+            email="private@example.test",
+            password_hash="unused",
+            auth_provider="envision",
+            envision_username="private1",
+            envision_crew_code="PRV",
+            is_active=True,
+            permissions_json=json.dumps(["crew_briefing"]),
+        )
+        db.session.add(user)
+        db.session.commit()
+        with self.client.session_transaction() as session:
+            session["apg_user_id"] = user.id
+            session["apg_csrf_token"] = "test-csrf"
+
+        response = self.client.post("/account/crew-briefing-privacy", data={
+            "csrf_token": "test-csrf",
+            "crew_briefing_private": "1",
+            "next": "/dcs/crew-briefing",
+        })
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(db.session.get(AppUser, user.id).crew_briefing_private)
+
+    def test_private_crew_code_cannot_be_used_to_search_another_roster(self):
+        private_user = AppUser(
+            email="hidden@example.test", password_hash="unused", auth_provider="envision",
+            envision_username="hidden1", envision_crew_code="HID", crew_briefing_private=True,
+            is_active=True, permissions_json=json.dumps(["crew_briefing"]),
+        )
+        requester = AppUser(
+            email="requester@example.test", password_hash="unused", auth_provider="envision",
+            envision_username="requester1", envision_crew_code="REQ",
+            is_active=True, permissions_json=json.dumps(["crew_briefing"]),
+        )
+        db.session.add_all([private_user, requester])
+        db.session.commit()
+        with self.client.session_transaction() as session:
+            session["apg_user_id"] = requester.id
+
+        response = self.client.post("/api/envision/crew_briefing", json={
+            "crew_code": "HID", "flight_ids": [123],
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {"ok": True, "matches": []})

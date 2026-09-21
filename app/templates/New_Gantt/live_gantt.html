@@ -52,6 +52,7 @@
        data-envision-test-available="{{ '1' if envision_test_available else '0' }}"
        data-can-switch-environment="{{ '1' if apg_is_admin else '0' }}"
        data-cabin-crew-restricted="{{ '1' if is_cabin_crew else '0' }}"
+       data-signed-in-crew-code="{{ signed_in_crew_code or '' }}"
        data-day="{{ day.isoformat() }}">
     <header class="topbar">
       <div class="topbar-meta">
@@ -79,6 +80,14 @@
           <label class="ctrl"><span>Employer code</span><input id="crewCodeInput" type="text" inputmode="text" autocomplete="username" autocapitalize="characters" spellcheck="false" placeholder="EMP code" maxlength="20"></label>
           <label class="ctrl"><span>Search period</span><select id="crewSearchDays"><option value="1">1 day</option><option value="2" selected>2 days</option><option value="3">3 days</option><option value="4">4 days</option><option value="5">5 days</option><option value="6">6 days</option><option value="7">7 days</option></select></label>
           <button id="crewSearchBtn" class="btn btn-ghost crew-search-btn" type="submit"><span id="crewSearchBtnLabel">Show flights</span><span id="crewSearchSpinner" class="crew-search-spinner" aria-hidden="true" hidden></span></button>
+        </form>
+        <form class="crew-privacy-form" method="post" action="{{ url_for('ui.crew_briefing_privacy') }}">
+          <input type="hidden" name="csrf_token" value="{{ apg_csrf_token }}">
+          <input type="hidden" name="next" value="{{ request.full_path }}">
+          <label class="switch" title="When enabled, other people cannot search for your roster by crew code. You still appear in the crew list for their flights.">
+            <input name="crew_briefing_private" type="checkbox" value="1" {% if apg_current_user.crew_briefing_private %}checked{% endif %} onchange="this.form.submit()">
+            <span>Keep my roster private</span>
+          </label>
         </form>
         {% else %}
         {% if 'crew_briefing' in apg_permissions %}<a class="btn btn-ghost view-link" href="{{ url_for('ui.dcs_crew_briefing', date=day.isoformat()) }}">Crew Briefing</a>{% endif %}

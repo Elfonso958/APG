@@ -117,6 +117,7 @@ def sync_envision_user_directory() -> dict:
             skipped += 1
             continue
         employee_id = _directory_value(employee, "id", "employeeId") or None
+        crew_code = _normalise_envision_username(_directory_value(employee, "employeeNo", "employeeNumber", "employerCode", "crewCode", "code")) or None
         seen_usernames.add(username)
         if employee_id:
             seen_employee_ids.add(employee_id)
@@ -135,6 +136,7 @@ def sync_envision_user_directory() -> dict:
         if user:
             user.envision_username = username
             user.envision_employee_id = employee_id
+            user.envision_crew_code = crew_code
             user.auth_provider = "envision"
             user.display_name = display_name
             user.envision_job_title = job_title
@@ -153,6 +155,7 @@ def sync_envision_user_directory() -> dict:
                 auth_provider="envision",
                 envision_username=username,
                 envision_employee_id=employee_id,
+                envision_crew_code=crew_code,
                 envision_job_title=job_title,
                 directory_last_seen_at=now,
                 is_active=False,
@@ -401,6 +404,21 @@ def apg_logout():
     clear_kmh_session(session.get("apg_envision_session_id"))
     session.clear()
     return redirect(url_for("ui.apg_login"))
+
+
+@ui_bp.post("/account/crew-briefing-privacy")
+@_permission_required("crew_briefing")
+def crew_briefing_privacy():
+    """Let a crew member prevent others from searching their roster by code."""
+    if not _csrf_is_valid():
+        flash("Your privacy setting could not be saved. Please try again.", "danger")
+    else:
+        user = _current_apg_user()
+        user.crew_briefing_private = request.form.get("crew_briefing_private") == "1"
+        db.session.add(user)
+        db.session.commit()
+        flash("Your crew-briefing privacy setting was saved.", "success")
+    return redirect(_safe_apg_next(request.form.get("next")))
 
 
 @ui_bp.route("/admin/users", methods=["GET", "POST"])
@@ -1914,6 +1932,7 @@ def dcs_crew_briefing():
         envision_env_key=env.get("key"),
         envision_test_available=env.get("test_available"),
         is_cabin_crew=_is_cabin_crew_user(_current_apg_user()),
+        signed_in_crew_code=(_current_apg_user().envision_crew_code or _current_apg_user().envision_username or "").upper(),
     )
 
 
