@@ -337,7 +337,7 @@ def create_app():
                 window_days=3,
                 chunk_days=1,
                 page_size=100,
-                include_details=False,
+                include_details=True,
             )
             if started:
                 app.logger.info("OTP cache refresh started for %s to %s", date_from, date_to)
