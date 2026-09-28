@@ -1,5 +1,6 @@
 ﻿from . import db
 from datetime import datetime
+import hashlib
 
 
 class SyncRun(db.Model):
@@ -174,6 +175,23 @@ class EnvisionOtpFlightCache(db.Model):
     row_json = db.Column(db.Text, nullable=False, default="{}")
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+
+class PowerBiApiKey(db.Model):
+    """Revocable API credentials for the Power BI OTP reporting feed."""
+    __tablename__ = "powerbi_api_keys"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    key_prefix = db.Column(db.String(16), nullable=False)
+    key_hash = db.Column(db.String(64), unique=True, index=True, nullable=False)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey("app_users.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    revoked_at = db.Column(db.DateTime, nullable=True)
+
+    @staticmethod
+    def hash_secret(secret: str) -> str:
+        return hashlib.sha256(secret.encode("utf-8")).hexdigest()
 
 
 # NEW: simple key/value schedule settings (singleton row: id=1)

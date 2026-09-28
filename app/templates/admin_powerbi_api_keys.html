@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header mb-3">
+  <div>
+    <div class="page-kicker">Administration</div>
+    <h1 class="page-title">Power BI API keys</h1>
+    <div class="page-subtitle">Create and revoke credentials for the cached OTP reporting feed.</div>
+  </div>
+</div>
+
+{% if new_key %}
+<section class="card mb-3">
+  <div class="card-body">
+    <p><strong>Copy this new API key now.</strong> It cannot be displayed again.</p>
+    <input class="form-control" value="{{ new_key }}" readonly onclick="this.select()" aria-label="New Power BI API key">
+    <p class="muted small mt-2 mb-0">Use it in Power Query as the <code>X-API-Key</code> header, then store it securely.</p>
+  </div>
+</section>
+{% endif %}
+
+<section class="card mb-3">
+  <div class="card-header"><div class="card-title">Create key</div></div>
+  <div class="card-body">
+    <form method="post" class="settings-form">
+      <input type="hidden" name="csrf_token" value="{{ apg_csrf_token }}">
+      <input type="hidden" name="action" value="create">
+      <label class="form-field">
+        <span>Key name</span>
+        <input name="name" required maxlength="120" placeholder="Power BI production dataset">
+      </label>
+      <div class="mt-2"><button class="btn" type="submit">Create API key</button></div>
+    </form>
+  </div>
+</section>
+
+<section class="card">
+  <div class="card-header"><div class="card-title">Active keys</div></div>
+  <div class="card-body">
+    {% if keys %}
+    <div class="table-responsive"><table class="table">
+      <thead><tr><th>Name</th><th>Prefix</th><th>Created</th><th></th></tr></thead>
+      <tbody>
+        {% for key in keys %}
+        <tr>
+          <td>{{ key.name }}</td>
+          <td><code>{{ key.key_prefix }}…</code></td>
+          <td>{{ key.created_at.strftime('%d %b %Y %H:%M') }}</td>
+          <td class="text-end">
+            <form method="post" onsubmit="return confirm('Revoke this key? Any Power BI dataset using it will stop refreshing.');">
+              <input type="hidden" name="csrf_token" value="{{ apg_csrf_token }}">
+              <input type="hidden" name="action" value="revoke">
+              <input type="hidden" name="key_id" value="{{ key.id }}">
+              <button class="btn secondary btn-sm" type="submit">Revoke</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table></div>
+    {% else %}
+    <p class="muted mb-0">No active keys. Create one before connecting Power BI.</p>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

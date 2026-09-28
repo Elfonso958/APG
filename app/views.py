@@ -1,7 +1,7 @@
 ﻿from flask import Blueprint, render_template, request, redirect, jsonify, flash, current_app,send_file, abort, url_for, make_response
 from datetime import date, datetime, time, timezone, timedelta
 from flask import session
-from .models import SyncRun, SyncFlightLog, AppConfig, CharterManifest, CharterBrief, AppUser, EmailSettings
+from .models import SyncRun, SyncFlightLog, AppConfig, CharterManifest, CharterBrief, AppUser, EmailSettings, PowerBiApiKey
 from .airport_handling import AIRPORT_HANDLERS, DEFAULT_CATERING_SERVICES, handlers_for_airports
 from . import db
 from .kmh_auth import create_kmh_session, clear_kmh_session, get_kmh_session
@@ -532,6 +532,50 @@ def admin_email_settings():
         graph_configured=bool(os.getenv("GRAPH_TENANT_ID") or os.getenv("MS_TENANT_ID")),
         smtp_configured=bool(os.getenv("MAIL_USERNAME") or os.getenv("SMTP_USERNAME")),
     )
+
+
+@ui_bp.route("/admin/powerbi-api-keys", methods=["GET", "POST"])
+@_admin_required
+def admin_powerbi_api_keys():
+    new_key = None
+    if request.method == "POST":
+        if not _csrf_is_valid():
+            flash("Your form expired. Please try again.", "danger")
+            return redirect(url_for("ui.admin_powerbi_api_keys"))
+
+        action = str(request.form.get("action") or "").strip()
+        if action == "create":
+            name = str(request.form.get("name") or "").strip()
+            if not name or len(name) > 120:
+                flash("Enter a key name of up to 120 characters.", "danger")
+            else:
+                secret = secrets.token_urlsafe(32)
+                user = _current_apg_user()
+                db.session.add(PowerBiApiKey(
+                    name=name,
+                    key_prefix=secret[:12],
+                    key_hash=PowerBiApiKey.hash_secret(secret),
+                    created_by_user_id=user.id if user else None,
+                ))
+                db.session.commit()
+                new_key = secret
+                flash("API key created. Copy it now; it will not be shown again.", "success")
+        elif action == "revoke":
+            try:
+                key_id = int(request.form.get("key_id") or 0)
+            except (TypeError, ValueError):
+                key_id = 0
+            api_key = db.session.get(PowerBiApiKey, key_id)
+            if not api_key or api_key.revoked_at:
+                flash("Active API key not found.", "danger")
+            else:
+                api_key.revoked_at = datetime.utcnow()
+                db.session.commit()
+                flash(f"API key '{api_key.name}' was revoked.", "success")
+            return redirect(url_for("ui.admin_powerbi_api_keys"))
+
+    keys = PowerBiApiKey.query.filter_by(revoked_at=None).order_by(PowerBiApiKey.created_at.desc()).all()
+    return render_template("admin_powerbi_api_keys.html", keys=keys, new_key=new_key)
 
 
 @ui_bp.before_app_request

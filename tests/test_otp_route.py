@@ -4,6 +4,7 @@ from unittest.mock import patch
 from flask import Flask
 
 from app import db
+from app.models import PowerBiApiKey
 from app.routes import api_bp
 
 
@@ -29,6 +30,12 @@ class OtpRouteTests(unittest.TestCase):
         app.register_blueprint(api_bp, url_prefix="/api")
         with app.app_context():
             db.create_all()
+            db.session.add(PowerBiApiKey(
+                name="Test key",
+                key_prefix="test-powerbi",
+                key_hash=PowerBiApiKey.hash_secret("test-powerbi-key"),
+            ))
+            db.session.commit()
         return app.test_client()
 
     def test_otp_flights_defaults_to_powerbi_date_range(self):
@@ -94,12 +101,33 @@ class OtpRouteTests(unittest.TestCase):
         self.assertEqual(refresh.status_code, 200)
         self.assertEqual(refresh.get_json()["created"], 1)
 
-        cached = client.get("/api/envision/otp-flights-cached?dateFrom=2026-06-01&dateTo=2026-06-01")
+        cached = client.get(
+            "/api/envision/otp-flights-cached?dateFrom=2026-06-01&dateTo=2026-06-01",
+            headers={"X-API-Key": "test-powerbi-key"},
+        )
         self.assertEqual(cached.status_code, 200)
         self.assertEqual(
             cached.get_json(),
             [{"id": 1, "Route": "AKL-CHT", "departureScheduled": "2026-06-01T10:00:00Z"}],
         )
+
+    def test_otp_cache_requires_powerbi_api_key(self):
+        client = self.create_client()
+
+        missing = client.get("/api/envision/otp-flights-cached")
+        self.assertEqual(missing.status_code, 401)
+
+        invalid = client.get(
+            "/api/envision/otp-flights-cached",
+            headers={"X-API-Key": "wrong-key"},
+        )
+        self.assertEqual(invalid.status_code, 401)
+
+        valid = client.get(
+            "/api/envision/otp-flights-cached",
+            headers={"X-API-Key": "test-powerbi-key"},
+        )
+        self.assertEqual(valid.status_code, 200)
 
 
 if __name__ == "__main__":

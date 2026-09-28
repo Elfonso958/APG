@@ -12,7 +12,7 @@ from . import db, _normalise_sync_result
 import requests
 from sqlalchemy import func
 from zoneinfo import ZoneInfo
-from .models import SyncRun, SyncFlightLog, SyncFlightState, AppConfig, ManifestUploadState, CharterManifest, EnvisionOtpFlightCache, FlightFreightAllocation, FlightCargoAllocation, EmailSettings, AppUser
+from .models import SyncRun, SyncFlightLog, SyncFlightState, AppConfig, ManifestUploadState, CharterManifest, EnvisionOtpFlightCache, FlightFreightAllocation, FlightCargoAllocation, EmailSettings, AppUser, PowerBiApiKey
 from .kmh_auth import get_kmh_session
 from .helpers_manifest import _seat_sort_key, _format_ssrs, _calc_age, _parse_dcs_dob, generate_manifest_pdf_from_html, generate_pdf_modern
 from .charter_wallet import apple_wallet_pass, google_wallet_link, make_wallet_token, parse_wallet_token
@@ -119,6 +119,16 @@ def _apply_session_envision_environment():
 @api_bp.before_request
 def _require_authenticated_operations_api():
     """Keep operational data APIs behind the same role controls as their UI."""
+    # Power BI cannot use the interactive APG browser session. Its reporting
+    # endpoint is protected by an administrator-managed, revocable API key.
+    if request.endpoint == "api.api_envision_otp_flights_cached":
+        supplied_key = request.headers.get("X-API-Key") or ""
+        supplied_hash = PowerBiApiKey.hash_secret(supplied_key) if supplied_key else ""
+        valid_key = PowerBiApiKey.query.filter_by(key_hash=supplied_hash, revoked_at=None).first() if supplied_hash else None
+        if not valid_key:
+            return jsonify(ok=False, error="A valid X-API-Key is required."), 401
+        return None
+
     # A passenger's signed self-check-in URL is intentionally public; every
     # other operations endpoint requires an APG account.
     if request.path.startswith("/api/dcs/charter-self-checkin/"):
@@ -5820,7 +5830,8 @@ def api_envision_otp_flights():
 @api_bp.get("/envision/otp-flights-cached")
 def api_envision_otp_flights_cached():
     """
-    Fast Power BI endpoint backed by the local OTP flight cache.
+    Fast Power BI endpoint backed by the local OTP flight cache. Requires an
+    active administrator-managed X-API-Key.
 
     Power BI URL format:
       /api/envision/otp-flights-cached?dateFrom=2022-01-01&dateTo=2035-12-31
