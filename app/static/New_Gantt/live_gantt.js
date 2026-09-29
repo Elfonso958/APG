@@ -96,6 +96,14 @@
   const seatBagConfigMaps = document.getElementById("seatBagConfigMaps");
   const saveSeatBagConfig = document.getElementById("saveSeatBagConfig");
   const seatBagConfigStatus = document.getElementById("seatBagConfigStatus");
+  const seatmapConfigReg = document.getElementById("seatmapConfigReg");
+  const seatmapConfigLayout = document.getElementById("seatmapConfigLayout");
+  const addSeatmapConfigReg = document.getElementById("addSeatmapConfigReg");
+  const seatmapConfigRegistrations = document.getElementById("seatmapConfigRegistrations");
+  const exitRestrictChild = document.getElementById("exitRestrictChild");
+  const exitRestrictUmnr = document.getElementById("exitRestrictUmnr");
+  const exitRestrictInfant = document.getElementById("exitRestrictInfant");
+  const exitRestrictSsrs = document.getElementById("exitRestrictSsrs");
   const paxDialog = document.getElementById("paxDialog");
   const paxTitle = document.getElementById("paxTitle");
   const paxTbody = document.getElementById("paxTbody");
@@ -5269,32 +5277,36 @@
   function seatmapConfigForFlight(f) {
     const reg = String(f.reg || "").toUpperCase();
     const type = String(f.aircraft_type || "").toUpperCase();
-    if (type.includes("ATR") || reg.startsWith("ZK-MC")) {
+    const regKey = reg.replace(/[^A-Z0-9]/g, "");
+    const configuredLayout = seatmapCustomRegistrations[regKey] || "";
+    if (configuredLayout === "ATR72" || ((!configuredLayout) && (type.includes("ATR") || reg.startsWith("ZK-MC")))) {
       return {
         rows: Array.from({ length: 17 }, (_, i) => i + 1),
         left: ["A", "B"],
         right: ["C", "D"],
         name: `ATR 72 (${reg || "Unknown"})`,
+        layoutKey: "ATR72",
         jumpSeat: true,
       };
     }
-    if (type.includes("SAAB") || type.includes("SF3") || type.includes("SF340") || reg.startsWith("ZK-CI") || reg.startsWith("ZK-KR")) {
+    if (["SAAB340", "SAAB_CIT", "SAAB_CIZ"].includes(configuredLayout) || ((!configuredLayout) && (type.includes("SAAB") || type.includes("SF3") || type.includes("SF340") || reg.startsWith("ZK-CI") || reg.startsWith("ZK-KR")))) {
       const cfg = {
         rows: Array.from({ length: 11 }, (_, i) => i + 1),
         left: ["A"],
         right: ["B", "C"],
         name: `Saab 340 (${reg || "Unknown"})`,
+        layoutKey: configuredLayout || (reg === "ZK-CIT" || reg === "ZKCIT" ? "SAAB_CIT" : reg === "ZK-CIZ" || reg === "ZKCIZ" ? "SAAB_CIZ" : "SAAB340"),
         jumpSeat: true,
         hasRow0C: false,
         lastRowMode: null,
         lastRowSeats: null,
       };
-      if (reg === "ZK-CIT" || reg === "ZKCIT") {
+      if (configuredLayout === "SAAB_CIT" || reg === "ZK-CIT" || reg === "ZKCIT") {
         cfg.rows = [0].concat(cfg.rows);
         cfg.hasRow0C = true;
         cfg.lastRowSeats = { left: ["A"], right: ["C", "D"] };
       }
-      if (reg === "ZK-CIZ" || reg === "ZKCIZ") {
+      if (configuredLayout === "SAAB_CIZ" || reg === "ZK-CIZ" || reg === "ZKCIZ") {
         cfg.name = `Saab 340B (${reg || "Unknown"})`;
         cfg.lastRowMode = "4-inline";
       }
@@ -5330,6 +5342,17 @@
       seats.forEach((seat) => seatBagBySeat.set(seat, seatBag));
     });
 
+    function exitRestrictionForPassenger(pax, seat) {
+      if (!(seatBagExitSeats[cfg.layoutKey] || []).includes(seat)) return false;
+      const types = new Set(exitSeatRestrictions.passenger_types || []);
+      const passengerType = String(pax?.PassengerType || pax?.passengerType || "").toUpperCase();
+      if (types.has(passengerType)) return true;
+      const prohibitedSsrs = new Set((exitSeatRestrictions.ssr_codes || []).map((code) => String(code).toUpperCase()));
+      const ssrCodes = Array.isArray(pax?.Ssrs) ? pax.Ssrs.map((ssr) => String(ssr.Code || ssr.code || "").toUpperCase()) : [];
+      String(pax?.SSR || "").toUpperCase().split(/[,\s]+/).forEach((code) => ssrCodes.push(code));
+      return ssrCodes.some((code) => prohibitedSsrs.has(code));
+    }
+
     function seatLookupCodes(rowNum, col, explicitCode = null) {
       const code = explicitCode || `${rowNum}${col}`;
       if (explicitCode) {
@@ -5354,6 +5377,11 @@
       const pax = lookup.pax;
       el.textContent = opts.label || col;
       el.dataset.seat = code;
+      const hasExitRestriction = pax && exitRestrictionForPassenger(pax, code);
+      if (hasExitRestriction) {
+        el.classList.add("seat-exit-restricted");
+        el.title = "Passenger does not meet the configured emergency-exit requirements.";
+      }
       if (!pax) {
         el.classList.add("seat-empty");
       } else {
@@ -5419,6 +5447,7 @@
           <div>PNR: ${pnr}</div>
           <div>Status: ${status}</div>
           <div>SSR: ${ssr}</div>
+          ${hasExitRestriction ? `<div class="seatmap-conflict">Emergency-exit restriction: this passenger's type or SSR is not permitted in this seat.</div>` : ""}
         `;
       });
       return el;
@@ -5636,6 +5665,33 @@
     { key: "SAAB_CIZ", name: "Saab 340B (ZK-CIZ)", rows: Array.from({ length: 11 }, (_, i) => i + 1), columns: ["A", "B", "C"] },
   ];
   let seatBagExitSeats = {};
+  let seatmapCustomRegistrations = {};
+  let exitSeatRestrictions = { passenger_types: ["CH", "CHD", "INF", "UMNR"], ssr_codes: ["UMNR", "INFT"] };
+
+  function applySeatmapConfig(data) {
+    seatBagExitSeats = data.exit_seats || {};
+    seatmapCustomRegistrations = data.custom_registrations || {};
+    exitSeatRestrictions = data.exit_restrictions || exitSeatRestrictions;
+  }
+
+  function renderSeatmapConfigRegistrations() {
+    if (!seatmapConfigRegistrations) return;
+    const labels = { ATR72: "ATR 72", SAAB340: "Saab 340", SAAB_CIT: "Saab 340 (CIT layout)", SAAB_CIZ: "Saab 340B (CIZ layout)" };
+    const entries = Object.entries(seatmapCustomRegistrations).sort(([a], [b]) => a.localeCompare(b));
+    seatmapConfigRegistrations.innerHTML = entries.length ? entries.map(([reg, layout]) => `<span class="seatmap-config-registration"><b>${escapeHtml(reg)}</b> ${escapeHtml(labels[layout] || layout)} <button type="button" data-remove-seatmap-reg="${escapeHtml(reg)}" aria-label="Remove ${escapeHtml(reg)}">×</button></span>`).join("") : `<span class="muted">No additional registrations configured.</span>`;
+    seatmapConfigRegistrations.querySelectorAll("[data-remove-seatmap-reg]").forEach((button) => button.addEventListener("click", () => {
+      delete seatmapCustomRegistrations[button.dataset.removeSeatmapReg];
+      renderSeatmapConfigRegistrations();
+    }));
+  }
+
+  function renderExitRestrictionControls() {
+    const types = new Set(exitSeatRestrictions.passenger_types || []);
+    if (exitRestrictChild) exitRestrictChild.checked = types.has("CH") || types.has("CHD");
+    if (exitRestrictUmnr) exitRestrictUmnr.checked = types.has("UMNR");
+    if (exitRestrictInfant) exitRestrictInfant.checked = types.has("INF");
+    if (exitRestrictSsrs) exitRestrictSsrs.value = (exitSeatRestrictions.ssr_codes || []).join(", ");
+  }
 
   function renderSeatBagConfigMaps() {
     if (!seatBagConfigMaps) return;
@@ -5663,8 +5719,10 @@
       const resp = await fetch(seatBagExitRowsUrl);
       const data = await resp.json();
       if (!resp.ok || data.ok === false) throw new Error(data.error || "Unable to load emergency-exit seats");
-      seatBagExitSeats = data.exit_seats || {};
+      applySeatmapConfig(data);
       renderSeatBagConfigMaps();
+      renderSeatmapConfigRegistrations();
+      renderExitRestrictionControls();
       seatBagConfigStatus.textContent = "";
     } catch (err) { seatBagConfigStatus.textContent = err.message || String(err); }
   }
@@ -5860,18 +5918,38 @@
   });
   if (btnCargoRefresh) btnCargoRefresh.addEventListener("click", withBusy(btnCargoRefresh, "Refreshing...", refreshCargoDialog));
   if (seatBagConfigBtn) seatBagConfigBtn.addEventListener("click", () => openSeatBagConfig());
+  if (addSeatmapConfigReg) addSeatmapConfigReg.addEventListener("click", () => {
+    const registration = String(seatmapConfigReg?.value || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const layout = seatmapConfigLayout?.value || "";
+    if (!/^[A-Z0-9]{3,10}$/.test(registration) || !["ATR72", "SAAB340", "SAAB_CIT", "SAAB_CIZ"].includes(layout)) {
+      seatBagConfigStatus.textContent = "Enter a valid registration and layout.";
+      return;
+    }
+    seatmapCustomRegistrations[registration] = layout;
+    seatmapConfigReg.value = "";
+    seatBagConfigStatus.textContent = "Registration added — save to apply it.";
+    renderSeatmapConfigRegistrations();
+  });
   if (saveSeatBagConfig) saveSeatBagConfig.addEventListener("click", async () => {
     saveSeatBagConfig.disabled = true;
     seatBagConfigStatus.textContent = "Saving...";
     try {
-      const resp = await fetch(seatBagExitRowsUrl, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ exit_seats: seatBagExitSeats }) });
+      const passenger_types = [
+        ...(exitRestrictChild?.checked ? ["CH", "CHD"] : []),
+        ...(exitRestrictUmnr?.checked ? ["UMNR"] : []),
+        ...(exitRestrictInfant?.checked ? ["INF"] : []),
+      ];
+      const ssr_codes = String(exitRestrictSsrs?.value || "").split(/[,\s]+/).map((code) => code.trim().toUpperCase()).filter(Boolean);
+      const resp = await fetch(seatBagExitRowsUrl, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ exit_seats: seatBagExitSeats, custom_registrations: seatmapCustomRegistrations, exit_restrictions: { passenger_types, ssr_codes } }) });
       const data = await resp.json();
-      if (!resp.ok || data.ok === false) throw new Error(data.error || "Unable to save emergency-exit seats");
-      seatBagExitSeats = data.exit_seats || seatBagExitSeats;
+      if (!resp.ok || data.ok === false) throw new Error(data.error || "Unable to save seatmap config");
+      applySeatmapConfig(data);
+      renderSeatmapConfigRegistrations();
       seatBagConfigStatus.textContent = "Saved.";
     } catch (err) { seatBagConfigStatus.textContent = err.message || String(err); }
     finally { saveSeatBagConfig.disabled = false; }
   });
+  if (seatBagExitRowsUrl) fetch(seatBagExitRowsUrl).then((response) => response.ok ? response.json() : null).then((data) => { if (data?.ok) applySeatmapConfig(data); }).catch(() => {});
   if (saveFreightSettings) saveFreightSettings.addEventListener("click", async () => {
     saveFreightSettings.disabled = true;
     try {

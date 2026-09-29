@@ -3070,6 +3070,14 @@ def _seat_bag_front_conflicts(seats: list[str], occupied: set[str]) -> list[str]
 
 def _seat_bag_aircraft_key(aircraft_type: str = "", reg: str = "") -> str:
     reg_code = str(reg or "").replace("-", "").upper()
+    cfg = db.session.get(AppConfig, 1)
+    try:
+        seatmap_config = json.loads(cfg.seatmap_config_json or "{}") if cfg else {}
+    except (TypeError, ValueError):
+        seatmap_config = {}
+    custom_registrations = seatmap_config.get("custom_registrations", {}) if isinstance(seatmap_config, dict) else {}
+    if isinstance(custom_registrations, dict) and custom_registrations.get(reg_code) in {"ATR72", "SAAB340", "SAAB_CIT", "SAAB_CIZ"}:
+        return custom_registrations[reg_code]
     type_code = str(aircraft_type or "").upper()
     if "ATR" in type_code or reg_code.startswith("ZKMC"):
         return "ATR72"
@@ -3144,12 +3152,13 @@ def api_dcs_seat_bag_exit_rows():
         return jsonify({"ok": False, "error": "Only administrators can configure emergency-exit seats."}), 403
     cfg = db.session.get(AppConfig, 1) or AppConfig(id=1)
     try:
-        current = json.loads(cfg.seat_bag_exit_rows_json or "{}")
+        seatmap_config = json.loads(cfg.seatmap_config_json or "{}")
     except (TypeError, ValueError):
-        current = {}
-    if not isinstance(current, dict): current = {}
+        seatmap_config = {}
+    if not isinstance(seatmap_config, dict): seatmap_config = {}
     if request.method == "PUT":
-        incoming = (request.get_json(silent=True) or {}).get("exit_seats", {})
+        payload = request.get_json(silent=True) or {}
+        incoming = payload.get("exit_seats", {})
         if not isinstance(incoming, dict):
             return jsonify({"ok": False, "error": "Emergency-exit seats must be an aircraft-to-seats map."}), 400
         clean = {}
@@ -3165,13 +3174,38 @@ def api_dcs_seat_bag_exit_rows():
                     clean_seats.add(match.group(0))
             clean[key] = sorted(clean_seats, key=lambda seat: (int(re.match(r"\d+", seat).group()), seat[-1]))
         cfg.seat_bag_exit_rows_json = json.dumps(clean)
+        incoming_registrations = payload.get("custom_registrations", {})
+        if not isinstance(incoming_registrations, dict):
+            return jsonify({"ok": False, "error": "Custom registrations must be a registration-to-layout map."}), 400
+        custom_registrations = {}
+        for registration, layout in incoming_registrations.items():
+            reg_code = re.sub(r"[^A-Z0-9]", "", str(registration or "").upper())
+            if re.fullmatch(r"[A-Z0-9]{3,10}", reg_code) and layout in {"ATR72", "SAAB340", "SAAB_CIT", "SAAB_CIZ"}:
+                custom_registrations[reg_code] = layout
+        incoming_restrictions = payload.get("exit_restrictions", {})
+        if not isinstance(incoming_restrictions, dict):
+            return jsonify({"ok": False, "error": "Emergency-exit restrictions must be a settings map."}), 400
+        passenger_types = {str(value or "").strip().upper() for value in (incoming_restrictions.get("passenger_types") or [])}
+        ssr_codes = {str(value or "").strip().upper() for value in (incoming_restrictions.get("ssr_codes") or [])}
+        seatmap_config = {
+            "custom_registrations": custom_registrations,
+            "exit_restrictions": {
+                "passenger_types": sorted(passenger_types.intersection({"CH", "CHD", "INF", "UMNR"})),
+                "ssr_codes": sorted(code for code in ssr_codes if re.fullmatch(r"[A-Z0-9]{2,6}", code)),
+            },
+        }
+        cfg.seatmap_config_json = json.dumps(seatmap_config)
         db.session.add(cfg)
         db.session.commit()
-        current = clean
     normalized = {}
     for key in ("ATR72", "SAAB340", "SAAB_CIT", "SAAB_CIZ"):
         normalized[key] = sorted(_seat_bag_exit_seats("ATR" if key == "ATR72" else "SAAB", {"SAAB_CIT": "ZK-CIT", "SAAB_CIZ": "ZK-CIZ"}.get(key, "")), key=lambda seat: (int(re.match(r"\d+", seat).group()), seat[-1]))
-    return jsonify({"ok": True, "exit_seats": normalized})
+    return jsonify({
+        "ok": True,
+        "exit_seats": normalized,
+        "custom_registrations": seatmap_config.get("custom_registrations", {}),
+        "exit_restrictions": seatmap_config.get("exit_restrictions", {"passenger_types": ["CH", "CHD", "INF", "UMNR"], "ssr_codes": ["UMNR", "INFT"]}),
+    })
 
 
 @api_bp.route("/dcs/freight/<string:flight_id>", methods=["GET", "PUT"])
