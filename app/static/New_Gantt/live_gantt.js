@@ -75,6 +75,9 @@
   const crosshairH = document.getElementById("crosshairH");
 
   const btnPreviewManifest = document.getElementById("btnPreviewManifest");
+  const manifestPreviewDialog = document.getElementById("manifestPreviewDialog");
+  const manifestPreviewStatus = document.getElementById("manifestPreviewStatus");
+  const btnOpenManifestPreview = document.getElementById("btnOpenManifestPreview");
   const btnPaxList = document.getElementById("btnPaxList");
   const btnCargo = document.getElementById("btnCargo");
   const btnCargoTest = document.getElementById("btnCargoTest");
@@ -4990,7 +4993,7 @@
     await loadData({ showSpinner: false, force: true });
   }
 
-  function buildManifestPayload(f) {
+  function buildManifestPayload(f, statusMode = "boarded_flown") {
     const numberOnly = flightNumberOnly(f);
     return {
       dep: (f.dep || "").toUpperCase(),
@@ -5002,8 +5005,14 @@
       aircraft_type: f.aircraft_type || "",
       envision_flight_id: f.envision_flight_id || null,
       pax_list: f.pax_list || [],
-      status_mode: "boarded_flown",
+      status_mode: statusMode,
     };
+  }
+
+  function openManifestPreviewDialog() {
+    if (!selectedFlight || !manifestPreviewDialog) return;
+    if (manifestPreviewStatus) manifestPreviewStatus.value = "boarded_flown";
+    manifestPreviewDialog.showModal();
   }
 
   async function previewManifest() {
@@ -5012,7 +5021,7 @@
     const resp = await fetch(manifestPreviewUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(buildManifestPayload(f)),
+      body: JSON.stringify(buildManifestPayload(f, manifestPreviewStatus?.value || "boarded_flown")),
     });
     if (!resp.ok) throw new Error(await resp.text());
     const data = await resp.json();
@@ -5021,6 +5030,7 @@
     w.document.open();
     w.document.write(data.html);
     w.document.close();
+    manifestPreviewDialog?.close();
   }
 
   async function submitToApg() {
@@ -5690,7 +5700,8 @@
     updateLiveNowBar();
   });
 
-  if (btnPreviewManifest) btnPreviewManifest.addEventListener("click", withBusy(btnPreviewManifest, "Loading...", previewManifest));
+  if (btnPreviewManifest) btnPreviewManifest.addEventListener("click", openManifestPreviewDialog);
+  if (btnOpenManifestPreview) btnOpenManifestPreview.addEventListener("click", withBusy(btnOpenManifestPreview, "Loading...", previewManifest));
   if (btnCargo) btnCargo.addEventListener("click", withBusy(btnCargo, "Loading...", openCargoDialog));
   if (btnCargoTest) btnCargoTest.addEventListener("click", withBusy(btnCargoTest, "Loading...", openCargoTestDialog));
   if (btnCargoSave) btnCargoSave.addEventListener("click", async () => {

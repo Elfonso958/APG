@@ -334,6 +334,28 @@
     </form>
   </dialog>
 
+  <dialog id="manifestPreviewDialog" class="flight-edit-dialog">
+    <form method="dialog" class="flight-edit-shell">
+      <header>
+        <h3>Preview Manifest</h3>
+        <button class="btn btn-ghost" value="cancel">Close</button>
+      </header>
+      <div class="status-body">
+        <label class="cargo-field">
+          <span>Passenger status</span>
+          <select id="manifestPreviewStatus" class="form-control">
+            <option value="boarded_flown">Boarded and flown passengers</option>
+            <option value="checked_in">Checked-in passengers only</option>
+          </select>
+        </label>
+      </div>
+      <div class="dialog-actions">
+        <button class="btn btn-ghost" value="cancel">Cancel</button>
+        <button id="btnOpenManifestPreview" class="btn btn-primary" type="button">Open Preview</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="freightSettingsDialog" class="flight-edit-dialog">
     <form method="dialog" class="flight-edit-shell">
       <header>

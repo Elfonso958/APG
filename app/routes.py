@@ -4736,6 +4736,7 @@ def api_dcs_manifest_preview():
             reg=data.get("reg") or "",
             envision_flight_id=envision_flight_id,
             pax_override=data.get("pax_list") or [],
+            status_mode=data.get("status_mode") or "boarded_flown",
         )
     except Exception as e:
         current_app.logger.exception("Manifest preview failed: %s", e)
@@ -4753,6 +4754,7 @@ def _build_manifest_html_and_ctx(
     reg: str,
     envision_flight_id: int | None,
     pax_override: list[dict] | None = None,
+    status_mode: str = "boarded_flown",
 ) -> tuple[str, dict]:
     """
     Core logic to fetch DCS + Envision crew and render manifest.html.
@@ -4765,6 +4767,9 @@ def _build_manifest_html_and_ctx(
     reg = reg or ""
 
     raw_number = (raw_number or "").strip().upper()
+    status_mode = str(status_mode or "boarded_flown").strip().lower()
+    if status_mode not in {"boarded_flown", "checked_in"}:
+        status_mode = "boarded_flown"
 
     # Strip designator prefix if present (e.g. "3C702" → "702")
     if designator and raw_number.startswith(designator):
@@ -4914,6 +4919,8 @@ def _build_manifest_html_and_ctx(
             return "FLOWN"
         if r.get("Boarded") is True or r.get("boarded") is True:
             return "BOARDED"
+        if r.get("CheckedIn") is True or r.get("checkedIn") is True:
+            return "CHECKED_IN"
 
         raw = (
             r.get("DCSStatus")
@@ -4934,10 +4941,13 @@ def _build_manifest_html_and_ctx(
             return "FLOWN"
         if "BOARD" in s or s in {"BD", "BRD"}:
             return "BOARDED"
+        if "CHECK" in s or s in {"CI", "CKI"}:
+            return "CHECKED_IN"
         return ""
 
     def _is_manifest_carried_passenger(r: dict) -> bool:
-        return _manifest_passenger_status(r) in {"BOARDED", "FLOWN"}
+        status = _manifest_passenger_status(r)
+        return status == "CHECKED_IN" if status_mode == "checked_in" else status in {"BOARDED", "FLOWN"}
 
     def _is_jump_seat(seat: str | None) -> bool:
         normalized = re.sub(r"[\s/_-]+", "", str(seat or "").strip().upper())
@@ -5287,7 +5297,8 @@ def _build_manifest_html_and_ctx(
         ).strip() or "<blank>"
         status_counts[sval] = status_counts.get(sval, 0) + 1
     current_app.logger.info(
-        "Manifest status filter: mode=boarded_flown_only raw=%s kept=%s filtered=%s statuses=%s flight=%s%s date=%s",
+        "Manifest status filter: mode=%s raw=%s kept=%s filtered=%s statuses=%s flight=%s%s date=%s",
+        status_mode,
         len(raw_passengers),
         len(passengers),
         filtered_out_booked,
@@ -5309,7 +5320,7 @@ def _build_manifest_html_and_ctx(
         # this date is what we'll use for the filename (local date)
         "date": flight_date_fmt or date_str,
         "reg": reg,
-        "manifest_basis": "Boarded/flown passengers only",
+        "manifest_basis": "Checked-in passengers only" if status_mode == "checked_in" else "Boarded/flown passengers only",
     }
 
     # 4) Crew (optional)
