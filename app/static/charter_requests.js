@@ -48,6 +48,7 @@
   const input = (key, row, index) => {
     const value = row[key] || '';
     if (key === 'aircraft_type') return `<select data-row="${index}" data-key="${key}"><option value="">Select</option><option value="SF34" ${value === 'SF34' ? 'selected' : ''}>SF34</option><option value="ATR72" ${value === 'ATR72' ? 'selected' : ''}>ATR 72</option></select>`;
+    if (key === 'flight_type') return `<select data-row="${index}" data-key="${key}"><option value="Charter" ${value === 'Charter' || !value ? 'selected' : ''}>Charter</option><option value="Charter Positioning" ${value === 'Charter Positioning' ? 'selected' : ''}>Charter Positioning</option></select>`;
     const type = key === 'date' ? 'type="date"' : '';
     const placeholder = key === 'flight_type' ? 'placeholder="Charter / Position"' : key === 'sta' ? 'placeholder="Calculated"' : '';
     return `<input ${type} data-row="${index}" data-key="${key}" value="${value}" ${placeholder}>`;
