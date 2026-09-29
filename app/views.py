@@ -2076,7 +2076,8 @@ def ops_charter_requests():
     for previous, following in zip(rotations, rotations[1:]):
         tail, _, previous_eta, previous_group, previous_sector = previous
         next_tail, next_etd, _, next_group, next_sector = following
-        if tail != next_tail or previous_group is next_group or str(previous_sector.get("arr") or "").upper() != str(next_sector.get("dep") or "").upper(): continue
+        handover_airport = str(previous_sector.get("arr") or "").upper()
+        if tail != next_tail or previous_group is next_group or handover_airport == "AKL" or handover_airport != str(next_sector.get("dep") or "").upper(): continue
         gap = (next_etd - previous_eta).total_seconds() / 60
         if 0 <= gap <= 24 * 60:
             previous_sector["continues_to"] = next_group["request"].reference
