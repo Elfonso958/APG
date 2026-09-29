@@ -5353,6 +5353,29 @@
       return ssrCodes.some((code) => prohibitedSsrs.has(code));
     }
 
+    function renderSeatmapWarnings() {
+      const warnings = [];
+      const seen = new Set();
+      const addWarning = (seat, message) => {
+        const key = `${seat}:${message}`;
+        if (!seen.has(key)) { seen.add(key); warnings.push({ seat, message }); }
+      };
+      Object.entries(paxBySeat).forEach(([seat, pax]) => {
+        if (exitRestrictionForPassenger(pax, seat)) addWarning(seat, "Passenger type or SSR is not permitted in this emergency-exit seat.");
+        if (seatBagBySeat.has(seat)) addWarning(seat, "Passenger is assigned to a seat occupied by a seat bag.");
+      });
+      seatBagBySeat.forEach((allocation) => {
+        (allocation.seats || []).forEach((seat) => {
+          const match = String(seat).match(/^(\d+)([A-Z])$/);
+          const frontSeat = match && Number(match[1]) > 1 ? `${Number(match[1]) - 1}${match[2]}` : "";
+          if (frontSeat && paxBySeat[frontSeat]) addWarning(frontSeat, `Passenger is directly in front of seat bag ${allocation.seats.join(" + ")}.`);
+        });
+      });
+      seatmapInfo.innerHTML = warnings.length
+        ? `<div class="seatmap-warning-title">${warnings.length} seating warning${warnings.length === 1 ? "" : "s"}</div>${warnings.map((warning) => `<div class="seatmap-conflict"><strong>${escapeHtml(warning.seat)}</strong> — ${escapeHtml(warning.message)}</div>`).join("")}`
+        : "<div>No seating warnings. Select a seat to view passenger details.</div>";
+    }
+
     function seatLookupCodes(rowNum, col, explicitCode = null) {
       const code = explicitCode || `${rowNum}${col}`;
       if (explicitCode) {
@@ -5587,7 +5610,7 @@
       seatmapGrid.appendChild(row);
     });
 
-    seatmapInfo.textContent = "Select a seat to view passenger details.";
+    renderSeatmapWarnings();
     seatmapDialog.showModal();
   }
 
