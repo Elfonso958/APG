@@ -37,6 +37,13 @@
   };
   const isCharterSector = (sector) => /charter/i.test(String(sector.flight_type || ""));
   const isCateringSector = (sector) => isCharterSector(sector) && !/positioning/i.test(String(sector.flight_type || ""));
+  const charterCrewRole = (crew) => {
+    const raw = [crew.position, crew.position_code, crew.position_description, crew.role].filter(Boolean).join(" ").toUpperCase();
+    if (/\bPIC\b|\bCPT\b|CAPTAIN/.test(raw)) return "Captain";
+    if (crew.is_pilot || /\bFO\b|FIRST\s+OFFICER/.test(raw)) return "First Officer";
+    if (/\bFA\b|CABIN/.test(raw)) return "FA Crew";
+    return crew.position || crew.role || "Crew";
+  };
   const hotelTools = (index) => {
     const results = hotelResults.get(index) || [];
     const nzOnly = details.accommodation[index]?.hotel_search_scope !== "worldwide";
@@ -206,7 +213,7 @@
   async function assignedCrew(selected, sectors) {
     const known = new Set(details.crew.map((crew) => String(crew.code || crew.name || "").toUpperCase()));
     const results = await Promise.all(selected.map(async (flight) => { const id = flight.envision_flight_id || flight.id || flight.flight_id; if (!id) return []; try { const response = await fetch(`${app.dataset.flightCrewUrl}?flight_id=${encodeURIComponent(id)}&compact=1`); const data = await response.json(); return response.ok && data.ok !== false ? (data.crew || []) : []; } catch (_) { return []; } }));
-    results.forEach((crewList, index) => { const codes = []; crewList.forEach((crew) => { const code = String(crew.employee_no || crew.employeeNo || crew.code || "").toUpperCase(), name = String(crew.name || ""), key = code || name.toUpperCase(); if (code) codes.push(code); if (!key || known.has(key)) return; details.crew.push({ code, name, role:crew.position || "", phone:"", hotel:"", notes:"", source:"envision" }); known.add(key); }); sectors[index].crew_codes = codes.join(", "); });
+    results.forEach((crewList, index) => { const codes = []; crewList.forEach((crew) => { const code = String(crew.employee_no || crew.employeeNo || crew.code || "").toUpperCase(), name = String(crew.name || ""), key = code || name.toUpperCase(), role = charterCrewRole(crew); if (code) codes.push(code); if (!key) return; const existing = details.crew.find((item) => String(item.code || item.name || "").toUpperCase() === key); if (existing) { if (existing.source === "envision") existing.role = role; return; } details.crew.push({ code, name, role, phone:"", hotel:"", notes:"", source:"envision" }); known.add(key); }); sectors[index].crew_codes = codes.join(", "); });
   }
   async function reconcileAssignedCrew() {
     // Preserve manually added supplementary crew, then rebuild the Envision crew
