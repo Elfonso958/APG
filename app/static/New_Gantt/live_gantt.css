@@ -1785,6 +1785,22 @@ body[data-theme="dark"] .wb-inline-status.is-over {
   z-index: 18;
   box-shadow: 0 -10px 24px color-mix(in srgb, var(--panel) 88%, transparent);
 }
+.cargo-allocation-layout { display: grid; grid-template-columns: minmax(248px, 280px) minmax(0, 1fr); align-items: start; gap: 18px; }
+#cargoWeightsSummary { position: sticky; top: 66px; display: grid; gap: 12px; }
+#cargoWeightsSummary .cargo-safety-banner { margin: 0; padding: 13px 14px; border-radius: 14px; box-shadow: none; }
+#cargoWeightsSummary .cargo-safety-title { font-size: .9rem; }
+#cargoWeightsSummary .cargo-safety-text { font-size: .75rem; }
+#cargoWeightsSummary .cargo-safety-focus { margin-top: 7px; font-size: 1.05rem; }
+#cargoWeightsSummary .cargo-weight-rail { grid-template-columns: 1fr; gap: 10px; }
+#cargoWeightsSummary .cargo-weight-card { padding: 12px; border-radius: 14px; box-shadow: none; }
+#cargoWeightsSummary .cargo-weight-title { font-size: .82rem; }
+#cargoWeightsSummary .cargo-weight-help { font-size: .68rem; }
+#cargoWeightsSummary .cargo-weight-main { margin-top: 8px; font-size: 1.45rem; }
+#cargoWeightsSummary .cargo-weight-main span { font-size: .75rem; }
+#cargoWeightsSummary .cargo-weight-bar { margin-top: 9px; height: 8px; }
+#cargoWeightsSummary .cargo-weight-meta { margin-top: 9px; gap: 5px; font-size: .72rem; }
+#cargoWeightsSummary .cargo-weight-note { margin-top: 8px; font-size: .68rem; }
+#cargoWeightsSummary .cargo-weight-accordion { margin: 0; }
 
 #cargoDialog .flight-edit-shell {
   height: 100%;
@@ -1835,7 +1851,14 @@ body[data-theme="dark"] .wb-inline-status.is-over {
   }
 }
 
+@media (max-width: 980px) {
+  .cargo-allocation-layout { grid-template-columns: 1fr; }
+  #cargoWeightsSummary { position: static; }
+  #cargoWeightsSummary .cargo-weight-rail { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
 @media (max-width: 600px) {
+  #cargoWeightsSummary .cargo-weight-rail { grid-template-columns: 1fr; }
   #cargoDialog .cargo-summary-strip {
     grid-template-columns: 1fr;
   }

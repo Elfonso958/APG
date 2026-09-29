@@ -3287,42 +3287,39 @@
         <div class="cargo-trim-advisory">Loader guidance only — the operational weight and balance check must be completed in APG.</div>
       </section>
     ` : `<div class="cargo-trim-unavailable">Trim unavailable: ${escapeHtml(trim?.reason || "APG aircraft station arms are unavailable")}</div>`;
+    const weightCardsHtml = computed.map((m) => `
+      <div class="cargo-weight-card ${m.statusClass}">
+        <div class="cargo-weight-card-top">
+          <div>
+            <div class="cargo-weight-title">${escapeHtml(m.title)}</div>
+            <div class="cargo-weight-help">${escapeHtml(m.help)}</div>
+          </div>
+          <div class="weight-status-pill ${m.statusClass}">${m.statusText}</div>
+        </div>
+        <div class="cargo-weight-main">${m.current.toFixed(0)} <span>${massUnit}</span></div>
+        <div class="cargo-weight-bar"><div class="cargo-weight-bar-fill ${m.statusClass}" style="width:${Math.max(0, Math.min(100, m.pct || 0)).toFixed(1)}%"></div></div>
+        <div class="cargo-weight-meta">
+          <div><span>${m.limitSource === "runway" ? "Runway max" : "Max"}</span><strong>${m.limit.toFixed(0)} ${massUnit}</strong></div>
+          <div><span>Remaining</span><strong>${m.remaining.toFixed(0)} ${massUnit}</strong></div>
+          <div><span>Used</span><strong>${m.pct.toFixed(0)}%</strong></div>
+        </div>
+        ${m.limitSource === "runway" && m.structuralLimit ? `<div class="cargo-weight-note">Structural max ${m.structuralLimit.toFixed(0)} ${massUnit}</div>` : ""}
+        ${m.runwayLimit && m.limitSource !== "runway" ? `<div class="cargo-weight-note">Runway max ${m.runwayLimit.toFixed(0)} ${massUnit}</div>` : ""}
+      </div>
+    `).join("");
     cargoWeightsSummary.innerHTML = `
       <div class="cargo-safety-banner ${overallState.cls}">
         <div class="cargo-safety-title">${overallState.title}</div>
         <div class="cargo-safety-text">${overallState.text}</div>
         <div class="cargo-safety-focus">${overallState.subtext}</div>
       </div>
+      <div class="cargo-weight-grid cargo-weight-rail">${weightCardsHtml}</div>
       <details class="cargo-weight-accordion" ${detailsOpen ? "open" : ""}>
         <summary>
           <span>Weight and estimate details</span>
           <small>${f.apgCargoSummaryLoading ? "Refreshing estimates..." : "Loaded, takeoff, landing and APG planning values"}</small>
         </summary>
         <div class="cargo-weight-accordion-body">
-      <div class="cargo-weight-grid">
-        ${computed.map((m) => `
-          <div class="cargo-weight-card ${m.statusClass}">
-            <div class="cargo-weight-card-top">
-              <div>
-                <div class="cargo-weight-title">${escapeHtml(m.title)}</div>
-                <div class="cargo-weight-help">${escapeHtml(m.help)}</div>
-              </div>
-              <div class="weight-status-pill ${m.statusClass}">${m.statusText}</div>
-            </div>
-            <div class="cargo-weight-main">${m.current.toFixed(0)} <span>${massUnit}</span></div>
-            <div class="cargo-weight-bar">
-              <div class="cargo-weight-bar-fill ${m.statusClass}" style="width:${Math.max(0, Math.min(100, m.pct || 0)).toFixed(1)}%"></div>
-            </div>
-            <div class="cargo-weight-meta">
-              <div><span>${m.limitSource === "runway" ? "Runway max" : "Max"}</span><strong>${m.limit.toFixed(0)} ${massUnit}</strong></div>
-              <div><span>Remaining</span><strong>${m.remaining.toFixed(0)} ${massUnit}</strong></div>
-              <div><span>Used</span><strong>${m.pct.toFixed(0)}%</strong></div>
-            </div>
-            ${m.limitSource === "runway" && m.structuralLimit ? `<div class="cargo-weight-note">Structural max ${m.structuralLimit.toFixed(0)} ${massUnit}</div>` : ""}
-            ${m.runwayLimit && m.limitSource !== "runway" ? `<div class="cargo-weight-note">Runway max ${m.runwayLimit.toFixed(0)} ${massUnit}</div>` : ""}
-          </div>
-        `).join("")}
-      </div>
       <div class="cargo-reference-panel">
         <div class="cargo-reference-heading">Estimate Breakdown</div>
         <div class="cargo-reference-grid">
