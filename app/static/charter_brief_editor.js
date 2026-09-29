@@ -35,6 +35,7 @@
     return `<label class="sector-passenger-input"><input type="number" min="0" step="1" inputmode="numeric" data-sector-passengers="${index}" value="${esc(value)}" placeholder="Enter total"><small>Manual total</small></label>`;
   };
   const isCharterSector = (sector) => /charter/i.test(String(sector.flight_type || ""));
+  const isCateringSector = (sector) => isCharterSector(sector) && !/positioning/i.test(String(sector.flight_type || ""));
   const hotelTools = (index) => {
     const results = hotelResults.get(index) || [];
     const nzOnly = details.accommodation[index]?.hotel_search_scope !== "worldwide";
@@ -45,10 +46,11 @@
     return `<div class="place-tools"><label class="place-search-label">Find transport<input data-transport-search="${index}" placeholder="Taxi, shuttle or transport provider" autocomplete="off"></label><button type="button" class="btn secondary" data-transport-search-button="${index}">Search</button><label class="place-scope-label">Search area<select data-transport-scope="${index}"><option value="nz" ${nzOnly ? "selected" : ""}>New Zealand only</option><option value="worldwide" ${nzOnly ? "" : "selected"}>Search worldwide</option></select></label>${results.length ? `<div class="place-results">${results.map((place) => `<button type="button" class="place-result" data-transport-result="${index}" data-place-name="${esc(place.name)}" data-place-address="${esc(place.address)}" data-place-phone="${esc(place.phone)}" data-place-website="${esc(place.website)}"><strong>${esc(place.name)}</strong><span>${esc(place.address || "Address unavailable")}</span>${place.phone ? `<small>${esc(place.phone)}</small>` : ""}</button>`).join("")}</div>` : ""}</div>`;
   };
   function renderSectors() {
+    details.sectors.forEach((sector) => { if (/positioning/i.test(String(sector.flight_type || ""))) sector.catering = ""; });
     const displayFields = fields.sectors.filter((field) => !["date", "source_flight_id"].includes(field));
     const byDay = new Map();
     details.sectors.forEach((sector) => { const day = sector.date || "Date TBC"; if (!byDay.has(day)) byDay.set(day, []); byDay.get(day).push(sector); });
-    $("sectorsRows").innerHTML = [...byDay.entries()].map(([day, sectors]) => `<tr class="duty-date-heading"><td colspan="12">${esc(longDate(day))}</td></tr>${sectors.map((sector) => `<tr data-list-row="sectors">${displayFields.map((field) => `<td>${field === "passenger_info" ? passengerCountInput(sector) : field === "catering" ? (isCharterSector(sector) ? `<select data-sector-catering="${details.sectors.indexOf(sector)}"><option value="">No catering selected</option>${cateringServices.map((service) => `<option value="${esc(service)}" ${service === sector.catering ? "selected" : ""}>${esc(service)}</option>`).join("")}</select>` : "") : readOnly(field, field === "notes" && sector.notes === "Imported from Envision" ? "" : sector[field])}</td>`).join("")}<td><button type="button" class="remove-row">Remove</button></td></tr>`).join("")}`).join("");
+    $("sectorsRows").innerHTML = [...byDay.entries()].map(([day, sectors]) => `<tr class="duty-date-heading"><td colspan="12">${esc(longDate(day))}</td></tr>${sectors.map((sector) => `<tr data-list-row="sectors">${displayFields.map((field) => `<td>${field === "passenger_info" ? passengerCountInput(sector) : field === "catering" ? (isCateringSector(sector) ? `<select data-sector-catering="${details.sectors.indexOf(sector)}"><option value="">No catering selected</option>${cateringServices.map((service) => `<option value="${esc(service)}" ${service === sector.catering ? "selected" : ""}>${esc(service)}</option>`).join("")}</select>` : "") : readOnly(field, field === "notes" && sector.notes === "Imported from Envision" ? "" : sector[field])}</td>`).join("")}<td><button type="button" class="remove-row">Remove</button></td></tr>`).join("")}`).join("");
   }
   const isEnvisionCrew = (crew) => crew.source === "envision" || crew.notes === "Assigned in Envision";
   function renderTable(name) { $( `${name}Rows` ).innerHTML = details[name].map((row) => `<tr data-list-row="${name}"${name === "crew" && isEnvisionCrew(row) ? ' data-source="envision"' : ""}>${fields[name].map((field) => `<td>${input(field, row[field])}</td>`).join("")}<td><button type="button" class="remove-row">×</button></td></tr>`).join(""); }
@@ -133,7 +135,7 @@
     const search = event.target.closest("[data-hotel-search]");
     if (search && event.key === "Enter") { event.preventDefault(); searchHotels(Number(search.dataset.hotelSearch)); }
   });
-  $("applyCateringAll").addEventListener("click", () => { if (!$("cateringAll").value) return alert("Choose a catering service first."); details.sectors.forEach((sector) => { if (isCharterSector(sector)) sector.catering = $("cateringAll").value; }); renderSectors(); });
+  $("applyCateringAll").addEventListener("click", () => { if (!$("cateringAll").value) return alert("Choose a catering service first."); details.sectors.forEach((sector) => { if (isCateringSector(sector)) sector.catering = $("cateringAll").value; else if (/positioning/i.test(String(sector.flight_type || ""))) sector.catering = ""; }); renderSectors(); });
   $("briefForm").addEventListener("submit", () => {
     lists.filter((name) => name !== "sectors").forEach((name) => { details[name] = [...document.querySelectorAll(`[data-list-row="${name}"]`)].map((row) => { const item = Object.fromEntries(fields[name].map((field) => [field, row.querySelector(`[data-field="${field}"]`)?.value.trim() || ""])); if (name === "crew" && row.dataset.source === "envision") item.source = "envision"; return item; }); });
     details.operations_notes = $("operationsNotes").value.trim(); details.crew_notes = $("crewNotes").value.trim(); $("detailsJson").value = JSON.stringify(details);
@@ -228,6 +230,7 @@
         const flight = feed.find((row) => String(row.envision_flight_id || row.id || row.flight_id || "") === String(sector.source_flight_id || "")) || feed.find((row) => row._briefDate === sector.date && String(row.flight_number || row.flight || "") === String(sector.flight || ""));
         if (!flight) return;
         Object.assign(sector, { source_flight_id:flight.envision_flight_id || flight.id || flight.flight_id || sector.source_flight_id, flight:flight.flight_number || flight.flight || sector.flight, dep:flight.dep || flight.adep || sector.dep, arr:flight.ades || flight.dest || sector.arr, std:flight.std_nz || flight.std || sector.std, sta:flight.sta_nz || flight.sta || sector.sta, aircraft:flight.reg || flight.registration || sector.aircraft, flight_type:flight.flight_type || flight.service_type || sector.flight_type, passenger_info:sector.manual_pax_count == null ? passengerInfo(flight) : `${sector.manual_pax_count} pax (manual)`, pax_count:flight.pax_count ?? sector.pax_count ?? "", crew_codes:"", notes:"" });
+        if (/positioning/i.test(String(sector.flight_type || ""))) sector.catering = "";
         refreshed.push(sector); selected.push(flight);
       });
       details.crew = details.crew.filter((crew) => !isEnvisionCrew(crew)); await assignedCrew(selected, refreshed); render();

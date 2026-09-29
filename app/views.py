@@ -1906,7 +1906,7 @@ def _brief_print_time(value) -> str:
         return "—"
     try:
         parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        return parsed.strftime("%I:%M %p").lstrip("0").lower()
+        return parsed.strftime("%H:%M")
     except ValueError:
         return raw[11:16] if "T" in raw and len(raw) >= 16 else raw
 
@@ -1936,6 +1936,24 @@ def ops_charter_brief_new():
         db.session.commit()
         return redirect(url_for("ui.ops_charter_brief_edit", brief_id=brief.id))
     return render_template("charter_brief_new.html", today=_nz_today())
+
+
+@ui_bp.post("/ops/charter-briefs/<int:brief_id>/delete")
+@_login_required
+def ops_charter_brief_delete(brief_id: int):
+    brief = db.session.get(CharterBrief, brief_id)
+    if not brief:
+        abort(404)
+    if not _csrf_is_valid():
+        flash("Your form expired. Please try again.", "danger")
+        return redirect(url_for("ui.ops_charter_brief_edit", brief_id=brief.id))
+    if str(brief.status or "").lower() != "draft":
+        flash("Published charter briefs are retained and cannot be deleted.", "danger")
+        return redirect(url_for("ui.ops_charter_brief_edit", brief_id=brief.id))
+    db.session.delete(brief)
+    db.session.commit()
+    flash("Draft charter brief deleted.", "success")
+    return redirect(url_for("ui.ops_charter_briefs"))
 
 
 @ui_bp.route("/ops/charter-briefs/<int:brief_id>", methods=["GET", "POST"])
