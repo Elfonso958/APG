@@ -2062,7 +2062,27 @@ def ops_charter_requests():
         start = date.fromisoformat(dated[0]) if dated else None
         request_rows.append({"request": item, "days": days, "start_date": start, "days_to_charter": (start - _nz_today()).days if start else None})
     request_rows.sort(key=lambda item: (item["start_date"] is None, item["start_date"] or date.max))
-    return render_template("charter_requests_board_v3.html", request_rows=request_rows, can_operate=bool(user.is_admin or "operations" in _user_permissions(user)), format_date=_brief_print_date)
+    rotations = []
+    for group in request_rows:
+        for sectors in group["days"].values():
+            for sector in sectors:
+                if not sector.get("tail") or not sector.get("date"): continue
+                try:
+                    etd = _parse_charter_local(sector.get("std"), sector.get("date")); eta = _parse_charter_local(sector.get("sta"), sector.get("date"))
+                    if eta <= etd: eta += timedelta(days=1)
+                    rotations.append((str(sector["tail"]).upper(), etd, eta, group, sector))
+                except Exception: continue
+    rotations.sort(key=lambda item: (item[0], item[1]))
+    for previous, following in zip(rotations, rotations[1:]):
+        tail, _, previous_eta, previous_group, previous_sector = previous
+        next_tail, next_etd, _, next_group, next_sector = following
+        if tail != next_tail or previous_group is next_group or str(previous_sector.get("arr") or "").upper() != str(next_sector.get("dep") or "").upper(): continue
+        gap = (next_etd - previous_eta).total_seconds() / 60
+        if 0 <= gap <= 24 * 60:
+            previous_sector["continues_to"] = next_group["request"].reference
+            next_sector["continues_from"] = previous_group["request"].reference
+            next_sector["connection_gap_minutes"] = round(gap)
+    return render_template("charter_requests_board_v4.html", request_rows=request_rows, can_operate=bool(user.is_admin or "operations" in _user_permissions(user)), format_date=_brief_print_date)
 
 
 @ui_bp.post("/ops/charter-requests/import")
