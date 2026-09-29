@@ -1987,6 +1987,25 @@ def _parse_charter_local(value, day):
     return datetime.combine(date.fromisoformat(str(day)), time(int(raw[:2]), int(raw[2:])), tzinfo=NZ)
 
 
+def _friendly_charter_envision_error(exc, sector=None, tail=""):
+    """Turn Envision's verbose placement response into an actionable Ops message."""
+    detail = str(exc)
+    match = re.search(r"Place mismatch with previous flight\s*-\s*([^/]+)/(?:[^/]+/){3}([A-Z]{3})", detail, re.I)
+    if match:
+        previous_flight, last_airport = match.groups()
+        requested_dep = str((sector or {}).get("dep") or "the requested departure station").upper()
+        requested_flight = str((sector or {}).get("flight_number") or "this sector").upper()
+        tail_label = f" {tail}" if tail else ""
+        return (
+            f"Envision cannot create {requested_flight} on{tail_label}: its previous flight "
+            f"({previous_flight}) leaves it at {last_airport}, but this sector departs {requested_dep}. "
+            f"Select a tail positioned at {requested_dep}, or add a positioning sector from {last_airport} to {requested_dep}."
+        )
+    if "406" in detail:
+        return "Envision rejected this sector during validation. Check the selected tail's position, maintenance and schedule, then try again."
+    return f"Envision could not create the request: {detail}"
+
+
 @ui_bp.post("/ops/charter-requests/sync-envision")
 @_login_required
 def ops_charter_requests_sync_envision():
@@ -2461,6 +2480,7 @@ def ops_charter_request_detail(request_id):
                 if not isinstance(tail_assignments, dict):
                     tail_assignments = {}
                 legacy_registration_id = request.form.get("registration_id", type=int)
+                current_sector, current_tail = None, ""
                 try:
                     token = envision_authenticate()["token"]
                     # A flight number must be unique on its operating day. Check both
@@ -2498,19 +2518,21 @@ def ops_charter_request_detail(request_id):
                     types = envision_get_flight_types(token)
                     for sector in sectors:
                         if sector.get("envision_flight_id"): continue
+                        current_sector = sector
                         ftype = str(sector.get("flight_type") or "Charter").lower()
                         type_row = next((item for item in types if ("position" in ftype and "position" in str(item.get("description") or item.get("flightTypeDescription") or "").lower()) or ("position" not in ftype and "charter" in str(item.get("description") or item.get("flightTypeDescription") or "").lower())), None)
                         if not type_row: raise RuntimeError(f"No Envision flight type found for {sector.get('flight_type') or 'Charter'}.")
                         etd, eta = _parse_charter_local(sector.get("std"), sector.get("date")), _parse_charter_local(sector.get("sta"), sector.get("date"))
                         if eta <= etd: eta += timedelta(days=1)
                         registration = registrations_by_id[str(tail_assignments[str(sector.get("aircraft_group") or "aircraft-1")])]
+                        current_tail = str(registration.get("registration") or registration.get("registrationDescription") or "")
                         created = envision_create_flight(token, {"ignoreValidations":False,"flightDate":etd.astimezone(timezone.utc).isoformat().replace("+00:00","Z"),"departurePlaceId":_resolve_charter_place(token, sector.get("dep")),"arrivalPlaceId":_resolve_charter_place(token, sector.get("arr")),"scheduledTimeDeparture":etd.astimezone(timezone.utc).isoformat().replace("+00:00","Z"),"scheduledTimeArrival":eta.astimezone(timezone.utc).isoformat().replace("+00:00","Z"),"flightTypeId":int(type_row["id"]),"modelId":int(registration.get("modelId") or 0),"registrationId":int(registration.get("id") or 0),"flightNumber":sector["flight_number"]})
                         sector["envision_flight_id"] = str(created.get("id") or "")
                     row.sectors_json = json.dumps(sectors)
                     row.status = "Pushed to Envision"
                     clear_gantt_flight_cache()
                 except Exception as exc:
-                    flash(f"Request was not approved: {exc}", "danger")
+                    flash(_friendly_charter_envision_error(exc, current_sector, current_tail), "danger")
                     return redirect(url_for("ui.ops_charter_request_planning", request_id=row.id))
             row.decision_by = user.display_name or user.email; row.decision_note = str(request.form.get("decision_note") or "").strip() or None; row.decided_at = datetime.utcnow()
             db.session.add(row); db.session.commit(); flash(f"Request {row.status.lower()}.", "success")
