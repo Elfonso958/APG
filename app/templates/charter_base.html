@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='charter_briefs.css') }}?v=4">
   <link rel="stylesheet" href="{{ url_for('static', filename='charter_workspace_overrides.css') }}?v=2">
   <link rel="stylesheet" href="{{ url_for('static', filename='charter_workspace_checkin.css') }}?v=1">
+  <link rel="stylesheet" href="{{ url_for('static', filename='charter_settings_modal.css') }}?v=1">
   {% block head_extra %}{% endblock %}
 </head>
 <body class="charter-workspace-body">
@@ -28,7 +29,7 @@
     </nav>
     <div class="charter-nav-actions">
       <a class="charter-apg-link" href="{{ url_for('ui.dcs_new_live_gantt') }}">← APG flight board</a>
-      {% if apg_is_admin %}<a class="charter-apg-link" href="{{ url_for('ui.admin_email_settings') }}">Email settings</a>{% endif %}
+      {% if apg_is_admin %}<button class="charter-apg-link charter-settings-button" type="button" onclick="document.getElementById('charterEmailSettings').showModal()">Email settings</button>{% endif %}
       {% if apg_current_user %}
       <details class="charter-account"><summary>{{ apg_current_user.display_name or apg_current_user.email }}</summary><form method="post" action="{{ url_for('ui.apg_logout') }}"><input type="hidden" name="csrf_token" value="{{ apg_csrf_token }}"><button type="submit">Sign out</button></form></details>
       {% endif %}
@@ -38,6 +39,7 @@
     {% with messages = get_flashed_messages(with_categories=true) %}{% for category, message in messages %}<div class="charter-flash {{ category }}">{{ message }}</div>{% endfor %}{% endwith %}
     {% block content %}{% endblock %}
   </main>
+  {% if apg_is_admin %}<dialog id="charterEmailSettings" class="charter-settings-modal"><div class="charter-settings-modal-head"><strong>Charter email settings</strong><button type="button" onclick="document.getElementById('charterEmailSettings').close()">Close</button></div><iframe title="Charter email settings" src="{{ url_for('ui.admin_email_settings') }}"></iframe></dialog>{% endif %}
   {% block scripts %}{% endblock %}
 </body>
 </html>
