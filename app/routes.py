@@ -169,15 +169,6 @@ def api_charter_hotel_search():
     location_name = _NZ_AIRPORT_TOWNS.get(location.upper(), location)
     search_text = " ".join(part for part in (query, location_name, "New Zealand" if nz_only else "") if part)
     try:
-        message = {
-            "subject": subject,
-            "body": {"contentType": "HTML" if html_body else "Text", "content": html_body or body},
-            "toRecipients": [{"emailAddress": {"address": address}} for address in recipients],
-        }
-        # The delivery endpoint remains the real Graph mailbox, but Graph can
-        # send using an authorised alias/shared-mailbox From identity.
-        if sender and sender.strip().lower() != mailbox.strip().lower():
-            message["from"] = {"emailAddress": {"address": sender.strip()}}
         response = requests.post(
             "https://places.googleapis.com/v1/places:searchText",
             headers={
@@ -2303,6 +2294,15 @@ def _send_email_via_graph(sender: str, recipients: list[str], subject: str, body
         )
         token_response.raise_for_status()
         access_token = token_response.json()["access_token"]
+        message = {
+            "subject": subject,
+            "body": {"contentType": "HTML" if html_body else "Text", "content": html_body or body},
+            "toRecipients": [{"emailAddress": {"address": address}} for address in recipients],
+        }
+        # The delivery endpoint remains the real Graph mailbox, but Graph can
+        # send using an authorised alias/shared-mailbox From identity.
+        if sender and sender.strip().lower() != mailbox.strip().lower():
+            message["from"] = {"emailAddress": {"address": sender.strip()}}
         response = requests.post(
             f"https://graph.microsoft.com/v1.0/users/{mailbox}/sendMail",
             headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
