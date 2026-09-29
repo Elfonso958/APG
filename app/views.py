@@ -1915,6 +1915,16 @@ def _charter_brief_details(brief: CharterBrief) -> dict:
         return {}
 
 
+def _charter_brief_request_ids(brief: CharterBrief) -> set[str]:
+    """Return every charter request represented by a brief (including old briefs)."""
+    details = _charter_brief_details(brief)
+    ids = {str(value) for value in details.get("source_charter_request_ids", []) if str(value)}
+    legacy_id = str(details.get("source_charter_request_id") or "").strip()
+    if legacy_id:
+        ids.add(legacy_id)
+    return ids
+
+
 def _published_charter_brief_links() -> dict[str, CharterBrief]:
     """Map Envision flight IDs to the published charter brief containing them."""
     links: dict[str, CharterBrief] = {}
@@ -2055,16 +2065,29 @@ def ops_charter_requests_sync_envision():
 @ui_bp.post("/ops/charter-requests/<int:request_id>/create-brief")
 @_login_required
 def ops_charter_request_create_brief(request_id):
-    """Create the first draft crew brief directly from an approved charter request."""
+    """Create one draft crew brief from one or more connected charter requests."""
     user = _current_apg_user()
     if not (user and (user.is_admin or "operations" in _user_permissions(user))) or not _csrf_is_valid(): abort(403)
     row = db.session.get(CharterRequest, request_id)
     if not row or row.status not in {"Approved", "Pushed to Envision"}: abort(404)
+    requested_related_id = request.form.get("include_request_id", type=int)
+    source_rows = [row]
+    if requested_related_id and requested_related_id != row.id:
+        related = db.session.get(CharterRequest, requested_related_id)
+        if not related or related.status not in {"Approved", "Pushed to Envision"}:
+            flash("The connected charter is no longer available for a combined brief.", "danger")
+            return redirect(url_for("ui.ops_charter_requests", tab="approved"))
+        source_rows.append(related)
+    source_ids = {str(item.id) for item in source_rows}
     for existing in CharterBrief.query.filter_by(status="Draft").all():
-        if str(_charter_brief_details(existing).get("source_charter_request_id") or "") == str(row.id):
-            flash("A draft charter brief already exists for this request.", "success")
+        if source_ids & _charter_brief_request_ids(existing):
+            flash("A draft charter brief already exists for one of these requests.", "success")
             return redirect(url_for("ui.ops_charter_brief_edit", brief_id=existing.id))
-    sectors = _allocate_charter_numbers(_request_sectors(row))
+    sectors = []
+    for source_row in source_rows:
+        for sector in _allocate_charter_numbers(_request_sectors(source_row)):
+            sectors.append({**sector, "source_charter_request_id": source_row.id})
+    sectors.sort(key=lambda sector: (str(sector.get("date") or ""), str(sector.get("std") or "")))
     dated = sorted({str(sector.get("date") or "") for sector in sectors if sector.get("date")})
     if not dated:
         flash("This request has no dated sectors to put into a brief.", "danger")
@@ -2116,10 +2139,11 @@ def ops_charter_request_create_brief(request_id):
         brief_sectors.append({"date": sector.get("date") or "", "source_flight_id": flight_id, "flight": sector.get("flight_number") or "", "dep": sector.get("dep") or "", "arr": sector.get("arr") or "", "std": sector.get("std") or "", "sta": sector.get("sta") or "", "aircraft": sector.get("tail") or sector.get("aircraft_type") or "", "flight_type": sector.get("flight_type") or "", "passenger_info": f"{passenger} pax (manual)" if passenger.isdigit() else (passenger or "No passenger total entered"), "manual_pax_count": int(passenger) if passenger.isdigit() else None, "crew_codes": ", ".join(codes), "catering": "" if "position" in str(sector.get("flight_type") or "").lower() else sector.get("catering") or "", "notes": sector.get("notes") or ""})
     start_date, end_date = date.fromisoformat(dated[0]), date.fromisoformat(dated[-1])
     reference = f"CB-{start_date:%Y%m%d}-{secrets.token_hex(2).upper()}"
-    details = {"source_charter_request_id": row.id, "sectors": brief_sectors, "crew": crew, "accommodation": [], "transport": [], "ports": [], "handler_selections": {}, "bag_weights_text": "", "operations_notes": "", "crew_notes": ""}
-    brief = CharterBrief(reference=reference, title=row.title or row.reference, charterer=row.reference, start_date=start_date, end_date=end_date, details_json=json.dumps(details, ensure_ascii=False))
+    source_label = " + ".join(item.reference for item in source_rows)
+    details = {"source_charter_request_id": row.id, "source_charter_request_ids": [item.id for item in source_rows], "sectors": brief_sectors, "crew": crew, "accommodation": [], "transport": [], "ports": [], "handler_selections": {}, "bag_weights_text": "", "operations_notes": "", "crew_notes": ""}
+    brief = CharterBrief(reference=reference, title=" + ".join(item.title or item.reference for item in source_rows), charterer=source_label, start_date=start_date, end_date=end_date, details_json=json.dumps(details, ensure_ascii=False))
     db.session.add(brief); db.session.commit()
-    flash("Draft charter brief created from the approved request.", "success")
+    flash("Combined draft charter brief created." if len(source_rows) > 1 else "Draft charter brief created from the approved request.", "success")
     return redirect(url_for("ui.ops_charter_brief_edit", brief_id=brief.id))
 
 
@@ -2270,7 +2294,12 @@ def ops_charter_requests():
     for group in request_rows:
         reference = str(group["request"].reference)
         request_row = group["request"]
-        group["brief"] = next((brief for brief in CharterBrief.query.order_by(CharterBrief.updated_at.desc()).all() if str(_charter_brief_details(brief).get("source_charter_request_id") or "") == str(request_row.id)), None)
+        group["brief"] = next((brief for brief in CharterBrief.query.order_by(CharterBrief.updated_at.desc()).all() if str(request_row.id) in _charter_brief_request_ids(brief)), None)
+        related_ids = set()
+        for sectors in group["days"].values():
+            for sector in sectors:
+                related_ids.update(str(value) for value in (sector.get("continues_from_id"), sector.get("continues_to_id")) if value)
+        group["related_request_ids"] = sorted(related_ids, key=int)
         if request_row.status == "Pending approval" or (request_row.status in {"Approved", "Pushed to Envision"} and (user.is_admin or "operations" in _user_permissions(user))):
             group["request"].reference = Markup(f'<a id="charter-request-{request_row.id}" href="{escape(url_for("ui.ops_charter_request_edit", request_id=request_row.id))}">{escape(reference)}</a>')
         else:
