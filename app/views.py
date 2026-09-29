@@ -2296,10 +2296,6 @@ def ops_charter_planner_settings():
     try:
         token = envision_authenticate()["token"]
         registrations = sorted(envision_get_line_registrations(token), key=lambda item: str(item.get("registration") or ""))
-        line_by_registration_id = {str(item.get("regIdDefault") or ""): item for item in envision_get_lines(token)}
-        for item in registrations:
-            line = line_by_registration_id.get(str(item.get("id") or ""))
-            item["planner_line_id"] = int(line.get("id") or 0) if line else 0
     except Exception as exc:
         registrations = []
         flash(f"Current Envision aircraft could not be loaded: {exc}", "danger")
@@ -2330,6 +2326,10 @@ def ops_charter_request_planning(request_id):
         raw_flights = _list_from_envision_payload(envision_get_flights(token, datetime.combine(day, time.min, tzinfo=NZ).astimezone(timezone.utc), datetime.combine(day + timedelta(days=1), time.min, tzinfo=NZ).astimezone(timezone.utc)))
         prior_flights = _list_from_envision_payload(envision_get_flights(token, datetime.combine(day - timedelta(days=14), time.min, tzinfo=NZ).astimezone(timezone.utc), datetime.combine(day, time.min, tzinfo=NZ).astimezone(timezone.utc)))
         registrations = sorted(envision_get_line_registrations(token), key=lambda item: str(item.get("registration") or ""))
+        line_by_registration_id = {str(item.get("regIdDefault") or ""): item for item in envision_get_lines(token)}
+        for item in registrations:
+            line = line_by_registration_id.get(str(item.get("id") or ""))
+            item["planner_line_id"] = int(line.get("id") or 0) if line else 0
         config = db.session.get(AppConfig, 1)
         try:
             saved_registrations = json.loads((config.charter_planner_registrations_json if config else "[]") or "[]")
