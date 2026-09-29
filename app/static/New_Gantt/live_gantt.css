@@ -748,6 +748,7 @@ body {
 .seat-seatbag.has-conflict span, .seat-seatbag.has-conflict small { color: #dc2626; }
 .seatmap-conflict { margin-top: 7px; color: #b91c1c; font-weight: 800; }
 .seatmap-warning-title { color: #b91c1c; font-weight: 900; margin-bottom: 8px; }
+.seatmap-select-instruction { color: var(--muted); margin-bottom: 10px; }
 .seat-bag-config-dialog { width: min(920px, 96vw); max-height: 92dvh; }
 .seatmap-config-section { margin: 12px 0; padding: 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-soft); }
 .seatmap-config-section h4 { margin: 0; color: var(--text); font-size: .84rem; }

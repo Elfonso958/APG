@@ -5371,9 +5371,10 @@
           if (frontSeat && paxBySeat[frontSeat]) addWarning(frontSeat, `Passenger is directly in front of seat bag ${allocation.seats.join(" + ")}.`);
         });
       });
+      const instruction = "<div class=\"seatmap-select-instruction\">Select a seat to view passenger details.</div>";
       seatmapInfo.innerHTML = warnings.length
-        ? `<div class="seatmap-warning-title">${warnings.length} seating warning${warnings.length === 1 ? "" : "s"}</div>${warnings.map((warning) => `<div class="seatmap-conflict"><strong>${escapeHtml(warning.seat)}</strong> — ${escapeHtml(warning.message)}</div>`).join("")}`
-        : "<div>No seating warnings. Select a seat to view passenger details.</div>";
+        ? `${instruction}<div class="seatmap-warning-title">${warnings.length} seating warning${warnings.length === 1 ? "" : "s"}</div>${warnings.map((warning) => `<div class="seatmap-conflict"><strong>${escapeHtml(warning.seat)}</strong> — ${escapeHtml(warning.message)}</div>`).join("")}`
+        : `${instruction}<div>No seating warnings.</div>`;
     }
 
     function seatLookupCodes(rowNum, col, explicitCode = null) {
