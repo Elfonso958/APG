@@ -648,20 +648,9 @@
     return /\bfreight(?:er)?\b/.test(text);
   }
 
-  function cargoZoneCode(label) {
-    // APG may label these as "C1" or "Cargo C1". Normalise both forms
-    // before applying the passenger-flight cargo-zone rule.
-    return String(label || "").toUpperCase().replace(/^CARGO\s*/, "").replace(/\s+/g, "");
-  }
-
   function cargoStationsForFlight(f, stations) {
-    const cargoStations = (Array.isArray(stations) ? stations : [])
+    return (Array.isArray(stations) ? stations : [])
       .filter((st) => isApgCargoStationLabel(st.label));
-    if (isFullFreighterFlight(f)) return cargoStations;
-
-    // Passenger flights use only the C1 and C2 holds. All APG cargo zones
-    // remain available only when the flight type is Freighter.
-    return cargoStations.filter((st) => /^(C1|C2)$/.test(cargoZoneCode(st.label)));
   }
 
   function canUseCharterManifest(f) {
