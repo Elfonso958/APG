@@ -2174,8 +2174,17 @@ def ops_charter_requests():
             flash("Add at least one valid charter sector.", "danger")
             return redirect(url_for("ui.ops_charter_requests"))
         ref = str(request.form.get("reference") or "").strip().upper() or f"CR-{_nz_today():%Y%m%d}-{secrets.token_hex(2).upper()}"
-        if CharterRequest.query.filter_by(reference=ref).first():
-            flash("That booking reference already exists.", "danger")
+        active_reference_statuses = {
+            "Pending approval",
+            "Approved",
+            "Pushed to Envision",
+            "Cancellation requested",
+        }
+        if CharterRequest.query.filter(
+            CharterRequest.reference == ref,
+            CharterRequest.status.in_(active_reference_statuses),
+        ).first():
+            flash("That booking reference already has an active request. Cancel or complete the existing request before submitting it again.", "danger")
             return redirect(url_for("ui.ops_charter_requests"))
         row = CharterRequest(reference=ref, title=str(request.form.get("title") or ref).strip(), sectors_json=json.dumps(sectors), created_by=user.display_name or user.email)
         db.session.add(row); db.session.commit()

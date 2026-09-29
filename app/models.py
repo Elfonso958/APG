@@ -134,7 +134,9 @@ class CharterRequest(db.Model):
     """Commercial charter request awaiting Operations approval and Envision creation."""
     __tablename__ = "charter_requests"
     id = db.Column(db.Integer, primary_key=True)
-    reference = db.Column(db.String(80), unique=True, index=True, nullable=False)
+    # References are unique while a request is active, but a cancelled request
+    # remains as audit history and may be raised again with the same reference.
+    reference = db.Column(db.String(80), index=True, nullable=False)
     title = db.Column(db.String(255), nullable=False)
     status = db.Column(db.String(24), nullable=False, default="Pending approval")
     sectors_json = db.Column(db.Text, nullable=False, default="[]")
