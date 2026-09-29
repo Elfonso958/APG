@@ -318,12 +318,32 @@ def _inject_apg_account_context():
     }
 
 
+def _seed_airport_handling_providers() -> None:
+    """Import the bundled directory for installations whose legacy JSON was empty."""
+    if AirportHandlingProvider.query.first():
+        return
+    for entry in AIRPORT_HANDLERS:
+        if not isinstance(entry, dict) or not entry.get("airport") or not entry.get("label"):
+            continue
+        db.session.add(AirportHandlingProvider(
+            airport=str(entry.get("airport") or "").upper(),
+            label=str(entry.get("label") or ""), handler=str(entry.get("handler") or ""),
+            contact=str(entry.get("contact") or ""), phone=str(entry.get("phone") or ""),
+            additional_phone=str(entry.get("additional_phone") or ""),
+            email_addresses="\n".join(str(email).strip() for email in (entry.get("emails") or []) if str(email).strip()),
+            frequency=str(entry.get("frequency") or ""), gpu=str(entry.get("gpu") or ""),
+            fuel=str(entry.get("fuel") or ""), notes=str(entry.get("notes") or ""),
+        ))
+    db.session.commit()
+
+
 def _charter_operations_directory():
     cfg = db.session.get(AppConfig, 1)
     try:
         catering = json.loads(cfg.catering_services_json or "[]") if cfg else []
     except (TypeError, ValueError):
         catering = []
+    _seed_airport_handling_providers()
     providers = AirportHandlingProvider.query.order_by(AirportHandlingProvider.airport, AirportHandlingProvider.label).all()
     handlers = [{"airport": item.airport, "label": item.label, "handler": item.handler or "", "contact": item.contact or "", "phone": item.phone or "", "additional_phone": item.additional_phone or "", "emails": [email.strip() for email in (item.email_addresses or "").splitlines() if email.strip()], "frequency": item.frequency or "", "gpu": item.gpu or "", "fuel": item.fuel or "", "notes": item.notes or ""} for item in providers]
     return (catering if isinstance(catering, list) and catering else DEFAULT_CATERING_SERVICES,
