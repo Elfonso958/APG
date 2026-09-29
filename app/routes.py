@@ -123,6 +123,24 @@ def _charter_brief_user():
     return _current_apg_user()
 
 
+_NZ_AIRPORT_TOWNS = {
+    "AKL": "Auckland", "BHE": "Blenheim", "CHC": "Christchurch", "CHT": "Chatham Islands",
+    "DUD": "Dunedin", "GIS": "Gisborne", "HLZ": "Hamilton", "HKK": "Hokitika",
+    "IVC": "Invercargill", "KKE": "Kerikeri", "NPE": "Napier", "NPL": "New Plymouth",
+    "NSN": "Nelson", "OAM": "Oamaru", "PMR": "Palmerston North", "PPQ": "Paraparaumu",
+    "ROT": "Rotorua", "TEU": "Te Anau", "TIU": "Timaru", "TRG": "Tauranga",
+    "TUO": "Taupo", "WAG": "Whanganui", "WKA": "Wanaka", "WLG": "Wellington",
+    "WHK": "Whakatane", "WRE": "Whangarei", "WSZ": "Westport", "ZQN": "Queenstown",
+}
+
+
+def _google_place_is_in_nz(place: dict) -> bool:
+    for component in place.get("addressComponents") or []:
+        if "country" in (component.get("types") or []):
+            return str(component.get("shortText") or "").upper() == "NZ"
+    return str(place.get("formattedAddress") or "").casefold().endswith("new zealand")
+
+
 def _hotel_favourite_payload(favourite: HotelFavourite) -> dict:
     return {
         "id": favourite.id,
@@ -142,21 +160,23 @@ def api_charter_hotel_search():
     data = request.get_json(silent=True) or {}
     query = str(data.get("query") or "").strip()
     location = str(data.get("location") or "").strip()
+    nz_only = data.get("nz_only") is not False
     if len(query) < 3:
         return jsonify(ok=False, error="Enter at least three characters to search."), 400
     key = str(current_app.config.get("GOOGLE_PLACES_API_KEY") or "").strip()
     if not key:
         return jsonify(ok=False, error="Hotel search has not been configured yet."), 503
-    search_text = " ".join(part for part in (query, "hotel", location) if part)
+    location_name = _NZ_AIRPORT_TOWNS.get(location.upper(), location)
+    search_text = " ".join(part for part in (query, location_name, "New Zealand" if nz_only else "") if part)
     try:
         response = requests.post(
             "https://places.googleapis.com/v1/places:searchText",
             headers={
                 "Content-Type": "application/json",
                 "X-Goog-Api-Key": key,
-                "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.internationalPhoneNumber,places.websiteUri",
+                "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.addressComponents,places.internationalPhoneNumber,places.websiteUri",
             },
-            json={"textQuery": search_text, "pageSize": 5},
+            json={"textQuery": search_text, "pageSize": 10, **({"regionCode": "NZ"} if nz_only else {})},
             timeout=10,
         )
         if not response.ok:
@@ -166,6 +186,8 @@ def api_charter_hotel_search():
     except requests.RequestException:
         current_app.logger.exception("Google Places hotel search failed")
         return jsonify(ok=False, error="Hotel search is unavailable. Please try again or enter the details manually."), 502
+    if nz_only:
+        places = [place for place in places if isinstance(place, dict) and _google_place_is_in_nz(place)]
     results = [{
         "google_place_id": str(place.get("id") or ""),
         "name": str((place.get("displayName") or {}).get("text") or ""),

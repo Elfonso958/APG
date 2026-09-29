@@ -32,7 +32,8 @@
   const isCharterSector = (sector) => /charter/i.test(String(sector.flight_type || ""));
   const hotelTools = (index) => {
     const results = hotelResults.get(index) || [];
-    return `<div class="hotel-tools"><label class="hotel-search-label">Find a hotel<input data-hotel-search="${index}" placeholder="Type a hotel name" autocomplete="off"></label><button type="button" class="btn secondary" data-hotel-search-button="${index}">Search</button><label class="hotel-favourite-label">Saved favourite<select data-hotel-favourite="${index}"><option value="">Select a saved hotel…</option>${hotelFavourites.map((hotel) => `<option value="${hotel.id}">${esc(hotel.name)}</option>`).join("")}</select></label><button type="button" class="btn secondary" data-save-hotel="${index}">Save current hotel</button>${results.length ? `<div class="hotel-results">${results.map((hotel) => `<button type="button" class="hotel-result" data-hotel-result="${index}" data-hotel-id="${esc(hotel.google_place_id)}" data-hotel-name="${esc(hotel.name)}" data-hotel-address="${esc(hotel.address)}" data-hotel-phone="${esc(hotel.phone)}" data-hotel-website="${esc(hotel.website)}"><strong>${esc(hotel.name)}</strong><span>${esc(hotel.address || "Address unavailable")}</span>${hotel.phone ? `<small>${esc(hotel.phone)}</small>` : ""}</button>`).join("")}</div>` : ""}</div>`;
+    const nzOnly = details.accommodation[index]?.hotel_search_scope !== "worldwide";
+    return `<div class="hotel-tools"><label class="hotel-search-label">Find a hotel<input data-hotel-search="${index}" placeholder="Type a hotel name" autocomplete="off"></label><button type="button" class="btn secondary" data-hotel-search-button="${index}">Search</button><label class="hotel-scope-label">Search area<select data-hotel-scope="${index}"><option value="nz" ${nzOnly ? "selected" : ""}>New Zealand only</option><option value="worldwide" ${nzOnly ? "" : "selected"}>Search worldwide</option></select></label><label class="hotel-favourite-label">Saved favourite<select data-hotel-favourite="${index}"><option value="">Select a saved hotel…</option>${hotelFavourites.map((hotel) => `<option value="${hotel.id}">${esc(hotel.name)}</option>`).join("")}</select></label><button type="button" class="btn secondary" data-save-hotel="${index}">Save current hotel</button>${results.length ? `<div class="hotel-results">${results.map((hotel) => `<button type="button" class="hotel-result" data-hotel-result="${index}" data-hotel-id="${esc(hotel.google_place_id)}" data-hotel-name="${esc(hotel.name)}" data-hotel-address="${esc(hotel.address)}" data-hotel-phone="${esc(hotel.phone)}" data-hotel-website="${esc(hotel.website)}"><strong>${esc(hotel.name)}</strong><span>${esc(hotel.address || "Address unavailable")}</span>${hotel.phone ? `<small>${esc(hotel.phone)}</small>` : ""}</button>`).join("")}</div>` : ""}</div>`;
   };
   function renderSectors() {
     const displayFields = fields.sectors.filter((field) => !["date", "source_flight_id"].includes(field));
@@ -95,6 +96,8 @@
     render();
   });
   app.addEventListener("change", (event) => {
+    const scope = event.target.closest("[data-hotel-scope]");
+    if (scope) { if (details.accommodation[Number(scope.dataset.hotelScope)]) details.accommodation[Number(scope.dataset.hotelScope)].hotel_search_scope = scope.value; return; }
     const favourite = event.target.closest("[data-hotel-favourite]");
     if (favourite) { const hotel = hotelFavourites.find((item) => String(item.id) === favourite.value); if (hotel) selectHotel(Number(favourite.dataset.hotelFavourite), hotel); return; }
     const catering = event.target.closest("[data-sector-catering]");
@@ -122,10 +125,10 @@
     hotelResults.delete(index); render();
   }
   async function searchHotels(index) {
-    const search = app.querySelector(`[data-hotel-search="${index}"]`), query = search?.value.trim() || "", location = details.accommodation[index]?.location || "";
+    const search = app.querySelector(`[data-hotel-search="${index}"]`), query = search?.value.trim() || "", location = details.accommodation[index]?.location || "", nzOnly = details.accommodation[index]?.hotel_search_scope !== "worldwide";
     if (query.length < 3) return alert("Enter at least three characters to search for a hotel.");
     try {
-      const response = await fetch(app.dataset.hotelSearchUrl, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({query, location}) });
+      const response = await fetch(app.dataset.hotelSearchUrl, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({query, location, nz_only:nzOnly}) });
       const data = await response.json(); if (!response.ok || data.ok === false) throw Error(data.error || "Unable to search for hotels.");
       hotelResults.set(index, data.hotels || []); render();
     } catch (error) { alert(error.message); }
