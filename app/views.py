@@ -1993,7 +1993,10 @@ def ops_charter_brief_print(brief_id: int):
     _, handler_directory = _charter_operations_directory()
     airport_codes = {str(code or "").upper().strip() for code in airports}
     selections = details.get("handler_selections") if isinstance(details.get("handler_selections"), dict) else {}
-    handler_details = [entry for entry in handler_directory if entry.get("airport") in airport_codes and (not selections.get(entry.get("airport")) or selections.get(entry.get("airport")) == entry.get("label"))]
+    handler_details = [
+        entry for entry in handler_directory
+        if selections.get(entry.get("airport")) == entry.get("label")
+    ]
     return render_template("charter_brief_print.html", brief=brief, details=details, handler_details=handler_details, format_date=_brief_print_date, format_time=_brief_print_time)
 
 
