@@ -5284,7 +5284,7 @@
     return null;
   }
 
-  function openSeatmap(flight = selectedFlight) {
+  async function openSeatmap(flight = selectedFlight) {
     const f = flight;
     if (!f || !seatmapDialog) return;
     const cfg = seatmapConfigForFlight(f);
@@ -5296,11 +5296,19 @@
       return;
     }
     seatmapTitle.textContent = cfg.name;
+    await populateFreightAllocation(f).catch(() => {});
 
     const paxBySeat = {};
     (f.pax_list || []).forEach((p) => {
       const seat = String(p.Seat || p.SeatNumber || p.SeatNo || "").toUpperCase().trim();
       if (seat) paxBySeat[seat] = p;
+    });
+    const seatBagBySeat = new Map();
+    (f.freightAllocation?.allocations || []).forEach((allocation) => {
+      const seats = (allocation.seats || []).map((seat) => String(seat).trim().toUpperCase()).filter(Boolean);
+      if (seats.length !== 2) return;
+      const seatBag = { ...allocation, seats };
+      seats.forEach((seat) => seatBagBySeat.set(seat, seatBag));
     });
 
     function seatLookupCodes(rowNum, col, explicitCode = null) {
@@ -5397,6 +5405,44 @@
       return el;
     }
 
+    function renderSeatBagCell(allocation) {
+      const el = document.createElement("div");
+      const seats = allocation.seats || [];
+      const conflicts = seats.filter((seat) => paxBySeat[seat]);
+      el.className = `seat seat-seatbag${conflicts.length ? " has-conflict" : ""}`;
+      el.dataset.seats = seats.join(",");
+      el.title = `Seat bag: ${seats.join(" + ")}`;
+      el.innerHTML = `<span>Seat Bag</span><small>${Number(allocation.freight_kg || 0).toFixed(1)} kg</small>`;
+      el.addEventListener("click", () => {
+        seatmapGrid.querySelectorAll(".seat.selected").forEach((n) => n.classList.remove("selected"));
+        el.classList.add("selected");
+        seatmapInfo.innerHTML = `
+          <div><strong>${escapeHtml(seats.join(" + "))}</strong></div>
+          <div>Seat bag freight: ${Number(allocation.freight_kg || 0).toFixed(1)} kg</div>
+          ${conflicts.length ? `<div class="seatmap-conflict">Passenger assigned to ${escapeHtml(conflicts.join(", "))}. Move the seat bag before submitting to APG.</div>` : ""}
+        `;
+      });
+      return el;
+    }
+
+    function appendSeatCells(block, rowNum, columns) {
+      const availableSeats = new Set(columns.map((column) => `${rowNum}${column}`));
+      const rendered = new Set();
+      columns.forEach((column) => {
+        const code = `${rowNum}${column}`;
+        if (rendered.has(code)) return;
+        const allocation = seatBagBySeat.get(code);
+        const bagSeats = allocation?.seats || [];
+        if (allocation && bagSeats.every((seat) => availableSeats.has(seat))) {
+          block.appendChild(renderSeatBagCell(allocation));
+          bagSeats.forEach((seat) => rendered.add(seat));
+        } else {
+          block.appendChild(renderSeatCell(rowNum, column));
+          rendered.add(code);
+        }
+      });
+    }
+
     function makeSeatPlaceholder() {
       const ghost = document.createElement("div");
       ghost.className = "seat seat-placeholder";
@@ -5458,14 +5504,14 @@
       if (isCustomLastRow) {
         const left = document.createElement("div");
         left.className = "seat-block";
-        cfg.lastRowSeats.left.forEach((c) => left.appendChild(renderSeatCell(rowNum, c)));
+        appendSeatCells(left, rowNum, cfg.lastRowSeats.left);
         row.appendChild(left);
         const aisle = document.createElement("div");
         aisle.className = "seat-aisle";
         row.appendChild(aisle);
         const right = document.createElement("div");
         right.className = "seat-block";
-        cfg.lastRowSeats.right.forEach((c) => right.appendChild(renderSeatCell(rowNum, c)));
+        appendSeatCells(right, rowNum, cfg.lastRowSeats.right);
         row.appendChild(right);
         seatmapGrid.appendChild(row);
         return;
@@ -5473,7 +5519,7 @@
       if (isLastRow4Inline) {
         const block = document.createElement("div");
         block.className = "seat-block seat-block-inline-4";
-        ["A", "B", "C", "D"].forEach((c) => block.appendChild(renderSeatCell(rowNum, c)));
+        appendSeatCells(block, rowNum, ["A", "B", "C", "D"]);
         row.appendChild(block);
         seatmapGrid.appendChild(row);
         return;
@@ -5481,14 +5527,14 @@
 
       const left = document.createElement("div");
       left.className = "seat-block";
-      cfg.left.forEach((c) => left.appendChild(renderSeatCell(rowNum, c)));
+      appendSeatCells(left, rowNum, cfg.left);
       row.appendChild(left);
       const aisle = document.createElement("div");
       aisle.className = "seat-aisle";
       row.appendChild(aisle);
       const right = document.createElement("div");
       right.className = "seat-block";
-      cfg.right.forEach((c) => right.appendChild(renderSeatCell(rowNum, c)));
+      appendSeatCells(right, rowNum, cfg.right);
       row.appendChild(right);
       seatmapGrid.appendChild(row);
     });

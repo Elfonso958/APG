@@ -741,6 +741,12 @@ body {
   box-shadow: 0 4px 10px rgba(15, 23, 42, 0.6);
 }
 .seat-empty { background: #4b5563; }
+.seat-seatbag { width: 60px; min-width: 60px; border: 2px solid var(--accent); background: color-mix(in srgb, var(--accent) 22%, var(--panel)); color: var(--text); display: grid; align-content: center; gap: 1px; font-weight: 800; line-height: 1; }
+.seat-seatbag span { color: var(--accent); font-size: .53rem; }
+.seat-seatbag small { color: var(--text); font-size: .47rem; font-weight: 700; }
+.seat-seatbag.has-conflict { border-color: #dc2626; background: color-mix(in srgb, #dc2626 18%, var(--panel)); }
+.seat-seatbag.has-conflict span, .seat-seatbag.has-conflict small { color: #dc2626; }
+.seatmap-conflict { margin-top: 7px; color: #b91c1c; font-weight: 800; }
 .seat-placeholder {
   visibility: hidden;
   pointer-events: none;
