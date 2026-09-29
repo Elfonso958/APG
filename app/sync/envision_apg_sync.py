@@ -4976,7 +4976,8 @@ def _envision_request(
 
 
 def envision_change_registration(token: str, flight_id: int | str, payload: dict) -> dict:
-    return _envision_request(token, "POST", f"Flights/{flight_id}/ChangeRegistration", payload)
+    # Envision exposes ChangeRegistration as a PUT action. POST returns 405.
+    return _envision_request(token, "PUT", f"Flights/{flight_id}/ChangeRegistration", payload)
 
 
 def envision_change_type(token: str, flight_id: int | str, payload: dict) -> dict:
