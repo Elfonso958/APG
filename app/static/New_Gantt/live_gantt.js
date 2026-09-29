@@ -349,7 +349,7 @@
     if (!f?.envision_flight_id || (!force && f.freightAllocationLoaded)) return;
     const resp = await fetch(freightUrl(f));
     const data = await resp.json();
-    if (!resp.ok || data.ok === false) throw new Error(data.error || "Unable to load freight allocation");
+    if (!resp.ok || data.ok === false) throw new Error(data.error || "Unable to load cargo allocation");
     f.freightAllocation = data;
     f.freightAllocationLoaded = true;
   }
@@ -2502,12 +2502,12 @@
     if (!seatBagWeightFlight) return;
     const freight = Math.max(0, Number(seatBagFreightKg?.value || 0));
     if (seatBagWeightMode === "hold") {
-      if (seatBagWeightCalculation) seatBagWeightCalculation.textContent = `Hold freight: ${freight.toFixed(1)} kg`;
+      if (seatBagWeightCalculation) seatBagWeightCalculation.textContent = `Hold cargo: ${freight.toFixed(1)} kg`;
       return;
     }
     const tare = Number(seatBagWeightFlight.freightAllocation?.tare_kg ?? 7);
     const total = freight + tare;
-    if (seatBagWeightCalculation) seatBagWeightCalculation.textContent = `${freight.toFixed(1)} kg freight + ${tare.toFixed(1)} kg tare = ${total.toFixed(1)} kg total, ${(total / 2).toFixed(1)} kg per seat`;
+    if (seatBagWeightCalculation) seatBagWeightCalculation.textContent = `${freight.toFixed(1)} kg cargo + ${tare.toFixed(1)} kg tare = ${total.toFixed(1)} kg total, ${(total / 2).toFixed(1)} kg per seat`;
   }
 
   function openSeatBagWeightModal(f, seats) {
@@ -2542,8 +2542,8 @@
     seatBagWeightMode = "hold";
     freightHoldWeightRow = row;
     seatBagWeightSeatCodes = [];
-    seatBagWeightTitle.textContent = `${row.label} Freight`;
-    seatBagWeightSeats.textContent = "Enter the freight carried in this hold.";
+    seatBagWeightTitle.textContent = `${row.label} Cargo`;
+    seatBagWeightSeats.textContent = "Enter the cargo carried in this hold.";
     seatBagFreightKg.value = Number(row.freight_kg || 0).toFixed(1);
     seatBagConflictWarning.hidden = true;
     seatBagOverrideWrap.hidden = true;
@@ -2622,7 +2622,7 @@
               </div>
               <div class="cargo-test-fields">
                 <label><span>Baggage</span><div><input type="number" min="0" step="0.1" inputmode="decimal" class="form-control cargo-baggage-input" data-label="${escapeHtml(row.label)}" value="${Number(row.baggage_kg || 0).toFixed(1)}"><em>kg</em></div></label>
-                <label><span>Freight</span><div><input type="number" min="0" step="0.1" inputmode="decimal" class="form-control cargo-freight-input" data-label="${escapeHtml(row.label)}" value="${Number(row.freight_kg || 0).toFixed(1)}"><em>kg</em></div></label>
+                <label><span>Cargo</span><div><input type="number" min="0" step="0.1" inputmode="decimal" class="form-control cargo-freight-input" data-label="${escapeHtml(row.label)}" value="${Number(row.freight_kg || 0).toFixed(1)}"><em>kg</em></div></label>
               </div>
             </section>
           `).join("")}
@@ -2661,7 +2661,7 @@
           </section>
         `).join("")}
       </div>
-    ` : '<div class="muted">Row freight is only available when APG exposes row loading stations.</div>';
+    ` : '<div class="muted">Row cargo is only available when APG exposes row loading stations.</div>';
     const allocations = f.freightAllocation?.allocations || [];
     const allocatedFreightSeats = new Set(allocations.flatMap((item) => item.seats || []));
     const occupiedSeats = new Set((f.pax_list || []).map((p) => String(p.Seat || p.SeatNumber || p.SeatNo || "").trim().toUpperCase()).filter(Boolean));
@@ -2726,7 +2726,7 @@
     const mapHold = (row, compact = false) => {
       const label = String(row.label || "");
       const displayLabel = cargoDisplayLabel(label);
-      if (compact) return `<button type="button" class="freight-map-hold-compact" data-compact-hold="${escapeHtml(label)}" title="${escapeHtml(label)} — ${Number(row.freight_kg || 0).toFixed(1)} kg freight"><strong>${escapeHtml(label.replace(/^HOLD\s*/i, ""))}</strong><small>${Number(row.freight_kg || 0).toFixed(0)}</small></button>`;
+      if (compact) return `<button type="button" class="freight-map-hold-compact" data-compact-hold="${escapeHtml(label)}" title="${escapeHtml(label)} — ${Number(row.freight_kg || 0).toFixed(1)} kg cargo"><strong>${escapeHtml(label.replace(/^HOLD\s*/i, ""))}</strong><small>${Number(row.freight_kg || 0).toFixed(0)}</small></button>`;
       return `<div class="freight-map-hold" title="${escapeHtml(displayLabel)}">
         <strong>${escapeHtml(displayLabel)}</strong>
         <label>
@@ -2801,7 +2801,7 @@
     const renderFreightPanel = () => cfg ? `
       <div class="freight-editor ${isFullFreighter ? "is-full-freighter" : ""} ${isSaabFreightMap ? "is-saab-map" : ""}" data-freight-editor>
         <div class="cargo-editor-head freight-editor-head">
-          <div><div class="card-title">${isFullFreighter ? "Freighter Cargo Zones" : "Seat-bag Freight"}</div><div class="card-sub">${isFullFreighter ? "This is a full freighter. Only the APG freight and cargo zones are shown." : "Select one or more adjacent seat pairs, convert them together, then click each seat bag to enter its weight."}</div></div>
+          <div><div class="card-title">${isFullFreighter ? "Cargo Aircraft Zones" : "Seat-bag Cargo"}</div><div class="card-sub">${isFullFreighter ? "This is a cargo aircraft. Only the APG cargo zones are shown." : "Select one or more adjacent seat pairs, convert them together, then click each seat bag to enter its weight."}</div></div>
           ${isFullFreighter ? "" : '<div class="freight-header-actions"><span data-freight-selection>Select one or more adjacent pairs.</span><button type="button" class="btn btn-ghost" data-freight-settings>Settings</button><button type="button" class="btn btn-primary" data-convert-freight disabled>Convert to Seat Bags</button></div>'}
         </div>
         <div class="freight-aircraft-with-trim">
@@ -2818,7 +2818,7 @@
         </div>
         ${cargoSummaryHtml}
       </div>
-    ` : '<div class="muted">A freight seat map is not available for this aircraft type.</div>';
+    ` : '<div class="muted">A cargo seat map is not available for this aircraft type.</div>';
     host.innerHTML = `
       <div class="cargo-editor-shell">
         ${f.cargoAllocationStale ? `<div class="cargo-stale-warning"><div><strong>Out of date</strong><span>Cargo or seat-bag weights were updated on another device.</span></div><button type="button" class="btn btn-primary" data-refresh-saved-cargo>Refresh</button></div>` : ""}
@@ -3437,7 +3437,7 @@
     if (f.apgCargoStationsLoaded) {
       renderCargoEditor(f);
     } else if (cargoEditor) {
-      cargoEditor.innerHTML = '<div class="muted">Loading APG cargo stations and freight allocation...</div>';
+      cargoEditor.innerHTML = '<div class="muted">Loading APG cargo stations and cargo allocation...</div>';
     }
     cargoDialog.showModal();
     await populateFreightAllocation(f).catch((err) => { console.warn(err); });
@@ -5418,7 +5418,7 @@
         el.classList.add("selected");
         seatmapInfo.innerHTML = `
           <div><strong>${escapeHtml(seats.join(" + "))}</strong></div>
-          <div>Seat bag freight: ${Number(allocation.freight_kg || 0).toFixed(1)} kg</div>
+          <div>Seat bag cargo: ${Number(allocation.freight_kg || 0).toFixed(1)} kg</div>
           ${conflicts.length ? `<div class="seatmap-conflict">Passenger assigned to ${escapeHtml(conflicts.join(", "))}. Move the seat bag before submitting to APG.</div>` : ""}
         `;
       });
