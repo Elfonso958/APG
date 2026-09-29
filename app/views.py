@@ -1,7 +1,7 @@
 ﻿from flask import Blueprint, render_template, request, redirect, jsonify, flash, current_app,send_file, abort, url_for, make_response
 from datetime import date, datetime, time, timezone, timedelta
 from flask import session
-from .models import SyncRun, SyncFlightLog, AppConfig, CharterManifest, CharterBrief, AppUser, EmailSettings, PowerBiApiKey, ManualDcsFlightLink, AirportHandlingProvider
+from .models import SyncRun, SyncFlightLog, AppConfig, CharterManifest, CharterBrief, CharterRequest, AppUser, EmailSettings, PowerBiApiKey, ManualDcsFlightLink, AirportHandlingProvider
 from .airport_handling import AIRPORT_HANDLERS, DEFAULT_CATERING_SERVICES, handlers_for_airports
 from . import db
 from .kmh_auth import create_kmh_session, clear_kmh_session, get_kmh_session
@@ -48,6 +48,10 @@ from .sync.envision_apg_sync import (
     fetch_flights_for_day,       #add
     envision_get_delays,
     envision_get_employees,
+    envision_get_places,
+    envision_get_line_registrations,
+    envision_get_flight_types,
+    envision_create_flight,
     calculate_dcs_passenger_seat_loads,
 )
 
@@ -73,6 +77,7 @@ APP_PERMISSIONS = {
     "crew_briefing": "Crew Briefing",
     "live_gantt": "Live Gantt",
     "charter_checkin": "Charter Check-in",
+    "charter_requests": "Charter Requests",
     "maintenance_dashboard": "Maintenance Dashboard",
 }
 
@@ -306,6 +311,11 @@ def _operations_required(view):
     return wrapped
 
 
+def _charter_request_access(user=None):
+    user = user or _current_apg_user()
+    return bool(user and (user.is_admin or "operations" in _user_permissions(user) or "charter_requests" in _user_permissions(user)))
+
+
 @ui_bp.app_context_processor
 def _inject_apg_account_context():
     user = _current_apg_user()
@@ -527,6 +537,7 @@ def admin_email_settings():
             flash("Your form expired. Please try again.", "danger")
             return redirect(url_for("ui.admin_email_settings"))
         recipients = ", ".join(part.strip() for part in str(request.form.get("flight_operations_email") or "").split(",") if part.strip())
+        charter_recipients = ", ".join(part.strip() for part in str(request.form.get("charter_request_recipients") or "").split(",") if part.strip())
         if recipients and any("@" not in address for address in recipients.split(", ")):
             flash("Enter one or more valid email addresses, separated by commas.", "danger")
         else:
@@ -536,6 +547,7 @@ def admin_email_settings():
                 flash("Choose one of the configured sender addresses.", "danger")
                 return redirect(url_for("ui.admin_email_settings"))
             settings.flight_operations_email = recipients or None
+            settings.charter_request_recipients = charter_recipients or None
             settings.from_email = selected_sender or None
             settings.charter_closure_emails_enabled = bool(request.form.get("charter_closure_emails_enabled"))
             db.session.add(settings)
@@ -547,6 +559,7 @@ def admin_email_settings():
         "admin_email_settings.html",
         settings=settings,
         configured_recipients=configured_recipients,
+        charter_request_recipients=(settings.charter_request_recipients if settings else "") or configured_recipients,
         sender_options=sender_options,
         graph_configured=bool(os.getenv("GRAPH_TENANT_ID") or os.getenv("MS_TENANT_ID")),
         smtp_configured=bool(os.getenv("MAIL_USERNAME") or os.getenv("SMTP_USERNAME")),
@@ -1920,6 +1933,136 @@ def _brief_print_time(value) -> str:
         return parsed.strftime("%H:%M")
     except ValueError:
         return raw[11:16] if "T" in raw and len(raw) >= 16 else raw
+
+
+def _request_sectors(request_row):
+    try:
+        value = json.loads(request_row.sectors_json or "[]")
+        return value if isinstance(value, list) else []
+    except (TypeError, ValueError):
+        return []
+
+
+_CHARTER_AIRPORT_LATITUDES = {"AKL":-37.0,"WLG":-41.3,"CHC":-43.5,"DUD":-45.9,"IVC":-46.4,"ZQN":-45.0,"ROT":-38.1,"TRG":-37.7,"NPL":-39.0,"NPE":-39.5,"PMR":-40.3,"NSN":-41.3,"WSZ":-41.7,"TUO":-38.7,"TBU":-21.2,"VAV":-18.6,"HPA":-19.8}
+
+
+def _charter_sector_direction(sector):
+    dep, arr = str(sector.get("dep") or "").upper(), str(sector.get("arr") or "").upper()
+    if dep in _CHARTER_AIRPORT_LATITUDES and arr in _CHARTER_AIRPORT_LATITUDES:
+        return "south" if _CHARTER_AIRPORT_LATITUDES[arr] < _CHARTER_AIRPORT_LATITUDES[dep] else "north"
+    return "south"
+
+
+def _allocate_charter_numbers(sectors, group_digit=0):
+    counters = {"south": 0, "north": 1}
+    for sector in sectors:
+        if str(sector.get("flight_number") or "").strip():
+            continue
+        direction = _charter_sector_direction(sector)
+        suffix = counters[direction]
+        sector["flight_number"] = f"3C9{group_digit}{suffix}"
+        counters[direction] += 2
+    return sectors
+
+
+def _resolve_charter_place(token, code):
+    wanted = str(code or "").strip().upper()
+    for place in envision_get_places(token):
+        if wanted in {str(place.get(key) or "").strip().upper() for key in ("place", "iataCode", "icaoCode")} and place.get("id") is not None:
+            return int(place["id"])
+    raise RuntimeError(f"Envision does not recognise airport {wanted}.")
+
+
+def _parse_charter_local(value, day):
+    raw = str(value or "").strip().replace(":", "")
+    if not re.fullmatch(r"\d{4}", raw): raise RuntimeError("Each sector must have STD and STA in HHMM format.")
+    return datetime.combine(date.fromisoformat(str(day)), time(int(raw[:2]), int(raw[2:])), tzinfo=NZ)
+
+
+@ui_bp.route("/ops/charter-requests", methods=["GET", "POST"])
+@_login_required
+def ops_charter_requests():
+    user = _current_apg_user()
+    if not _charter_request_access(user): abort(403)
+    if request.method == "POST":
+        if not _csrf_is_valid():
+            flash("Your form expired. Please try again.", "danger")
+            return redirect(url_for("ui.ops_charter_requests"))
+        try:
+            sectors = json.loads(request.form.get("sectors_json") or "[]")
+            if not isinstance(sectors, list) or not sectors: raise ValueError
+        except ValueError:
+            flash("Add at least one valid charter sector.", "danger")
+            return redirect(url_for("ui.ops_charter_requests"))
+        ref = str(request.form.get("reference") or "").strip().upper() or f"CR-{_nz_today():%Y%m%d}-{secrets.token_hex(2).upper()}"
+        if CharterRequest.query.filter_by(reference=ref).first():
+            flash("That booking reference already exists.", "danger")
+            return redirect(url_for("ui.ops_charter_requests"))
+        row = CharterRequest(reference=ref, title=str(request.form.get("title") or ref).strip(), sectors_json=json.dumps(sectors), created_by=user.display_name or user.email)
+        db.session.add(row); db.session.commit()
+        recipients = [item.strip() for item in str((db.session.get(EmailSettings, 1) or EmailSettings()).charter_request_recipients or "").split(",") if "@" in item]
+        if recipients:
+            try:
+                from .routes import _send_email_via_graph, _charter_email_sender
+                _send_email_via_graph(_charter_email_sender(), recipients, f"Charter approval required — {ref}", f"{row.title} has been submitted by {row.created_by}. Review it at {url_for('ui.ops_charter_request_detail', request_id=row.id, _external=True)}.")
+            except Exception:
+                current_app.logger.exception("Charter approval notification could not be sent")
+        flash("Charter request submitted for Operations approval.", "success")
+        return redirect(url_for("ui.ops_charter_request_detail", request_id=row.id))
+    rows = CharterRequest.query.order_by(CharterRequest.created_at.desc()).all()
+    return render_template("charter_requests.html", requests=rows, can_operate=bool(user.is_admin or "operations" in _user_permissions(user)))
+
+
+@ui_bp.route("/ops/charter-requests/<int:request_id>", methods=["GET", "POST"])
+@_login_required
+def ops_charter_request_detail(request_id):
+    user = _current_apg_user()
+    if not _charter_request_access(user): abort(403)
+    row = db.session.get(CharterRequest, request_id)
+    if not row: abort(404)
+    can_operate = bool(user.is_admin or "operations" in _user_permissions(user))
+    if request.method == "POST":
+        if not _csrf_is_valid() or not can_operate: abort(403)
+        action = request.form.get("action")
+        if action in {"approve", "reject"}:
+            row.status = "Approved" if action == "approve" else "Rejected"
+            row.decision_by = user.display_name or user.email; row.decision_note = str(request.form.get("decision_note") or "").strip() or None; row.decided_at = datetime.utcnow()
+            db.session.add(row); db.session.commit(); flash(f"Request {row.status.lower()}.", "success")
+        elif action == "push_envision" and row.status == "Approved":
+            sectors = _request_sectors(row)
+            try:
+                supplied = json.loads(request.form.get("sectors_json") or "[]")
+                if isinstance(supplied, list): sectors = supplied
+                group = int(request.form.get("tour_group") or 0)
+                if group < 0 or group > 9: raise RuntimeError("Tour group must be one digit (0–9).")
+                _allocate_charter_numbers(sectors, group)
+                token = envision_authenticate()["token"]
+                registration_id = int(request.form.get("registration_id") or 0)
+                registration = next((item for item in envision_get_line_registrations(token) if int(item.get("id") or 0) == registration_id), None)
+                if not registration: raise RuntimeError("Select a current Envision aircraft registration.")
+                types = envision_get_flight_types(token)
+                for sector in sectors:
+                    if sector.get("envision_flight_id"): continue
+                    ftype = str(sector.get("flight_type") or "Charter").lower()
+                    type_row = next((item for item in types if ("position" in ftype and "position" in str(item.get("description") or item.get("flightTypeDescription") or "").lower()) or ("position" not in ftype and "charter" in str(item.get("description") or item.get("flightTypeDescription") or "").lower())), None)
+                    if not type_row: raise RuntimeError(f"No Envision flight type found for {sector.get('flight_type') or 'Charter'}.")
+                    etd, eta = _parse_charter_local(sector.get("std"), sector.get("date")), _parse_charter_local(sector.get("sta"), sector.get("date"))
+                    if eta <= etd: eta += timedelta(days=1)
+                    created = envision_create_flight(token, {"ignoreValidations":False,"flightDate":etd.astimezone(timezone.utc).isoformat().replace("+00:00","Z"),"departurePlaceId":_resolve_charter_place(token, sector.get("dep")),"arrivalPlaceId":_resolve_charter_place(token, sector.get("arr")),"scheduledTimeDeparture":etd.astimezone(timezone.utc).isoformat().replace("+00:00","Z"),"scheduledTimeArrival":eta.astimezone(timezone.utc).isoformat().replace("+00:00","Z"),"flightTypeId":int(type_row["id"]),"modelId":int(registration.get("modelId") or 0),"registrationId":registration_id,"flightNumber":sector["flight_number"]})
+                    sector["envision_flight_id"] = str(created.get("id") or "")
+                row.sectors_json = json.dumps(sectors); row.status = "Pushed to Envision"; db.session.add(row); db.session.commit(); flash("Selected charter sectors were created in Envision.", "success")
+            except Exception as exc:
+                current_app.logger.exception("Charter Envision push failed")
+                flash(f"Nothing further was pushed: {exc}", "danger")
+        return redirect(url_for("ui.ops_charter_request_detail", request_id=row.id))
+    registrations = []
+    if can_operate and row.status == "Approved":
+        try:
+            token = envision_authenticate()["token"]
+            registrations = sorted(envision_get_line_registrations(token), key=lambda item: str(item.get("registration") or ""))
+        except Exception:
+            flash("Aircraft could not be loaded from Envision. You can retry the page before pushing.", "danger")
+    return render_template("charter_request_detail_v2.html", charter_request=row, sectors=_allocate_charter_numbers(_request_sectors(row)), can_operate=can_operate, registrations=registrations)
 
 
 @ui_bp.get("/ops/charter-briefs")

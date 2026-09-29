@@ -23,6 +23,7 @@
     <nav class="charter-nav-links" aria-label="Charter navigation">
       <a href="{{ url_for('ui.dcs_charter_checkin') }}">Charter Check-in</a>
       <a href="{{ url_for('ui.dcs_crew_briefing') }}">Crew Brief</a>
+      <a class="{{ 'active' if request.path.startswith('/ops/charter-requests') else '' }}" href="{{ url_for('ui.ops_charter_requests') }}">Charter Requests</a>
       <a class="{{ 'active' if request.path.startswith('/ops/charter-briefs') else '' }}" href="{{ url_for('ui.ops_charter_briefs') }}">Charter Briefs</a>
     </nav>
     <div class="charter-nav-actions">

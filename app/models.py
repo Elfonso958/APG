@@ -130,6 +130,22 @@ class CharterBrief(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
+class CharterRequest(db.Model):
+    """Commercial charter request awaiting Operations approval and Envision creation."""
+    __tablename__ = "charter_requests"
+    id = db.Column(db.Integer, primary_key=True)
+    reference = db.Column(db.String(80), unique=True, index=True, nullable=False)
+    title = db.Column(db.String(255), nullable=False)
+    status = db.Column(db.String(24), nullable=False, default="Pending approval")
+    sectors_json = db.Column(db.Text, nullable=False, default="[]")
+    created_by = db.Column(db.String(255), nullable=True)
+    decision_by = db.Column(db.String(255), nullable=True)
+    decision_note = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    decided_at = db.Column(db.DateTime, nullable=True)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class ManualApgFlightLink(db.Model):
     """Operations override for an Envision flight that could not be auto-matched to APG."""
     __tablename__ = "manual_apg_flight_links"
@@ -219,6 +235,7 @@ class EmailSettings(db.Model):
     flight_operations_email = db.Column(db.String(1000), nullable=True)
     from_email = db.Column(db.String(255), nullable=True)
     charter_closure_emails_enabled = db.Column(db.Boolean, nullable=False, default=True)
+    charter_request_recipients = db.Column(db.String(1000), nullable=True)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
