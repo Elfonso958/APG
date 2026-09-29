@@ -2093,8 +2093,44 @@ def ops_charter_requests():
             next_sector["connection_gap_minutes"] = round(gap)
     for group in request_rows:
         reference = str(group["request"].reference)
-        group["request"].reference = Markup(f'<span id="charter-request-{group["request"].id}">{escape(reference)}</span>')
+        request_row = group["request"]
+        if request_row.status == "Pending approval":
+            group["request"].reference = Markup(f'<a id="charter-request-{request_row.id}" href="{escape(url_for("ui.ops_charter_request_edit", request_id=request_row.id))}">{escape(reference)}</a>')
+        else:
+            group["request"].reference = Markup(f'<span id="charter-request-{request_row.id}">{escape(reference)}</span>')
     return render_template("charter_requests_tabs.html", request_rows=request_rows, can_operate=bool(user.is_admin or "operations" in _user_permissions(user)), format_date=_brief_print_date, active_tab=tab)
+
+
+@ui_bp.get("/ops/charter-requests/<int:request_id>/planning")
+@_login_required
+def ops_charter_request_planning(request_id):
+    """Planning board: scheduled Envision flights plus an uncommitted charter overlay."""
+    user = _current_apg_user()
+    if not _charter_request_access(user): abort(403)
+    row = db.session.get(CharterRequest, request_id)
+    if not row or row.status != "Pending approval": abort(404)
+    if not (user.is_admin or "operations" in _user_permissions(user)): abort(403)
+    sectors = _allocate_charter_numbers(_request_sectors(row))
+    available_days = sorted({str(sector.get("date") or "") for sector in sectors if sector.get("date")})
+    requested_day = request.args.get("date")
+    day_value = requested_day if requested_day in available_days else (available_days[0] if available_days else _nz_today().isoformat())
+    try:
+        day = date.fromisoformat(day_value)
+        token = envision_authenticate()["token"]
+        raw_flights = _list_from_envision_payload(envision_get_flights(token, datetime.combine(day, time.min, tzinfo=NZ).astimezone(timezone.utc), datetime.combine(day + timedelta(days=1), time.min, tzinfo=NZ).astimezone(timezone.utc)))
+        registrations = sorted(envision_get_line_registrations(token), key=lambda item: str(item.get("registration") or ""))
+    except Exception as exc:
+        current_app.logger.exception("Charter planning board could not load Envision")
+        flash(f"The live Envision schedule could not be loaded: {exc}", "danger")
+        raw_flights, registrations = [], []
+    scheduled = []
+    for flight in raw_flights:
+        etd = _parse_env_time_to_nz(flight.get("departureEstimate") or flight.get("departureScheduled"))
+        eta = _parse_env_time_to_nz(flight.get("arrivalEstimate") or flight.get("arrivalScheduled"))
+        if not etd or etd.date() != day: continue
+        scheduled.append({"tail": str(flight.get("flightRegistrationDescription") or flight.get("aircraftRegistration") or "Unassigned"), "flight": str(flight.get("flightNumberDescription") or "Flight"), "dep": str(flight.get("departurePlaceDescription") or ""), "arr": str(flight.get("arrivalPlaceDescription") or ""), "std": etd.strftime("%H%M"), "sta": eta.strftime("%H%M") if eta else ""})
+    ghosts = [sector for sector in sectors if str(sector.get("date")) == day_value]
+    return render_template("charter_request_planning.html", charter_request=row, day=day_value, available_days=available_days, ghosts=ghosts, scheduled=scheduled, registrations=registrations)
 
 
 @ui_bp.post("/ops/charter-requests/import")
@@ -2131,6 +2167,27 @@ def ops_charter_requests_import():
     return redirect(url_for("ui.ops_charter_requests"))
 
 
+@ui_bp.route("/ops/charter-requests/<int:request_id>/edit", methods=["GET", "POST"])
+@_login_required
+def ops_charter_request_edit(request_id):
+    user = _current_apg_user()
+    if not _charter_request_access(user): abort(403)
+    row = db.session.get(CharterRequest, request_id)
+    if not row or row.status != "Pending approval": abort(404)
+    if request.method == "POST":
+        if not _csrf_is_valid(): abort(403)
+        try:
+            sectors = json.loads(request.form.get("sectors_json") or "[]")
+            if not isinstance(sectors, list) or not sectors: raise ValueError
+        except ValueError:
+            flash("Add at least one complete sector before resubmitting.", "danger")
+            return redirect(url_for("ui.ops_charter_request_edit", request_id=row.id))
+        row.reference = str(request.form.get("reference") or row.reference).strip().upper(); row.title = str(request.form.get("title") or row.title).strip(); row.sectors_json = json.dumps(sectors); row.created_by = user.display_name or user.email; row.decision_by = row.decision_note = None; row.decided_at = None
+        db.session.add(row); db.session.commit(); flash("Charter request updated and resubmitted for approval.", "success")
+        return redirect(url_for("ui.ops_charter_requests"))
+    return render_template("charter_request_edit_v2.html", charter_request=row, sectors=_request_sectors(row))
+
+
 @ui_bp.route("/ops/charter-requests/<int:request_id>", methods=["GET", "POST"])
 @_login_required
 def ops_charter_request_detail(request_id):
@@ -2144,6 +2201,19 @@ def ops_charter_request_detail(request_id):
         action = request.form.get("action")
         if action in {"approve", "reject"}:
             row.status = "Approved" if action == "approve" else "Rejected"
+            if action == "approve":
+                registration_id = request.form.get("registration_id", type=int)
+                if registration_id:
+                    try:
+                        token = envision_authenticate()["token"]
+                        registration = next((item for item in envision_get_line_registrations(token) if int(item.get("id") or 0) == registration_id), None)
+                        if not registration: raise RuntimeError("The selected aircraft is no longer available in Envision.")
+                        sectors = _request_sectors(row)
+                        for sector in sectors: sector["tail"] = str(registration.get("registration") or registration.get("registrationDescription") or "")
+                        row.sectors_json = json.dumps(sectors)
+                    except Exception as exc:
+                        flash(f"Request was not approved: {exc}", "danger")
+                        return redirect(url_for("ui.ops_charter_request_detail", request_id=row.id))
             row.decision_by = user.display_name or user.email; row.decision_note = str(request.form.get("decision_note") or "").strip() or None; row.decided_at = datetime.utcnow()
             db.session.add(row); db.session.commit(); flash(f"Request {row.status.lower()}.", "success")
         elif action == "push_envision" and row.status == "Approved":

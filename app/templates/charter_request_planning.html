@@ -1,0 +1,48 @@
+{% extends "charter_base.html" %}
+{% block title %}Plan {{ charter_request.reference }}{% endblock %}
+{% block head_extra %}
+<style>
+  .tail-plan-toolbar{display:flex;gap:12px;align-items:end;justify-content:space-between;flex-wrap:wrap}.tail-plan-toolbar form{display:flex;gap:10px;align-items:end}.tail-plan-toolbar label{display:grid;gap:6px;font-weight:700}.tail-plan-toolbar select{min-width:210px}.tail-plan-key{display:flex;gap:14px;font-size:.86rem;color:#cbd9e4}.tail-plan-key i{display:inline-block;width:14px;height:14px;border-radius:4px;vertical-align:-2px;margin-right:4px}.tail-plan-key .scheduled{background:#247ba0}.tail-plan-key .ghost{background:repeating-linear-gradient(135deg,#e5a93c 0 4px,#815819 4px 8px)}.tail-plan-row{display:grid;grid-template-columns:125px 1fr;gap:14px;align-items:stretch;margin:10px 0}.tail-plan-label{padding:12px;border-radius:10px;background:#092a40;font-weight:800}.tail-plan-track{position:relative;min-height:66px;border-radius:10px;background:linear-gradient(90deg,#082237 0 1px,transparent 1px) 0 0/8.333% 100%,#061a2a;overflow:hidden}.tail-plan-hour{display:grid;grid-template-columns:repeat(24,1fr);font-size:.68rem;color:#92aabd}.tail-plan-hour span{padding-left:3px}.tail-plan-flight{position:absolute;top:8px;height:23px;border-radius:5px;padding:4px 7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:#247ba0;color:#fff;font-size:.75rem;font-weight:800}.tail-plan-flight.ghost{top:36px;background:repeating-linear-gradient(135deg,#d49a28 0 5px,#926117 5px 10px);outline:1px dashed #ffd879}.tail-plan-flight.conflict{background:#b84646;outline:1px solid #ffc3c3}.tail-plan-warning{margin:14px 0;padding:12px;border-left:3px solid #e5a93c;background:#3e2c11;color:#ffe4a6}.tail-plan-empty{padding:18px;color:#b6cad8}
+</style>
+{% endblock %}
+{% block content %}
+<section class="brief-page">
+  <div class="brief-heading"><div><p class="brief-kicker">Pending charter · tail planning</p><h1>{{ charter_request.reference }}</h1><p>Scheduled flights are live from Envision. The striped bars are proposed only and are not written to Envision until the request is approved.</p></div><a class="btn secondary" href="{{ url_for('ui.ops_charter_requests') }}">Back to pending</a></div>
+  <section class="brief-section">
+    <div class="tail-plan-toolbar">
+      <form method="get"><label>Operating date<select name="date" onchange="this.form.submit()">{% for value in available_days %}<option value="{{ value }}" {{ 'selected' if value == day else '' }}>{{ value }}</option>{% endfor %}</select></label></form>
+      <div class="tail-plan-key"><span><i class="scheduled"></i>Scheduled Envision flight</span><span><i class="ghost"></i>Proposed charter sector</span></div>
+      <a class="btn secondary" href="{{ url_for('ui.dcs_new_live_gantt', date=day) }}" target="_blank">Open live Gantt & maintenance</a>
+    </div>
+    <p class="tail-plan-warning" id="tailPlanMessage">Select a tail below. Red proposed bars overlap an existing Envision flight on that tail; choose another tail or adjust the timing before approval.</p>
+    <div class="tail-plan-hour">{% for hour in range(24) %}<span>{{ '%02d'|format(hour) }}</span>{% endfor %}</div>
+    <div id="tailPlanRows"></div>
+  </section>
+  <section class="brief-section"><h2>Approve planned allocation</h2><form method="post" action="{{ url_for('ui.ops_charter_request_detail', request_id=charter_request.id) }}" class="brief-form"><input type="hidden" name="csrf_token" value="{{ apg_csrf_token }}"><input type="hidden" name="action" value="approve"><label>Operating tail<select id="tailPicker" name="registration_id" required><option value="">Select a tail...</option>{% for reg in registrations %}<option value="{{ reg.id }}" data-tail="{{ reg.registration }}">{{ reg.registration }} · {{ reg.model or 'Aircraft' }}</option>{% endfor %}</select></label><label class="wide">Decision note<input name="decision_note" placeholder="Optional approval note"></label><button class="btn" type="submit" onclick="return confirm('Approve this request and record the selected tail?')">Approve request</button></form></section>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+  const scheduled = {{ scheduled|tojson }}, ghosts = {{ ghosts|tojson }}, registrations = {{ registrations|tojson }};
+  const rows = document.getElementById('tailPlanRows'), picker = document.getElementById('tailPicker'), message = document.getElementById('tailPlanMessage');
+  const minutes = value => { const v=String(value||'').replace(':',''); return /^\d{3,4}$/.test(v) ? Number(v.slice(0,-2))*60+Number(v.slice(-2)) : 0; };
+  const left = value => Math.max(0, Math.min(100, minutes(value)/14.4));
+  const width = (start,end) => Math.max(2, ((minutes(end)||minutes(start)+30)-minutes(start))/14.4);
+  const esc = value => String(value || '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  function flight(bar, ghost=false, conflict=false) { return `<div class="tail-plan-flight ${ghost?'ghost':''} ${conflict?'conflict':''}" style="left:${left(bar.std)}%;width:${width(bar.std,bar.sta)}%" title="${esc(bar.flight || 'Proposed charter')} ${esc(bar.dep)}–${esc(bar.arr)} ${esc(bar.std)}–${esc(bar.sta)}">${esc(bar.flight || 'Proposed')} · ${esc(bar.dep)}–${esc(bar.arr)}</div>`; }
+  function render() {
+    const choice = picker.options[picker.selectedIndex]; const tail = choice?.dataset.tail || '';
+    const displayTails = tail ? [tail] : [...new Set(scheduled.map(item => item.tail))];
+    if (!displayTails.length) displayTails.push('Select a tail');
+    let conflicts = 0;
+    rows.innerHTML = displayTails.map(name => {
+      const existing = scheduled.filter(item => item.tail === name);
+      const proposed = tail === name ? ghosts : [];
+      const bars = proposed.map(item => { const overlap = existing.some(f => minutes(item.std) < minutes(f.sta) && minutes(item.sta) > minutes(f.std)); if (overlap) conflicts++; return flight(item, true, overlap); }).join('');
+      return `<div class="tail-plan-row"><div class="tail-plan-label">${esc(name)}</div><div class="tail-plan-track">${existing.map(item => flight(item)).join('')}${bars || (tail ? '<span class="tail-plan-empty">No proposed sector on this tail</span>' : '')}</div></div>`;
+    }).join('');
+    message.textContent = !tail ? 'Select a tail below to place the proposed charter sectors as striped ghost bars. The live Gantt link shows scheduled maintenance for the selected operating day.' : conflicts ? `${conflicts} proposed sector(s) overlap a scheduled flight on ${tail}. Choose another tail or change the timing before approving.` : `No scheduled-flight overlap detected for ${tail}. Open the live Gantt to confirm maintenance and other operational constraints.`;
+  }
+  picker.addEventListener('change', render); render();
+</script>
+{% endblock %}
