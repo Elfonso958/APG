@@ -53,6 +53,9 @@ from .sync.envision_apg_sync import (
     envision_get_line_registrations,
     envision_get_flight_types,
     envision_create_flight,
+    envision_cancel_flight,
+    envision_get_cancel_codes,
+    envision_get_flight_crew,
     fetch_envision_crew_for_apg,
     calculate_dcs_passenger_seat_loads,
 )
@@ -2096,6 +2099,64 @@ def ops_charter_request_create_brief(request_id):
     return redirect(url_for("ui.ops_charter_brief_edit", brief_id=brief.id))
 
 
+@ui_bp.post("/ops/charter-requests/<int:request_id>/request-cancellation")
+@_login_required
+def ops_charter_request_cancellation_request(request_id):
+    user = _current_apg_user()
+    if not _charter_request_access(user) or not _csrf_is_valid(): abort(403)
+    row = db.session.get(CharterRequest, request_id)
+    if not row or row.status not in {"Approved", "Pushed to Envision"}: abort(404)
+    reason = str(request.form.get("cancellation_reason") or "").strip()
+    if not reason:
+        flash("Enter a reason for the cancellation request.", "danger")
+        return redirect(url_for("ui.ops_charter_requests", tab="approved"))
+    row.status = "Cancellation requested"
+    row.decision_note = reason
+    row.decided_at = datetime.utcnow()
+    db.session.add(row); db.session.commit()
+    recipients = [item.strip() for item in str((db.session.get(EmailSettings, 1) or EmailSettings()).charter_request_recipients or "").split(",") if "@" in item]
+    if recipients:
+        try:
+            from .routes import _send_email_via_graph, _charter_email_sender
+            _send_email_via_graph(_charter_email_sender(), recipients, f"Charter cancellation approval required — {row.reference}", f"{user.display_name or user.email} requested cancellation of {row.reference}. Reason: {reason}. Review it at {url_for('ui.ops_charter_requests', _external=True)}.")
+        except Exception:
+            current_app.logger.exception("Charter cancellation notification could not be sent")
+    flash("Cancellation request sent to Operations for approval.", "success")
+    return redirect(url_for("ui.ops_charter_requests"))
+
+
+@ui_bp.post("/ops/charter-requests/<int:request_id>/approve-cancellation")
+@_login_required
+def ops_charter_request_cancellation_approve(request_id):
+    user = _current_apg_user()
+    if not (user and (user.is_admin or "operations" in _user_permissions(user))) or not _csrf_is_valid(): abort(403)
+    row = db.session.get(CharterRequest, request_id)
+    if not row or row.status != "Cancellation requested": abort(404)
+    try:
+        cancel_code_id = int(request.form.get("cancel_code_id") or 0)
+        if cancel_code_id <= 0: raise RuntimeError("Choose an Envision cancellation code.")
+        token = envision_authenticate()["token"]
+        sectors = _request_sectors(row)
+        assigned = []
+        for sector in sectors:
+            flight_id = str(sector.get("envision_flight_id") or "").strip()
+            if not flight_id: continue
+            if envision_get_flight_crew(token, int(flight_id)):
+                assigned.append(str(sector.get("flight_number") or flight_id))
+        if assigned and not request.form.get("crew_standby_confirmed"):
+            raise RuntimeError("Crew are assigned to " + ", ".join(assigned) + ". In Envision please ensure you allocate existing crew SBY duties in lieu of this charter flight, then tick the confirmation and approve again.")
+        for sector in sectors:
+            flight_id = str(sector.get("envision_flight_id") or "").strip()
+            if flight_id:
+                envision_cancel_flight(token, flight_id, {"flightId": int(flight_id), "cancelCodeId": cancel_code_id, "remarks": f"Charter cancellation approved: {row.decision_note or 'No reason supplied'}"})
+        row.status = "Cancelled"; row.decision_by = user.display_name or user.email; row.decided_at = datetime.utcnow()
+        db.session.add(row); db.session.commit()
+        flash("Charter cancellation approved and linked Envision flights cancelled.", "success")
+    except Exception as exc:
+        flash(f"Cancellation was not approved: {exc}", "danger")
+    return redirect(url_for("ui.ops_charter_requests"))
+
+
 @ui_bp.route("/ops/charter-requests", methods=["GET", "POST"])
 @_login_required
 def ops_charter_requests():
@@ -2126,10 +2187,11 @@ def ops_charter_requests():
                 current_app.logger.exception("Charter approval notification could not be sent")
         flash("Charter request submitted for Operations approval.", "success")
         return redirect(url_for("ui.ops_charter_request_detail", request_id=row.id))
-    tab = "approved" if request.args.get("tab") == "approved" else "pending"
+    tab = request.args.get("tab") if request.args.get("tab") in {"approved", "cancelled"} else "pending"
     rows = CharterRequest.query.order_by(CharterRequest.created_at.desc()).all()
     if tab == "approved": rows = [row for row in rows if row.status in {"Approved", "Pushed to Envision"}]
-    else: rows = [row for row in rows if row.status == "Pending approval"]
+    elif tab == "cancelled": rows = [row for row in rows if row.status == "Cancelled"]
+    else: rows = [row for row in rows if row.status in {"Pending approval", "Cancellation requested"}]
     request_rows = []
     for item in rows:
         sectors = _allocate_charter_numbers(_request_sectors(item))
@@ -2163,6 +2225,12 @@ def ops_charter_requests():
             next_sector["continues_from"] = Markup(f'<a href="#charter-request-{previous_group["request"].id}">{escape(previous_group["request"].reference)}</a>')
             next_sector["continues_from_id"] = previous_group["request"].id
             next_sector["connection_gap_minutes"] = round(gap)
+    cancellation_codes = []
+    if any(group["request"].status == "Cancellation requested" for group in request_rows) and (user.is_admin or "operations" in _user_permissions(user)):
+        try:
+            cancellation_codes = envision_get_cancel_codes(envision_authenticate()["token"])
+        except Exception:
+            current_app.logger.exception("Could not load Envision cancellation codes")
     for group in request_rows:
         reference = str(group["request"].reference)
         request_row = group["request"]
@@ -2171,7 +2239,7 @@ def ops_charter_requests():
             group["request"].reference = Markup(f'<a id="charter-request-{request_row.id}" href="{escape(url_for("ui.ops_charter_request_edit", request_id=request_row.id))}">{escape(reference)}</a>')
         else:
             group["request"].reference = Markup(f'<span id="charter-request-{request_row.id}">{escape(reference)}</span>')
-    return render_template("charter_requests_tabs.html", request_rows=request_rows, can_operate=bool(user.is_admin or "operations" in _user_permissions(user)), format_date=_brief_print_date, active_tab=tab)
+    return render_template("charter_requests_tabs.html", request_rows=request_rows, can_operate=bool(user.is_admin or "operations" in _user_permissions(user)), format_date=_brief_print_date, active_tab=tab, cancellation_codes=cancellation_codes)
 
 
 @ui_bp.route("/ops/charter-planner-settings", methods=["GET", "POST"])
