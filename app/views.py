@@ -539,7 +539,7 @@ def admin_email_settings():
             return redirect(url_for("ui.admin_email_settings"))
         recipients = ", ".join(part.strip() for part in str(request.form.get("flight_operations_email") or "").split(",") if part.strip())
         charter_recipients = ", ".join(part.strip() for part in str(request.form.get("charter_request_recipients") or "").split(",") if part.strip())
-        if recipients and any("@" not in address for address in recipients.split(", ")):
+        if (recipients and any("@" not in address for address in recipients.split(", "))) or (charter_recipients and any("@" not in address for address in charter_recipients.split(", "))):
             flash("Enter one or more valid email addresses, separated by commas.", "danger")
         else:
             settings = settings or EmailSettings(id=1)
@@ -557,7 +557,7 @@ def admin_email_settings():
         return redirect(url_for("ui.admin_email_settings"))
     configured_recipients = (settings.flight_operations_email if settings else None) or os.getenv("FLIGHT_OPERATIONS_EMAIL", "")
     return render_template(
-        "admin_email_settings.html",
+        "admin_email_settings_v2.html",
         settings=settings,
         configured_recipients=configured_recipients,
         charter_request_recipients=(settings.charter_request_recipients if settings else "") or configured_recipients,

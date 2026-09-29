@@ -28,6 +28,7 @@
     </nav>
     <div class="charter-nav-actions">
       <a class="charter-apg-link" href="{{ url_for('ui.dcs_new_live_gantt') }}">← APG flight board</a>
+      {% if apg_is_admin %}<a class="charter-apg-link" href="{{ url_for('ui.admin_email_settings') }}">Email settings</a>{% endif %}
       {% if apg_current_user %}
       <details class="charter-account"><summary>{{ apg_current_user.display_name or apg_current_user.email }}</summary><form method="post" action="{{ url_for('ui.apg_logout') }}"><input type="hidden" name="csrf_token" value="{{ apg_csrf_token }}"><button type="submit">Sign out</button></form></details>
       {% endif %}
