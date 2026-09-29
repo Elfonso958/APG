@@ -69,6 +69,7 @@ from .zenith_client import fetch_dcs_for_flight
 ui_bp = Blueprint("ui", __name__)
 
 APP_PERMISSIONS = {
+    "operations": "Operations",
     "crew_briefing": "Crew Briefing",
     "live_gantt": "Live Gantt",
     "charter_checkin": "Charter Check-in",

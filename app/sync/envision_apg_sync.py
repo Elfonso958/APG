@@ -4145,16 +4145,22 @@ def attach_apg_presence_to_rows(
         candidates.sort(key=lambda item: item[0])
 
     state_plan_by_fid: dict[str, int] = {}
+    manual_plan_by_fid: dict[str, int] = {}
     try:
-        from app.models import SyncFlightState
+        from app.models import SyncFlightState, ManualApgFlightLink
         for state in SyncFlightState.query.filter(SyncFlightState.apg_id.isnot(None)).all():
             if state.envision_flight_id and state.apg_id:
                 state_plan_by_fid[str(state.envision_flight_id)] = int(state.apg_id)
+        for link in ManualApgFlightLink.query.all():
+            manual_plan_by_fid[str(link.envision_flight_id)] = int(link.apg_plan_id)
     except Exception:
         state_plan_by_fid = {}
     # 3) Attach APG plan ids
     for r in rows:
-        plan_id = _find_apg_plan_id_for_row(r, existing_index, existing_candidates_by3)
+        fid = r.get("envision_flight_id")
+        plan_id = manual_plan_by_fid.get(str(fid)) if fid not in (None, "") else None
+        if plan_id is None:
+            plan_id = _find_apg_plan_id_for_row(r, existing_index, existing_candidates_by3)
         if plan_id is None:
             raw_flight = (r.get("flight") or r.get("Flight") or "").strip()
             flight_no = normalize_flight_no(raw_flight)

@@ -27,6 +27,7 @@
        data-apg-plan-url-template="{{ url_for('api.api_apg_plan_get', plan_id=0) }}"
        data-apg-cargo-summary-url-template="{{ url_for('api.api_apg_plan_cargo_summary', plan_id=0) }}"
        data-apg-reset-url="{{ url_for('api.api_apg_reset_passengers') }}"
+       data-manual-apg-link-url-template="{{ url_for('api.api_dcs_manual_apg_link', envision_flight_id='__FLIGHT__') }}"
        data-manifest-preview-url="{{ url_for('api.api_dcs_manifest_preview') }}"
        data-charter-manifest-template-url="{{ url_for('api.api_charter_manifest_template') }}"
        data-charter-manifest-url="{{ url_for('api.api_charter_manifest_get') }}"
@@ -53,6 +54,7 @@
        data-envision-test-available="{{ '1' if envision_test_available else '0' }}"
        data-can-switch-environment="{{ '1' if apg_is_admin else '0' }}"
        data-can-modify-flights="{{ '1' if apg_is_admin else '0' }}"
+       data-can-manual-link="{{ '1' if apg_is_admin or 'operations' in apg_permissions else '0' }}"
        data-cabin-crew-restricted="{{ '1' if is_cabin_crew else '0' }}"
        data-signed-in-crew-code="{{ signed_in_crew_code or '' }}"
        data-day="{{ day.isoformat() }}">
@@ -335,6 +337,18 @@
       <div class="cargo-allocation-layout">
         <aside id="cargoWeightsSummary" class="status-body" aria-label="Weight and balance summary"></aside>
         <div id="cargoEditor" class="status-body"></div>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="manualApgLinkDialog" class="flight-edit-dialog manual-apg-link-dialog">
+    <form method="dialog" class="flight-edit-shell">
+      <header><h3 id="manualApgLinkTitle">Manually Link APG Flight</h3><button class="btn btn-ghost" value="cancel">Close</button></header>
+      <div class="status-body">
+        <p class="muted">Choose the APG flight that belongs to this Live Gantt flight. This is an Operations fallback when automatic linking has not found the correct plan.</p>
+        <input id="manualApgLinkSearch" class="form-control" type="search" placeholder="Search flight, route, registration, time or APG ID">
+        <div id="manualApgLinkOptions" class="manual-apg-link-options"></div>
+        <div id="manualApgLinkStatus" class="cargo-save-status" role="status"></div>
       </div>
     </form>
   </dialog>

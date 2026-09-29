@@ -11,6 +11,8 @@
   const apgPlanUrlTemplate = app.dataset.apgPlanUrlTemplate;
   const apgCargoSummaryUrlTemplate = app.dataset.apgCargoSummaryUrlTemplate;
   const apgResetUrl = app.dataset.apgResetUrl;
+  const manualApgLinkUrlTemplate = app.dataset.manualApgLinkUrlTemplate || "";
+  const canManualLink = app.dataset.canManualLink === "1";
   const manifestPreviewUrl = app.dataset.manifestPreviewUrl;
   const charterManifestTemplateUrl = app.dataset.charterManifestTemplateUrl;
   const charterManifestUrl = app.dataset.charterManifestUrl;
@@ -91,6 +93,11 @@
   const seatmapGrid = document.getElementById("seatmapGrid");
   const seatmapInfo = document.getElementById("seatmapInfo");
   const seatmapTitle = document.getElementById("seatmapTitle");
+  const manualApgLinkDialog = document.getElementById("manualApgLinkDialog");
+  const manualApgLinkTitle = document.getElementById("manualApgLinkTitle");
+  const manualApgLinkSearch = document.getElementById("manualApgLinkSearch");
+  const manualApgLinkOptions = document.getElementById("manualApgLinkOptions");
+  const manualApgLinkStatus = document.getElementById("manualApgLinkStatus");
   const seatBagConfigBtn = document.getElementById("seatBagConfigBtn");
   const seatBagConfigDialog = document.getElementById("seatBagConfigDialog");
   const seatBagConfigMaps = document.getElementById("seatBagConfigMaps");
@@ -3952,7 +3959,7 @@
     const apgPlanId = getApgPlanId(f.apg_plan_id);
     const apgLinkedHtml = apgPlanId
       ? `<a class="apg-route-link" href="${apgRouteUrl(f, apgPlanId)}" target="_blank" rel="noopener noreferrer" title="Open APG route ${apgPlanId}">APG Linked</a>`
-      : `<span title="No APG plan">No APG</span>`;
+      : `<span title="No APG plan">No APG</span>${canManualLink && f.envision_flight_id ? ` <button class="detail-manual-link" type="button" data-manual-apg-link="${escapeHtml(String(f.envision_flight_id))}">Manual link</button>` : ""}`;
     const dcsLinked = Boolean(f.dcs_linked);
 
     detailList.innerHTML = `
@@ -4007,6 +4014,47 @@
     `;
     populateDetailCrew(f);
     populateDetailWeightBalance(f);
+    detailList.querySelector("[data-manual-apg-link]")?.addEventListener("click", () => openManualApgLink(f));
+  }
+
+  function manualApgLinkUrl(f) {
+    return manualApgLinkUrlTemplate.replace("__FLIGHT__", encodeURIComponent(String(f?.envision_flight_id || "")));
+  }
+
+  async function openManualApgLink(f) {
+    if (!manualApgLinkDialog || !manualApgLinkUrlTemplate || !f?.envision_flight_id) return;
+    manualApgLinkTitle.textContent = `Manually Link ${flightCode(f)} to APG`;
+    manualApgLinkOptions.innerHTML = "";
+    manualApgLinkSearch.value = "";
+    manualApgLinkStatus.textContent = "Loading APG flights...";
+    manualApgLinkDialog.showModal();
+    try {
+      const response = await fetch(manualApgLinkUrl(f));
+      const data = await response.json();
+      if (!response.ok || data.ok === false) throw new Error(data.error || "Unable to load APG flights");
+      const plans = Array.isArray(data.plans) ? data.plans : [];
+      const render = () => {
+        const term = String(manualApgLinkSearch.value || "").trim().toUpperCase();
+        const shown = plans.filter((plan) => !term || `${plan.id} ${plan.flight} ${plan.dep} ${plan.ades} ${plan.reg} ${plan.etd}`.toUpperCase().includes(term));
+        manualApgLinkOptions.innerHTML = shown.length ? shown.map((plan) => `<button type="button" class="manual-apg-link-option" data-apg-plan-id="${Number(plan.id)}"><strong>${escapeHtml(plan.flight || "Flight")}</strong><span>${escapeHtml(`${plan.dep || "---"} → ${plan.ades || "---"}`)}</span><small>APG ${Number(plan.id)}${plan.reg ? ` · ${escapeHtml(plan.reg)}` : ""}${plan.etd ? ` · ${escapeHtml(plan.etd)}` : ""}</small></button>`).join("") : `<div class="muted">No APG flights match this search.</div>`;
+        manualApgLinkOptions.querySelectorAll("[data-apg-plan-id]").forEach((button) => button.addEventListener("click", async () => {
+          button.disabled = true;
+          manualApgLinkStatus.textContent = "Saving link...";
+          try {
+            const save = await fetch(manualApgLinkUrl(f), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ apg_plan_id: Number(button.dataset.apgPlanId) }) });
+            const result = await save.json();
+            if (!save.ok || result.ok === false) throw new Error(result.error || "Unable to save manual link");
+            f.apg_plan_id = result.apg_plan_id;
+            manualApgLinkDialog.close();
+            setDetail(f);
+            renderRows();
+          } catch (err) { manualApgLinkStatus.textContent = err.message || String(err); button.disabled = false; }
+        }));
+      };
+      manualApgLinkSearch.oninput = render;
+      render();
+      manualApgLinkStatus.textContent = `${plans.length} APG flights available.`;
+    } catch (err) { manualApgLinkStatus.textContent = err.message || String(err); }
   }
 
   function renderFlightGroup(track, cfg) {

@@ -12,7 +12,7 @@ from . import db, _normalise_sync_result
 import requests
 from sqlalchemy import func
 from zoneinfo import ZoneInfo
-from .models import SyncRun, SyncFlightLog, SyncFlightState, AppConfig, ManifestUploadState, CharterManifest, EnvisionOtpFlightCache, FlightFreightAllocation, FlightCargoAllocation, EmailSettings, AppUser, PowerBiApiKey
+from .models import SyncRun, SyncFlightLog, SyncFlightState, ManualApgFlightLink, AppConfig, ManifestUploadState, CharterManifest, EnvisionOtpFlightCache, FlightFreightAllocation, FlightCargoAllocation, EmailSettings, AppUser, PowerBiApiKey
 from .kmh_auth import get_kmh_session
 from .helpers_manifest import _seat_sort_key, _format_ssrs, _calc_age, _parse_dcs_dob, generate_manifest_pdf_from_html, generate_pdf_modern
 from .charter_wallet import apple_wallet_pass, google_wallet_link, make_wallet_token, parse_wallet_token
@@ -21,6 +21,7 @@ from itsdangerous import URLSafeTimedSerializer
 from .sync.envision_apg_sync import (
     run_sync_once_return_summary,
     apg_login,
+    apg_get_plan_list,
     APG_EMAIL,
     APG_PASSWORD,
     update_apg_plan_from_dcs_row,
@@ -108,6 +109,78 @@ def _clear_live_gantt_cache() -> None:
         clear_gantt_flight_cache()
     except Exception:
         current_app.logger.exception("Failed to clear live Gantt flight cache")
+
+
+def _manual_link_user():
+    from .views import _current_apg_user, _can_access
+    user = _current_apg_user()
+    return user if user and (user.is_admin or _can_access("operations", user)) else None
+
+
+def _manual_link_plan_options() -> list[dict]:
+    auth = apg_login(APG_EMAIL, APG_PASSWORD)
+    plans = apg_get_plan_list(auth["authorization"], page_size=200, after=None) or []
+    options = []
+    for plan in plans:
+        if not isinstance(plan, dict):
+            continue
+        plan_id = plan.get("id") or plan.get("plan_id") or plan.get("planId") or plan.get("route_id")
+        try:
+            plan_id = int(plan_id)
+        except (TypeError, ValueError):
+            continue
+        flight = plan.get("flight_number") or plan.get("flightNumber") or plan.get("flight") or plan.get("callsign") or "Unknown flight"
+        dep = plan.get("adep") or plan.get("departure") or plan.get("departure_airport") or "---"
+        ades = plan.get("ades") or plan.get("destination") or plan.get("arrival_airport") or "---"
+        etd = plan.get("eobt") or plan.get("etd") or plan.get("departure_time") or plan.get("date") or ""
+        reg = plan.get("registration") or plan.get("aircraft_registration") or ""
+        options.append({"id": plan_id, "flight": str(flight), "dep": str(dep), "ades": str(ades), "etd": str(etd), "reg": str(reg)})
+    return sorted(options, key=lambda item: (item["etd"], item["flight"], item["id"]), reverse=True)
+
+
+@api_bp.route("/dcs/manual-apg-link/<string:envision_flight_id>", methods=["GET", "PUT", "DELETE"])
+def api_dcs_manual_apg_link(envision_flight_id: str):
+    user = _manual_link_user()
+    if not user:
+        return jsonify(ok=False, error="Operations permission is required to manage manual flight links."), 403
+    flight_id = str(envision_flight_id or "").strip()
+    if not flight_id:
+        return jsonify(ok=False, error="A valid Envision flight is required."), 400
+    if request.method == "GET":
+        try:
+            return jsonify(ok=True, plans=_manual_link_plan_options())
+        except Exception as exc:
+            current_app.logger.exception("Unable to load APG plans for manual link")
+            return jsonify(ok=False, error=f"Unable to load APG flights: {exc}"), 502
+    existing = ManualApgFlightLink.query.filter_by(envision_flight_id=flight_id).first()
+    if request.method == "DELETE":
+        if existing:
+            db.session.delete(existing)
+            db.session.commit()
+        _clear_live_gantt_cache()
+        return jsonify(ok=True)
+    try:
+        plan_id = int((request.get_json(silent=True) or {}).get("apg_plan_id"))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error="Choose an APG flight to link."), 400
+    try:
+        valid_plan_ids = {item["id"] for item in _manual_link_plan_options()}
+    except Exception as exc:
+        current_app.logger.exception("Unable to validate APG plan for manual link")
+        return jsonify(ok=False, error=f"Unable to validate APG flight: {exc}"), 502
+    if plan_id not in valid_plan_ids:
+        return jsonify(ok=False, error="The selected APG flight is no longer available."), 400
+    duplicate = ManualApgFlightLink.query.filter_by(apg_plan_id=plan_id).first()
+    if duplicate and duplicate.envision_flight_id != flight_id:
+        return jsonify(ok=False, error="That APG flight is already manually linked to another flight."), 409
+    if existing is None:
+        existing = ManualApgFlightLink(envision_flight_id=flight_id)
+        db.session.add(existing)
+    existing.apg_plan_id = plan_id
+    existing.linked_by_user_id = user.id
+    db.session.commit()
+    _clear_live_gantt_cache()
+    return jsonify(ok=True, apg_plan_id=plan_id)
 
 
 @api_bp.before_app_request
