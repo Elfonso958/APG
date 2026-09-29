@@ -1893,6 +1893,17 @@ def _charter_brief_details(brief: CharterBrief) -> dict:
         return {}
 
 
+def _published_charter_brief_links() -> dict[str, CharterBrief]:
+    """Map Envision flight IDs to the published charter brief containing them."""
+    links: dict[str, CharterBrief] = {}
+    for brief in CharterBrief.query.filter(CharterBrief.status == "Published").all():
+        for sector in _charter_brief_details(brief).get("sectors", []):
+            flight_id = str(sector.get("source_flight_id") or "").strip()
+            if flight_id:
+                links[flight_id] = brief
+    return links
+
+
 def _brief_print_date(value) -> str:
     try:
         return date.fromisoformat(str(value)[:10]).strftime("%A %-d %B %Y")
@@ -2015,7 +2026,9 @@ def ops_charter_brief_print(brief_id: int):
         entry for entry in handler_directory
         if selections.get(entry.get("airport")) == entry.get("label")
     ]
-    return render_template("charter_brief_print.html", brief=brief, details=details, handler_details=handler_details, format_date=_brief_print_date, format_time=_brief_print_time)
+    return_date = str(request.args.get("return_date") or "").strip()
+    crew_briefing_url = url_for("ui.dcs_crew_briefing", date=return_date) if return_date else None
+    return render_template("charter_brief_print.html", brief=brief, details=details, handler_details=handler_details, format_date=_brief_print_date, format_time=_brief_print_time, crew_briefing_url=crew_briefing_url)
 
 
 @ui_bp.get("/charter/check-in/<token>")
@@ -2350,6 +2363,16 @@ def api_dcs_gantt_data():
     except Exception as e:
         current_app.logger.warning(f"api_dcs_gantt_data: _apply_charter_manifests failed: {e}")
 
+    try:
+        published_briefs = _published_charter_brief_links()
+        for row in rows:
+            brief = published_briefs.get(str(row.get("envision_flight_id") or ""))
+            if brief:
+                row["charter_brief_url"] = url_for("ui.ops_charter_brief_print", brief_id=brief.id, return_date=day.isoformat())
+                row["charter_brief_version"] = brief.version
+    except Exception as e:
+        current_app.logger.warning("api_dcs_gantt_data: unable to attach published charter briefs: %s", e)
+
     # 6) APG plan presence
     try:
         attach_apg_presence_to_rows(
@@ -2442,6 +2465,8 @@ def api_dcs_gantt_data():
             "charter_manifest_filename": r.get("charter_manifest_filename") or "",
             "charter_manifest_updated_at": r.get("charter_manifest_updated_at"),
             "charter_flight_closed_at": r.get("charter_flight_closed_at"),
+            "charter_brief_url": r.get("charter_brief_url") or "",
+            "charter_brief_version": r.get("charter_brief_version"),
             "charter_gate": r.get("charter_gate") or "",
             "dcs_linked": bool(r.get("dcs_linked")),
             "envision_flight_id": r.get("envision_flight_id"),

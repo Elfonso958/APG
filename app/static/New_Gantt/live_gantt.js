@@ -4630,6 +4630,8 @@
       const counts = briefingPaxBreakdown(f);
       const defectCount = Number.isFinite(Number(f.defect_count)) ? Number(f.defect_count) : 0;
       const apgPlanId = getApgPlanId(f.apg_plan_id);
+      const charterBriefUrl = String(f.charter_brief_url || "");
+      const charterBriefVersion = Number(f.charter_brief_version || 0);
       const crewMember = (f.crew || []).find((c) => String(c.employee_no || "").trim().toUpperCase() === crewCode);
       const operatingCrew = (f.crew || []).filter((c) => c.is_operating !== false);
       const crewOverview = operatingCrew.length
@@ -4685,6 +4687,7 @@
         <div class="briefing-quick-actions">
           <button class="briefing-seatmap-button" type="button" data-seatmap-flight-id="${escapeHtml(String(f.envision_flight_id || ""))}">Seatmap</button>
           ${defectCount > 0 ? `<button class="briefing-mel-button" type="button" data-mel-reg="${escapeHtml(String(f.reg || ""))}" data-mel-reg-id="${escapeHtml(String(f.registration_id || ""))}" aria-label="View ${defectCount} open aircraft defect${defectCount === 1 ? "" : "s"}">MEL ${defectCount}</button>` : ""}
+          ${charterBriefUrl ? `<a class="briefing-charter-button" href="${escapeHtml(charterBriefUrl)}" target="_blank" rel="noopener noreferrer">Charter Brief${charterBriefVersion ? ` v${charterBriefVersion}` : ""}</a>` : ""}
           ${apgPlanId ? `<a class="briefing-apg-button" href="${apgRouteUrl(f, apgPlanId)}" target="_blank" rel="noopener noreferrer" aria-label="Open ${escapeHtml(flightCode(f))} in APG">APG</a>` : ""}
         </div>
         </article>`;
