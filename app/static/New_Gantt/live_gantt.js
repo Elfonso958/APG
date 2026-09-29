@@ -3824,7 +3824,8 @@
 
   function setDetail(f) {
     selectedFlight = f || null;
-    if (isBriefingView) document.getElementById("detailCard")?.classList.toggle("has-flight", !!f);
+    detailCard?.classList.toggle("has-flight", !!f);
+    document.querySelector(".layout")?.classList.toggle("has-detail", !!f);
     if (!f) {
       detailMuted.style.display = "";
       detailList.innerHTML = "";

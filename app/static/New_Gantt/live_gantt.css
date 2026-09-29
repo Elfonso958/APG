@@ -448,6 +448,8 @@ body {
   padding: 14px;
   overflow: auto;
 }
+.layout:not(.has-detail) { grid-template-columns: minmax(0, 1fr); }
+.detail:not(.has-flight) { display: none; }
 .detail h2 { margin: 0 0 8px 0; font-size: 1.05rem; }
 .detail .muted { color: var(--muted); }
 .detail-actions {

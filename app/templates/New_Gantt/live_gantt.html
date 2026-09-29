@@ -173,7 +173,9 @@
           <button id="btnPreviewManifest" class="btn btn-ghost" type="button">Preview Manifest</button>
           {% if not is_cabin_crew %}
           <button id="btnCargo" class="btn btn-ghost" type="button">Cargo</button>
+          {% if apg_is_admin %}
           <button id="btnCargoTest" class="btn btn-ghost" type="button">Cargo (Test)</button>
+          {% endif %}
           <button id="btnCharterManifest" class="btn btn-ghost" type="button">Charter Manifest</button>
           <button id="btnResetApg" class="btn btn-ghost" type="button">Reset APG Pax</button>
           <button id="btnSeatmap" class="btn btn-ghost" type="button">Seatmap</button>
