@@ -282,6 +282,7 @@ class AppConfig(db.Model):
     charter_passenger_weights_json = db.Column(db.Text, default="{}", nullable=False)
     catering_services_json = db.Column(db.Text, default="[]", nullable=False)
     airport_handling_json = db.Column(db.Text, default="[]", nullable=False)
+    charter_planner_registrations_json = db.Column(db.Text, default="[]", nullable=False)
     last_auto_started = db.Column(db.DateTime, nullable=True)
     last_auto_finished = db.Column(db.DateTime, nullable=True)
     last_envision_user_sync_at = db.Column(db.DateTime, nullable=True)

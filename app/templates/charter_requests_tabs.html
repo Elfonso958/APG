@@ -8,7 +8,7 @@
       <h1>Charter Requests</h1>
       <p>Upcoming requests ordered by the next operating day.</p>
     </div>
-    <button class="btn" type="button" onclick="document.getElementById('newRequest').showModal()">+ New request</button>
+    <div class="brief-heading-actions">{% if apg_is_admin %}<a class="btn secondary" href="{{ url_for('ui.ops_charter_planner_settings') }}">Planner aircraft</a>{% endif %}<button class="btn" type="button" onclick="document.getElementById('newRequest').showModal()">+ New request</button></div>
   </div>
   <div class="brief-heading-actions">
     <a class="btn {{ 'secondary' if active_tab != 'pending' else '' }}" href="{{ url_for('ui.ops_charter_requests') }}">Pending charters</a>

@@ -2101,6 +2101,32 @@ def ops_charter_requests():
     return render_template("charter_requests_tabs.html", request_rows=request_rows, can_operate=bool(user.is_admin or "operations" in _user_permissions(user)), format_date=_brief_print_date, active_tab=tab)
 
 
+@ui_bp.route("/ops/charter-planner-settings", methods=["GET", "POST"])
+@_admin_required
+def ops_charter_planner_settings():
+    config = db.session.get(AppConfig, 1) or AppConfig(id=1)
+    if request.method == "POST":
+        if not _csrf_is_valid(): abort(403)
+        selected = sorted({str(value).strip() for value in request.form.getlist("registration_id") if str(value).strip().isdigit()}, key=int)
+        config.charter_planner_registrations_json = json.dumps({registration_id: str(request.form.get(f"aircraft_type_{registration_id}") or "").strip() for registration_id in selected})
+        db.session.add(config); db.session.commit()
+        flash("Tail-planning aircraft settings saved.", "success")
+        return redirect(url_for("ui.ops_charter_planner_settings"))
+    try:
+        saved = json.loads(config.charter_planner_registrations_json or "[]")
+    except (TypeError, ValueError):
+        saved = []
+    selected = set(saved if isinstance(saved, list) else saved.keys())
+    aircraft_types = {} if isinstance(saved, list) else saved
+    try:
+        token = envision_authenticate()["token"]
+        registrations = sorted(envision_get_line_registrations(token), key=lambda item: str(item.get("registration") or ""))
+    except Exception as exc:
+        registrations = []
+        flash(f"Current Envision aircraft could not be loaded: {exc}", "danger")
+    return render_template("charter_planner_settings.html", registrations=registrations, selected=selected, aircraft_types=aircraft_types)
+
+
 @ui_bp.get("/ops/charter-requests/<int:request_id>/planning")
 @_login_required
 def ops_charter_request_planning(request_id):
@@ -2120,6 +2146,17 @@ def ops_charter_request_planning(request_id):
         raw_flights = _list_from_envision_payload(envision_get_flights(token, datetime.combine(day, time.min, tzinfo=NZ).astimezone(timezone.utc), datetime.combine(day + timedelta(days=1), time.min, tzinfo=NZ).astimezone(timezone.utc)))
         prior_flights = _list_from_envision_payload(envision_get_flights(token, datetime.combine(day - timedelta(days=14), time.min, tzinfo=NZ).astimezone(timezone.utc), datetime.combine(day, time.min, tzinfo=NZ).astimezone(timezone.utc)))
         registrations = sorted(envision_get_line_registrations(token), key=lambda item: str(item.get("registration") or ""))
+        config = db.session.get(AppConfig, 1)
+        try:
+            saved_registrations = json.loads((config.charter_planner_registrations_json if config else "[]") or "[]")
+        except (TypeError, ValueError):
+            saved_registrations = []
+        allowed_registration_ids = set(saved_registrations if isinstance(saved_registrations, list) else saved_registrations.keys())
+        aircraft_type_overrides = {} if isinstance(saved_registrations, list) else saved_registrations
+        if allowed_registration_ids:
+            registrations = [item for item in registrations if str(item.get("id") or "") in allowed_registration_ids]
+        for item in registrations:
+            item["planner_aircraft_type"] = str(aircraft_type_overrides.get(str(item.get("id") or "")) or item.get("model") or "Aircraft")
     except Exception as exc:
         current_app.logger.exception("Charter planning board could not load Envision")
         flash(f"The live Envision schedule could not be loaded: {exc}", "danger")
