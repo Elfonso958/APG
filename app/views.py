@@ -2130,7 +2130,34 @@ def ops_charter_request_planning(request_id):
         if not etd or etd.date() != day: continue
         scheduled.append({"tail": str(flight.get("flightRegistrationDescription") or flight.get("aircraftRegistration") or "Unassigned"), "flight": str(flight.get("flightNumberDescription") or "Flight"), "dep": str(flight.get("departurePlaceDescription") or ""), "arr": str(flight.get("arrivalPlaceDescription") or ""), "std": etd.strftime("%H%M"), "sta": eta.strftime("%H%M") if eta else ""})
     ghosts = [sector for sector in sectors if str(sector.get("date")) == day_value]
-    return render_template("charter_request_planning.html", charter_request=row, day=day_value, available_days=available_days, ghosts=ghosts, scheduled=scheduled, registrations=registrations)
+    maintenance_by_registration = {}
+    # Work orders are deliberately advisory in planning: a failed lookup must not
+    # hide the scheduled board or prevent Operations assigning an aircraft.
+    if registrations and token:
+        day_start = datetime.combine(day, time.min, tzinfo=NZ)
+        day_end = day_start + timedelta(days=1)
+        for registration in registrations:
+            registration_id = int(registration.get("id") or 0)
+            if not registration_id:
+                continue
+            try:
+                work_orders = _fetch_work_orders_for_registration(token, registration_id)
+                items = []
+                for work_order in work_orders:
+                    start = _parse_env_time_to_nz(work_order.get("plannedStartDate") or work_order.get("actualStartDate") or work_order.get("openDate"))
+                    end = _parse_env_time_to_nz(work_order.get("plannedFinishDate") or work_order.get("actualFinishDate") or work_order.get("closeDate"))
+                    if not start and not end:
+                        continue
+                    start = start or (end - timedelta(hours=2))
+                    end = end or (start + timedelta(hours=2))
+                    if end <= start:
+                        end = start + timedelta(hours=1)
+                    if start < day_end and end > day_start:
+                        items.append({"std": max(start, day_start).strftime("%H%M"), "sta": min(end, day_end).strftime("%H%M"), "title": str(work_order.get("description") or work_order.get("title") or "Maintenance"), "order": str(work_order.get("orderNo") or work_order.get("workOrderNo") or "")})
+                maintenance_by_registration[str(registration_id)] = items
+            except Exception:
+                current_app.logger.warning("Charter planner maintenance lookup failed for registration %s", registration_id)
+    return render_template("charter_request_planning.html", charter_request=row, day=day_value, available_days=available_days, ghosts=ghosts, scheduled=scheduled, registrations=registrations, maintenance_by_registration=maintenance_by_registration)
 
 
 @ui_bp.post("/ops/charter-requests/import")
