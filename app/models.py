@@ -142,6 +142,17 @@ class ManualApgFlightLink(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
+class ManualDcsFlightLink(db.Model):
+    __tablename__ = "manual_dcs_flight_links"
+
+    id = db.Column(db.Integer, primary_key=True)
+    envision_flight_id = db.Column(db.String(32), unique=True, index=True, nullable=False)
+    dcs_flight_json = db.Column(db.Text, nullable=False)
+    linked_by_user_id = db.Column(db.Integer, db.ForeignKey("app_users.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class AppUser(db.Model):
     """APG access assignments, optionally authenticated by Envision."""
     __tablename__ = "app_users"

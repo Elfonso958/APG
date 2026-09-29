@@ -28,6 +28,7 @@
        data-apg-cargo-summary-url-template="{{ url_for('api.api_apg_plan_cargo_summary', plan_id=0) }}"
        data-apg-reset-url="{{ url_for('api.api_apg_reset_passengers') }}"
        data-manual-apg-link-url-template="{{ url_for('api.api_dcs_manual_apg_link', envision_flight_id='__FLIGHT__') }}"
+       data-manual-dcs-link-url-template="{{ url_for('api.api_dcs_manual_dcs_link', envision_flight_id='__FLIGHT__') }}"
        data-manifest-preview-url="{{ url_for('api.api_dcs_manifest_preview') }}"
        data-charter-manifest-template-url="{{ url_for('api.api_charter_manifest_template') }}"
        data-charter-manifest-url="{{ url_for('api.api_charter_manifest_get') }}"

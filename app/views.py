@@ -1,7 +1,7 @@
 ﻿from flask import Blueprint, render_template, request, redirect, jsonify, flash, current_app,send_file, abort, url_for, make_response
 from datetime import date, datetime, time, timezone, timedelta
 from flask import session
-from .models import SyncRun, SyncFlightLog, AppConfig, CharterManifest, CharterBrief, AppUser, EmailSettings, PowerBiApiKey
+from .models import SyncRun, SyncFlightLog, AppConfig, CharterManifest, CharterBrief, AppUser, EmailSettings, PowerBiApiKey, ManualDcsFlightLink
 from .airport_handling import AIRPORT_HANDLERS, DEFAULT_CATERING_SERVICES, handlers_for_airports
 from . import db
 from .kmh_auth import create_kmh_session, clear_kmh_session, get_kmh_session
@@ -832,11 +832,41 @@ def _enrich_rows_with_dcs(rows: list[dict], nz_day: date) -> None:
     if not rows:
         return
 
+    manual_links = {}
+    try:
+        manual_links = {
+            str(link.envision_flight_id): json.loads(link.dcs_flight_json or "{}")
+            for link in ManualDcsFlightLink.query.all()
+        }
+    except Exception:
+        current_app.logger.exception("Unable to load manual DCS links")
+    for row in rows:
+        manual = manual_links.get(str(row.get("envision_flight_id") or ""))
+        if not isinstance(manual, dict):
+            continue
+        pax = manual.get("Passengers") or []
+        counts = _count_pax_types(pax)
+        row["pax_list"] = pax
+        row["dcs_linked"] = True
+        row["dcs_origin"] = str(manual.get("Origin") or row.get("dep") or "").upper()
+        row["dcs_destination"] = str(manual.get("Destination") or manual.get("ArrivalAirport") or row.get("ades") or "").upper()
+        row["adt"], row["chd"], row["inf"], row["pax_count"] = counts["ad"], counts["chd"], counts["inf"], counts["total"]
+        bags_kg = 0.0
+        for passenger in pax:
+            try:
+                bags_kg += float(passenger.get("BaggageWeight") or 0) if isinstance(passenger, dict) else 0.0
+            except (TypeError, ValueError):
+                pass
+        row["bags_kg"] = bags_kg
+        row["error"] = None
+
     max_workers = int(current_app.config.get("DCS_MAX_WORKERS", 8))
     app_obj = current_app._get_current_object()  # capture the real Flask app
 
     work: list[tuple[int, str, str, str, str]] = []
     for i, r in enumerate(rows):
+        if str(r.get("envision_flight_id") or "") in manual_links:
+            continue
         full_no = (r.get("flight_number") or "").strip().replace(" ", "").upper()
         origin  = (r.get("dep") or "").strip().upper()
         dest    = (r.get("ades") or r.get("dest") or "").strip().upper()

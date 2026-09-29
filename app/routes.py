@@ -12,7 +12,7 @@ from . import db, _normalise_sync_result
 import requests
 from sqlalchemy import func
 from zoneinfo import ZoneInfo
-from .models import SyncRun, SyncFlightLog, SyncFlightState, ManualApgFlightLink, AppConfig, ManifestUploadState, CharterManifest, EnvisionOtpFlightCache, FlightFreightAllocation, FlightCargoAllocation, EmailSettings, AppUser, PowerBiApiKey
+from .models import SyncRun, SyncFlightLog, SyncFlightState, ManualApgFlightLink, ManualDcsFlightLink, AppConfig, ManifestUploadState, CharterManifest, EnvisionOtpFlightCache, FlightFreightAllocation, FlightCargoAllocation, EmailSettings, AppUser, PowerBiApiKey
 from .kmh_auth import get_kmh_session
 from .helpers_manifest import _seat_sort_key, _format_ssrs, _calc_age, _parse_dcs_dob, generate_manifest_pdf_from_html, generate_pdf_modern
 from .charter_wallet import apple_wallet_pass, google_wallet_link, make_wallet_token, parse_wallet_token
@@ -181,6 +181,49 @@ def api_dcs_manual_apg_link(envision_flight_id: str):
     db.session.commit()
     _clear_live_gantt_cache()
     return jsonify(ok=True, apg_plan_id=plan_id)
+
+
+@api_bp.route("/dcs/manual-dcs-link/<string:envision_flight_id>", methods=["GET", "PUT", "DELETE"])
+def api_dcs_manual_dcs_link(envision_flight_id: str):
+    user = _manual_link_user()
+    if not user:
+        return jsonify(ok=False, error="Operations permission is required to manage manual flight links."), 403
+    flight_id = str(envision_flight_id or "").strip()
+    dep = str(request.args.get("dep") or "").strip().upper()
+    day = str(request.args.get("date") or "").strip()
+    designator = str(request.args.get("designator") or "").strip().upper()
+    flight_number = str(request.args.get("flight_number") or "").strip()
+    existing = ManualDcsFlightLink.query.filter_by(envision_flight_id=flight_id).first()
+    if request.method == "DELETE":
+        if existing:
+            db.session.delete(existing)
+            db.session.commit()
+        _clear_live_gantt_cache()
+        return jsonify(ok=True)
+    if not all((flight_id, dep, day, designator, flight_number)):
+        return jsonify(ok=False, error="Flight details are incomplete for a DCS search."), 400
+    try:
+        dcs = fetch_dcs_for_flight(dep, day, designator, flight_number, only_status=False)
+        candidates = (dcs or {}).get("Flights", []) if isinstance(dcs, dict) else (dcs or [])
+    except Exception as exc:
+        current_app.logger.exception("Unable to load DCS flights for manual link")
+        return jsonify(ok=False, error=f"Unable to load DCS flights: {exc}"), 502
+    candidates = [candidate for candidate in candidates if isinstance(candidate, dict)]
+    if request.method == "GET":
+        return jsonify(ok=True, flights=[{"index": i, "origin": str(item.get("Origin") or "---"), "destination": str(item.get("Destination") or item.get("ArrivalAirport") or "---"), "flight": str(item.get("FlightNumber") or item.get("Flight") or flight_number), "passengers": len(item.get("Passengers") or [])} for i, item in enumerate(candidates)])
+    try:
+        index = int((request.get_json(silent=True) or {}).get("index"))
+        selected = candidates[index]
+    except (TypeError, ValueError, IndexError):
+        return jsonify(ok=False, error="Choose a valid DCS flight."), 400
+    if existing is None:
+        existing = ManualDcsFlightLink(envision_flight_id=flight_id, dcs_flight_json="{}")
+        db.session.add(existing)
+    existing.dcs_flight_json = json.dumps(selected)
+    existing.linked_by_user_id = user.id
+    db.session.commit()
+    _clear_live_gantt_cache()
+    return jsonify(ok=True)
 
 
 @api_bp.before_app_request

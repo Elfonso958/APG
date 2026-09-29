@@ -12,6 +12,7 @@
   const apgCargoSummaryUrlTemplate = app.dataset.apgCargoSummaryUrlTemplate;
   const apgResetUrl = app.dataset.apgResetUrl;
   const manualApgLinkUrlTemplate = app.dataset.manualApgLinkUrlTemplate || "";
+  const manualDcsLinkUrlTemplate = app.dataset.manualDcsLinkUrlTemplate || "";
   const canManualLink = app.dataset.canManualLink === "1";
   const manifestPreviewUrl = app.dataset.manifestPreviewUrl;
   const charterManifestTemplateUrl = app.dataset.charterManifestTemplateUrl;
@@ -3961,6 +3962,9 @@
       ? `<a class="apg-route-link" href="${apgRouteUrl(f, apgPlanId)}" target="_blank" rel="noopener noreferrer" title="Open APG route ${apgPlanId}">APG Linked</a>`
       : `<span title="No APG plan">No APG</span>${canManualLink && f.envision_flight_id ? ` <button class="detail-manual-link" type="button" data-manual-apg-link="${escapeHtml(String(f.envision_flight_id))}">Manual link</button>` : ""}`;
     const dcsLinked = Boolean(f.dcs_linked);
+    const dcsLinkedHtml = dcsLinked
+      ? "DCS Linked"
+      : `No DCS${canManualLink && f.envision_flight_id ? ` <button class="detail-manual-link" type="button" data-manual-dcs-link="${escapeHtml(String(f.envision_flight_id))}">Manual link</button>` : ""}`;
 
     detailList.innerHTML = `
       <div class="detail-grid">
@@ -3974,7 +3978,7 @@
           <div class="kv">
             <span>Links</span>
             <strong>
-              <span title="DCS ${dcsLinked ? "linked" : "not linked"}">${dcsLinked ? "DCS Linked" : "No DCS"}</span>
+              <span title="DCS ${dcsLinked ? "linked" : "not linked"}">${dcsLinkedHtml}</span>
               |
               ${apgLinkedHtml}
             </strong>
@@ -4015,10 +4019,44 @@
     populateDetailCrew(f);
     populateDetailWeightBalance(f);
     detailList.querySelector("[data-manual-apg-link]")?.addEventListener("click", () => openManualApgLink(f));
+    detailList.querySelector("[data-manual-dcs-link]")?.addEventListener("click", () => openManualDcsLink(f));
   }
 
   function manualApgLinkUrl(f) {
     return manualApgLinkUrlTemplate.replace("__FLIGHT__", encodeURIComponent(String(f?.envision_flight_id || "")));
+  }
+
+  function manualDcsLinkUrl(f) {
+    const params = new URLSearchParams({ dep: String(f?.dep || ""), date: String(dayInput?.value || app.dataset.day || ""), designator: String(f?.designator || ""), flight_number: String(f?.flight_number || f?.flight || "") });
+    return `${manualDcsLinkUrlTemplate.replace("__FLIGHT__", encodeURIComponent(String(f?.envision_flight_id || "")))}?${params}`;
+  }
+
+  async function openManualDcsLink(f) {
+    if (!manualApgLinkDialog || !manualDcsLinkUrlTemplate || !f?.envision_flight_id) return;
+    manualApgLinkTitle.textContent = `Manually Link ${flightCode(f)} to DCS`;
+    manualApgLinkOptions.innerHTML = "";
+    manualApgLinkSearch.hidden = true;
+    manualApgLinkStatus.textContent = "Loading DCS flights...";
+    manualApgLinkDialog.showModal();
+    try {
+      const response = await fetch(manualDcsLinkUrl(f));
+      const data = await response.json();
+      if (!response.ok || data.ok === false) throw new Error(data.error || "Unable to load DCS flights");
+      const choices = Array.isArray(data.flights) ? data.flights : [];
+      manualApgLinkOptions.innerHTML = choices.length ? choices.map((item) => `<button type="button" class="manual-apg-link-option" data-dcs-index="${Number(item.index)}"><strong>${escapeHtml(item.flight)}</strong><span>${escapeHtml(`${item.origin} → ${item.destination}`)}</span><small>${Number(item.passengers)} passenger${Number(item.passengers) === 1 ? "" : "s"}</small></button>`).join("") : `<div class="muted">No DCS flights were returned for this flight number, departure station, and date.</div>`;
+      manualApgLinkOptions.querySelectorAll("[data-dcs-index]").forEach((button) => button.addEventListener("click", async () => {
+        button.disabled = true;
+        manualApgLinkStatus.textContent = "Saving link...";
+        try {
+          const save = await fetch(manualDcsLinkUrl(f), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ index: Number(button.dataset.dcsIndex) }) });
+          const result = await save.json();
+          if (!save.ok || result.ok === false) throw new Error(result.error || "Unable to save manual DCS link");
+          manualApgLinkDialog.close();
+          await loadData({ showSpinner: false });
+        } catch (err) { manualApgLinkStatus.textContent = err.message || String(err); button.disabled = false; }
+      }));
+      manualApgLinkStatus.textContent = `${choices.length} DCS flight${choices.length === 1 ? "" : "s"} available.`;
+    } catch (err) { manualApgLinkStatus.textContent = err.message || String(err); }
   }
 
   async function openManualApgLink(f) {
@@ -4026,6 +4064,7 @@
     manualApgLinkTitle.textContent = `Manually Link ${flightCode(f)} to APG`;
     manualApgLinkOptions.innerHTML = "";
     manualApgLinkSearch.value = "";
+    manualApgLinkSearch.hidden = false;
     manualApgLinkStatus.textContent = "Loading APG flights...";
     manualApgLinkDialog.showModal();
     try {
