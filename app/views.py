@@ -2173,6 +2173,9 @@ def ops_charter_requests():
         except ValueError:
             flash("Add at least one valid charter sector.", "danger")
             return redirect(url_for("ui.ops_charter_requests"))
+        if any(str(sector.get("aircraft_type") or "") not in {"SF34", "ATR72"} for sector in sectors):
+            flash("Choose an aircraft type for every requested aircraft group.", "danger")
+            return redirect(url_for("ui.ops_charter_requests"))
         ref = str(request.form.get("reference") or "").strip().upper() or f"CR-{_nz_today():%Y%m%d}-{secrets.token_hex(2).upper()}"
         active_reference_statuses = {
             "Pending approval",
@@ -2320,6 +2323,18 @@ def ops_charter_request_planning(request_id):
         if not etd or etd.date() != day: continue
         scheduled.append({"tail": str(flight.get("flightRegistrationDescription") or flight.get("aircraftRegistration") or "Unassigned"), "flight": str(flight.get("flightNumberDescription") or "Flight"), "dep": str(flight.get("departurePlaceDescription") or ""), "arr": str(flight.get("arrivalPlaceDescription") or ""), "std": etd.strftime("%H%M"), "sta": eta.strftime("%H%M") if eta else "", "flight_type": str(flight.get("flightTypeDescription") or flight.get("flightType") or "")})
     ghosts = [sector for sector in sectors if str(sector.get("date")) == day_value]
+    aircraft_groups = []
+    seen_groups = set()
+    for index, sector in enumerate(sectors, start=1):
+        group_id = str(sector.get("aircraft_group") or "aircraft-1")
+        if group_id in seen_groups:
+            continue
+        seen_groups.add(group_id)
+        aircraft_groups.append({
+            "id": group_id,
+            "label": f"Aircraft {len(aircraft_groups) + 1}",
+            "aircraft_type": str(sector.get("aircraft_type") or "Aircraft type not selected"),
+        })
     ground_positions = {}
     day_start = datetime.combine(day, time.min, tzinfo=NZ)
     for flight in prior_flights:
@@ -2359,7 +2374,7 @@ def ops_charter_request_planning(request_id):
                 maintenance_by_registration[str(registration_id)] = items
             except Exception:
                 current_app.logger.warning("Charter planner maintenance lookup failed for registration %s", registration_id)
-    return render_template("charter_request_planning.html", charter_request=row, day=day_value, available_days=available_days, ghosts=ghosts, scheduled=scheduled, registrations=registrations, maintenance_by_registration=maintenance_by_registration, ground_positions=ground_positions, planning_mode="change_tail" if row.status == "Pushed to Envision" else "approve")
+    return render_template("charter_request_planning.html", charter_request=row, day=day_value, available_days=available_days, ghosts=ghosts, aircraft_groups=aircraft_groups, scheduled=scheduled, registrations=registrations, maintenance_by_registration=maintenance_by_registration, ground_positions=ground_positions, planning_mode="change_tail" if row.status == "Pushed to Envision" else "approve")
 
 
 @ui_bp.post("/ops/charter-requests/import")
@@ -2439,7 +2454,13 @@ def ops_charter_request_detail(request_id):
                     return redirect(url_for("ui.ops_charter_request_planning", request_id=row.id))
                 sectors = _request_sectors(row)
                 _allocate_charter_numbers(sectors, tour_group)
-                registration_id = request.form.get("registration_id", type=int)
+                try:
+                    tail_assignments = json.loads(request.form.get("tail_assignments") or "{}")
+                except (TypeError, ValueError):
+                    tail_assignments = {}
+                if not isinstance(tail_assignments, dict):
+                    tail_assignments = {}
+                legacy_registration_id = request.form.get("registration_id", type=int)
                 try:
                     token = envision_authenticate()["token"]
                     # A flight number must be unique on its operating day. Check both
@@ -2465,9 +2486,15 @@ def ops_charter_request_detail(request_id):
                     if conflicts:
                         flash(f"Approval stopped: flight number already exists — {', '.join(conflicts[:5])}. Choose another middle digit.", "danger")
                         return redirect(url_for("ui.ops_charter_request_planning", request_id=row.id))
-                    registration = next((item for item in envision_get_line_registrations(token) if int(item.get("id") or 0) == registration_id), None)
-                    if not registration: raise RuntimeError("Select an operating tail in the planning Gantt before approval.")
-                    for sector in sectors: sector["tail"] = str(registration.get("registration") or registration.get("registrationDescription") or "")
+                    registrations_by_id = {str(item.get("id") or ""): item for item in envision_get_line_registrations(token)}
+                    group_ids = {str(sector.get("aircraft_group") or "aircraft-1") for sector in sectors}
+                    if legacy_registration_id and not tail_assignments:
+                        tail_assignments = {group_id: legacy_registration_id for group_id in group_ids}
+                    missing_groups = [group_id for group_id in group_ids if not str(tail_assignments.get(group_id) or "") in registrations_by_id]
+                    if missing_groups: raise RuntimeError("Assign an operating tail to every requested aircraft group in the planning Gantt before approval.")
+                    for sector in sectors:
+                        registration = registrations_by_id[str(tail_assignments[str(sector.get("aircraft_group") or "aircraft-1")])]
+                        sector["tail"] = str(registration.get("registration") or registration.get("registrationDescription") or "")
                     types = envision_get_flight_types(token)
                     for sector in sectors:
                         if sector.get("envision_flight_id"): continue
@@ -2476,7 +2503,8 @@ def ops_charter_request_detail(request_id):
                         if not type_row: raise RuntimeError(f"No Envision flight type found for {sector.get('flight_type') or 'Charter'}.")
                         etd, eta = _parse_charter_local(sector.get("std"), sector.get("date")), _parse_charter_local(sector.get("sta"), sector.get("date"))
                         if eta <= etd: eta += timedelta(days=1)
-                        created = envision_create_flight(token, {"ignoreValidations":False,"flightDate":etd.astimezone(timezone.utc).isoformat().replace("+00:00","Z"),"departurePlaceId":_resolve_charter_place(token, sector.get("dep")),"arrivalPlaceId":_resolve_charter_place(token, sector.get("arr")),"scheduledTimeDeparture":etd.astimezone(timezone.utc).isoformat().replace("+00:00","Z"),"scheduledTimeArrival":eta.astimezone(timezone.utc).isoformat().replace("+00:00","Z"),"flightTypeId":int(type_row["id"]),"modelId":int(registration.get("modelId") or 0),"registrationId":registration_id,"flightNumber":sector["flight_number"]})
+                        registration = registrations_by_id[str(tail_assignments[str(sector.get("aircraft_group") or "aircraft-1")])]
+                        created = envision_create_flight(token, {"ignoreValidations":False,"flightDate":etd.astimezone(timezone.utc).isoformat().replace("+00:00","Z"),"departurePlaceId":_resolve_charter_place(token, sector.get("dep")),"arrivalPlaceId":_resolve_charter_place(token, sector.get("arr")),"scheduledTimeDeparture":etd.astimezone(timezone.utc).isoformat().replace("+00:00","Z"),"scheduledTimeArrival":eta.astimezone(timezone.utc).isoformat().replace("+00:00","Z"),"flightTypeId":int(type_row["id"]),"modelId":int(registration.get("modelId") or 0),"registrationId":int(registration.get("id") or 0),"flightNumber":sector["flight_number"]})
                         sector["envision_flight_id"] = str(created.get("id") or "")
                     row.sectors_json = json.dumps(sectors)
                     row.status = "Pushed to Envision"
@@ -2488,12 +2516,21 @@ def ops_charter_request_detail(request_id):
             db.session.add(row); db.session.commit(); flash(f"Request {row.status.lower()}.", "success")
         elif action == "change_tail" and row.status == "Pushed to Envision":
             try:
-                registration_id = int(request.form.get("registration_id") or 0)
+                try:
+                    tail_assignments = json.loads(request.form.get("tail_assignments") or "{}")
+                except (TypeError, ValueError):
+                    tail_assignments = {}
                 token = envision_authenticate()["token"]
-                registration = next((item for item in envision_get_line_registrations(token) if int(item.get("id") or 0) == registration_id), None)
-                if not registration: raise RuntimeError("Select a current Envision aircraft registration.")
                 sectors = _request_sectors(row)
+                registrations_by_id = {str(item.get("id") or ""): item for item in envision_get_line_registrations(token)}
+                group_ids = {str(sector.get("aircraft_group") or "aircraft-1") for sector in sectors}
+                legacy_registration_id = request.form.get("registration_id", type=int)
+                if legacy_registration_id and not tail_assignments:
+                    tail_assignments = {group_id: legacy_registration_id for group_id in group_ids}
+                if any(str(tail_assignments.get(group_id) or "") not in registrations_by_id for group_id in group_ids):
+                    raise RuntimeError("Assign an operating tail to every requested aircraft group in the planning Gantt.")
                 for sector in sectors:
+                    registration = registrations_by_id[str(tail_assignments[str(sector.get("aircraft_group") or "aircraft-1")])]
                     flight_id = str(sector.get("envision_flight_id") or "").strip()
                     if not flight_id: raise RuntimeError(f"{sector.get('flight_number') or 'A sector'} is not linked to an Envision flight.")
                     envision_change_registration(token, int(flight_id), {"ignoreValidations": True, "flightId": int(flight_id), "lineId": int(registration.get("lineId") or registration.get("id") or 0), "crewPositions": [{"id": 0, "employeeId": 0, "crewPositionId": 0}]})
