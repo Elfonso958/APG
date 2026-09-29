@@ -2240,7 +2240,8 @@ def ops_charter_requests():
             group["request"].reference = Markup(f'<a id="charter-request-{request_row.id}" href="{escape(url_for("ui.ops_charter_request_edit", request_id=request_row.id))}">{escape(reference)}</a>')
         else:
             group["request"].reference = Markup(f'<span id="charter-request-{request_row.id}">{escape(reference)}</span>')
-    return render_template("charter_requests_tabs.html", request_rows=request_rows, can_operate=bool(user.is_admin or "operations" in _user_permissions(user)), format_date=_brief_print_date, active_tab=tab, cancellation_codes=cancellation_codes)
+    catering_services, _ = _charter_operations_directory()
+    return render_template("charter_requests_tabs.html", request_rows=request_rows, can_operate=bool(user.is_admin or "operations" in _user_permissions(user)), format_date=_brief_print_date, active_tab=tab, cancellation_codes=cancellation_codes, catering_services=catering_services)
 
 
 @ui_bp.route("/ops/charter-planner-settings", methods=["GET", "POST"])

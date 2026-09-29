@@ -39,5 +39,6 @@
     <footer><button class="btn secondary" id="addRequestSector" type="button">Add sector</button><button class="btn" type="submit">Submit for approval</button></footer>
   </form>
 </dialog>
-<script src="{{ url_for('static', filename='charter_requests.js') }}?v=4"></script>
+<script>window.charterRequestCateringServices = {{ catering_services|tojson }};</script>
+<script src="{{ url_for('static', filename='charter_requests.js') }}?v=5"></script>
 {% endblock %}

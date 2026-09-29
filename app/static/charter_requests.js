@@ -2,6 +2,7 @@
   const body = document.getElementById('requestSectorRows');
   const form = document.getElementById('requestForm');
   if (!body || !form) return;
+  const cateringServices = Array.isArray(window.charterRequestCateringServices) ? window.charterRequestCateringServices : [];
 
   // Airport co-ordinates allow a practical block-time estimate without an external API.
   const airports = {
@@ -49,6 +50,7 @@
     const value = row[key] || '';
     if (key === 'aircraft_type') return `<select data-row="${index}" data-key="${key}"><option value="">Select</option><option value="SF34" ${value === 'SF34' ? 'selected' : ''}>SF34</option><option value="ATR72" ${value === 'ATR72' ? 'selected' : ''}>ATR 72</option></select>`;
     if (key === 'flight_type') return `<select data-row="${index}" data-key="${key}"><option value="Charter" ${value === 'Charter' || !value ? 'selected' : ''}>Charter</option><option value="Charter Positioning" ${value === 'Charter Positioning' ? 'selected' : ''}>Charter Positioning</option></select>`;
+    if (key === 'catering') return `<select data-row="${index}" data-key="${key}"><option value="">No catering selected</option>${cateringServices.map(service => `<option value="${service}" ${value === service ? 'selected' : ''}>${service}</option>`).join('')}</select>`;
     const type = key === 'date' ? 'type="date"' : '';
     const placeholder = key === 'flight_type' ? 'placeholder="Charter / Position"' : key === 'sta' ? 'placeholder="Calculated"' : '';
     return `<input ${type} data-row="${index}" data-key="${key}" value="${value}" ${placeholder}>`;
