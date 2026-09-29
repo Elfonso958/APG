@@ -59,7 +59,7 @@
       if (name === "accommodation") row.hotel_lookup = index;
       const contentFields = isGround ? fields[name].filter((field) => !["date", "location", "google_place_id"].includes(field)) : fields[name];
       const heading = isGround ? `<h3 class="ground-day-heading">${esc(longDate(row.date || "Date TBC"))} · ${esc(row.location || "Location TBC")}</h3><input type="hidden" data-field="date" value="${esc(row.date)}"><input type="hidden" data-field="location" value="${esc(row.location)}">` : "";
-      return `<article class="brief-item" data-list-row="${name}"><div class="brief-item-grid">${heading}${contentFields.map((field) => `<label>${field.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())}${input(field, row[field])}</label>`).join("")}</div>${row._auto_ground ? "" : '<button type="button" class="remove-row">×</button>'}</article>`;
+      return `<article class="brief-item" data-list-row="${name}"><div class="brief-item-grid">${heading}${contentFields.map((field) => field === "hotel_lookup" ? input(field, row[field]) : `<label>${field.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())}${input(field, row[field])}</label>`).join("")}</div>${row._auto_ground ? "" : '<button type="button" class="remove-row">×</button>'}</article>`;
     }).join("");
   }
   function renderHandlersOld() {
