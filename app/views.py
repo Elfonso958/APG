@@ -1998,15 +1998,22 @@ def ops_charter_requests_sync_envision():
             changed = False
             for sector in sectors:
                 if sector.get("envision_flight_id"): continue
-                std = str(sector.get("std") or "").replace(":", "")
-                sta = str(sector.get("sta") or "").replace(":", "")
+                try:
+                    requested_etd = _parse_charter_local(sector.get("std"), sector.get("date"))
+                    requested_eta = _parse_charter_local(sector.get("sta"), sector.get("date"))
+                    if requested_eta <= requested_etd: requested_eta += timedelta(days=1)
+                except Exception:
+                    continue
+                best_match, best_score = None, None
                 for flight in flights:
                     dep = str(flight.get("departurePlaceDescription") or "").upper().strip()
                     arr = str(flight.get("arrivalPlaceDescription") or "").upper().strip()
                     etd = _parse_env_time_to_nz(flight.get("departureScheduled")); eta = _parse_env_time_to_nz(flight.get("arrivalScheduled"))
-                    if not etd or not eta: continue
-                    if (dep, arr, etd.date().isoformat(), etd.strftime("%H%M"), eta.strftime("%H%M")) != (str(sector.get("dep") or "").upper(), str(sector.get("arr") or "").upper(), str(sector.get("date")), std, sta): continue
-                    sector.update({"envision_flight_id":str(flight.get("id") or ""),"flight_number":str(flight.get("flightNumberDescription") or sector.get("flight_number") or ""),"tail":str(flight.get("flightRegistrationDescription") or flight.get("aircraftRegistration") or "")}); linked += 1; changed = True; break
+                    if not etd or not eta or (dep, arr, etd.date().isoformat()) != (str(sector.get("dep") or "").upper(), str(sector.get("arr") or "").upper(), str(sector.get("date"))): continue
+                    score = abs((etd - requested_etd).total_seconds()) + abs((eta - requested_eta).total_seconds())
+                    if abs((etd - requested_etd).total_seconds()) <= 7200 and abs((eta - requested_eta).total_seconds()) <= 7200 and (best_score is None or score < best_score): best_match, best_score = flight, score
+                if best_match:
+                    sector.update({"envision_flight_id":str(best_match.get("id") or ""),"flight_number":str(best_match.get("flightNumberDescription") or sector.get("flight_number") or ""),"tail":str(best_match.get("flightRegistrationDescription") or best_match.get("aircraftRegistration") or "")}); linked += 1; changed = True
             if changed: row.sectors_json = json.dumps(sectors); db.session.add(row)
         db.session.commit(); flash(f"Envision sync linked {linked} existing sector(s).", "success")
     except Exception as exc:
