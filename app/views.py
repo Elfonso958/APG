@@ -2118,11 +2118,12 @@ def ops_charter_request_planning(request_id):
         day = date.fromisoformat(day_value)
         token = envision_authenticate()["token"]
         raw_flights = _list_from_envision_payload(envision_get_flights(token, datetime.combine(day, time.min, tzinfo=NZ).astimezone(timezone.utc), datetime.combine(day + timedelta(days=1), time.min, tzinfo=NZ).astimezone(timezone.utc)))
+        prior_flights = _list_from_envision_payload(envision_get_flights(token, datetime.combine(day - timedelta(days=14), time.min, tzinfo=NZ).astimezone(timezone.utc), datetime.combine(day, time.min, tzinfo=NZ).astimezone(timezone.utc)))
         registrations = sorted(envision_get_line_registrations(token), key=lambda item: str(item.get("registration") or ""))
     except Exception as exc:
         current_app.logger.exception("Charter planning board could not load Envision")
         flash(f"The live Envision schedule could not be loaded: {exc}", "danger")
-        raw_flights, registrations = [], []
+        raw_flights, prior_flights, registrations = [], [], []
     scheduled = []
     for flight in raw_flights:
         etd = _parse_env_time_to_nz(flight.get("departureEstimate") or flight.get("departureScheduled"))
@@ -2130,6 +2131,18 @@ def ops_charter_request_planning(request_id):
         if not etd or etd.date() != day: continue
         scheduled.append({"tail": str(flight.get("flightRegistrationDescription") or flight.get("aircraftRegistration") or "Unassigned"), "flight": str(flight.get("flightNumberDescription") or "Flight"), "dep": str(flight.get("departurePlaceDescription") or ""), "arr": str(flight.get("arrivalPlaceDescription") or ""), "std": etd.strftime("%H%M"), "sta": eta.strftime("%H%M") if eta else ""})
     ghosts = [sector for sector in sectors if str(sector.get("date")) == day_value]
+    ground_positions = {}
+    day_start = datetime.combine(day, time.min, tzinfo=NZ)
+    for flight in prior_flights:
+        arrival = _parse_env_time_to_nz(flight.get("arrivalEstimate") or flight.get("arrivalScheduled"))
+        tail = str(flight.get("flightRegistrationDescription") or flight.get("aircraftRegistration") or "").strip()
+        airport = str(flight.get("arrivalPlaceDescription") or "").strip()
+        if not tail or not airport or not arrival or arrival > day_start:
+            continue
+        current = ground_positions.get(tail)
+        if not current or arrival > current["arrival"]:
+            ground_positions[tail] = {"airport": airport, "arrival": arrival}
+    ground_positions = {tail: {"airport": item["airport"], "arrival": item["arrival"].strftime("%d %b %H%M")} for tail, item in ground_positions.items()}
     maintenance_by_registration = {}
     # Work orders are deliberately advisory in planning: a failed lookup must not
     # hide the scheduled board or prevent Operations assigning an aircraft.
@@ -2157,7 +2170,7 @@ def ops_charter_request_planning(request_id):
                 maintenance_by_registration[str(registration_id)] = items
             except Exception:
                 current_app.logger.warning("Charter planner maintenance lookup failed for registration %s", registration_id)
-    return render_template("charter_request_planning.html", charter_request=row, day=day_value, available_days=available_days, ghosts=ghosts, scheduled=scheduled, registrations=registrations, maintenance_by_registration=maintenance_by_registration)
+    return render_template("charter_request_planning.html", charter_request=row, day=day_value, available_days=available_days, ghosts=ghosts, scheduled=scheduled, registrations=registrations, maintenance_by_registration=maintenance_by_registration, ground_positions=ground_positions)
 
 
 @ui_bp.post("/ops/charter-requests/import")
