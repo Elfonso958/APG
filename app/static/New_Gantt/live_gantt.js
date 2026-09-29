@@ -2730,7 +2730,7 @@
       return `<div class="freight-map-hold" title="${escapeHtml(displayLabel)}">
         <strong>${escapeHtml(displayLabel)}</strong>
         <label>
-          <span>Freight kg</span>
+          <span>Cargo kg</span>
           <input type="number" min="0" step="0.1" class="freight-map-hold-input" data-label="${escapeHtml(label)}" value="${Number(row.freight_kg || 0).toFixed(1)}">
         </label>
         <label>
