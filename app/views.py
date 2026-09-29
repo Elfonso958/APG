@@ -2091,7 +2091,7 @@ def ops_charter_requests():
     for group in request_rows:
         reference = str(group["request"].reference)
         group["request"].reference = Markup(f'<span id="charter-request-{group["request"].id}">{escape(reference)}</span>')
-    return render_template("charter_requests_board_v4.html", request_rows=request_rows, can_operate=bool(user.is_admin or "operations" in _user_permissions(user)), format_date=_brief_print_date)
+    return render_template("charter_requests_board_v5.html", request_rows=request_rows, can_operate=bool(user.is_admin or "operations" in _user_permissions(user)), format_date=_brief_print_date)
 
 
 @ui_bp.post("/ops/charter-requests/import")
