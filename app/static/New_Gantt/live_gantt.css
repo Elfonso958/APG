@@ -1748,6 +1748,21 @@ body[data-theme="dark"] .wb-inline-status.is-over {
   box-sizing: border-box;
   overflow: hidden;
 }
+#cargoDialog.is-maximised {
+  width: 100vw;
+  max-width: none;
+  height: 100dvh;
+  max-height: none;
+  margin: 0;
+  border-radius: 0;
+}
+#cargoDialog.is-maximised .flight-edit-shell { padding-inline: clamp(16px, 3vw, 48px); }
+#cargoDialog.is-maximised .cargo-summary-strip {
+  position: sticky;
+  bottom: 0;
+  z-index: 18;
+  box-shadow: 0 -10px 24px color-mix(in srgb, var(--panel) 88%, transparent);
+}
 
 #cargoDialog .flight-edit-shell {
   height: 100%;

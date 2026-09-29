@@ -107,6 +107,7 @@
   const cargoTitle = document.getElementById("cargoTitle");
   const cargoWeightsSummary = document.getElementById("cargoWeightsSummary");
   const cargoEditor = document.getElementById("cargoEditor");
+  const btnCargoFullscreen = document.getElementById("btnCargoFullscreen");
   const btnCargoSave = document.getElementById("btnCargoSave");
   const cargoSaveStatus = document.getElementById("cargoSaveStatus");
   const btnCargoRefresh = document.getElementById("btnCargoRefresh");
@@ -3416,6 +3417,15 @@
     await Promise.allSettled([populateCargoWeightsSummary(f), populateCargoEditor(f)]);
   }
 
+  function setCargoDialogFullscreen(maximised) {
+    if (!cargoDialog) return;
+    cargoDialog.classList.toggle("is-maximised", maximised);
+    if (btnCargoFullscreen) {
+      btnCargoFullscreen.textContent = maximised ? "Minimise" : "Maximise";
+      btnCargoFullscreen.setAttribute("aria-pressed", String(maximised));
+    }
+  }
+
   async function openCargoTestDialog() {
     return openCargoDialog(true);
   }
@@ -5704,6 +5714,8 @@
   if (btnOpenManifestPreview) btnOpenManifestPreview.addEventListener("click", withBusy(btnOpenManifestPreview, "Loading...", previewManifest));
   if (btnCargo) btnCargo.addEventListener("click", withBusy(btnCargo, "Loading...", openCargoDialog));
   if (btnCargoTest) btnCargoTest.addEventListener("click", withBusy(btnCargoTest, "Loading...", openCargoTestDialog));
+  if (btnCargoFullscreen) btnCargoFullscreen.addEventListener("click", () => setCargoDialogFullscreen(!cargoDialog?.classList.contains("is-maximised")));
+  cargoDialog?.addEventListener("close", () => setCargoDialogFullscreen(false));
   if (btnCargoSave) btnCargoSave.addEventListener("click", async () => {
     btnCargoSave.disabled = true;
     try {
