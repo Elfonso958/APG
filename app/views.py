@@ -2016,8 +2016,11 @@ def ops_charter_requests():
         days = {}
         for sector in sectors:
             days.setdefault(str(sector.get("date") or "Date TBC"), []).append(sector)
-        request_rows.append({"request": item, "days": days})
-    return render_template("charter_requests_board.html", request_rows=request_rows, can_operate=bool(user.is_admin or "operations" in _user_permissions(user)), format_date=_brief_print_date)
+        dated = sorted((day for day in days if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day)))
+        start = date.fromisoformat(dated[0]) if dated else None
+        request_rows.append({"request": item, "days": days, "start_date": start, "days_to_charter": (start - _nz_today()).days if start else None})
+    request_rows.sort(key=lambda item: (item["start_date"] is None, item["start_date"] or date.max))
+    return render_template("charter_requests_board_v2.html", request_rows=request_rows, can_operate=bool(user.is_admin or "operations" in _user_permissions(user)), format_date=_brief_print_date)
 
 
 @ui_bp.post("/ops/charter-requests/import")
