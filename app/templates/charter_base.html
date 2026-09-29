@@ -32,6 +32,7 @@
       {% if apg_is_admin %}<button class="charter-apg-link charter-settings-button" type="button" onclick="document.getElementById('charterEmailSettings').showModal()">Email settings</button>{% endif %}
       {% if apg_current_user %}
       <details class="charter-account"><summary>{{ apg_current_user.display_name or apg_current_user.email }}</summary><form method="post" action="{{ url_for('ui.apg_logout') }}"><input type="hidden" name="csrf_token" value="{{ apg_csrf_token }}"><button type="submit">Sign out</button></form></details>
+      {% if apg_is_admin %}<button class="charter-apg-link" type="button" title="Planner debugging settings" onclick="document.getElementById('charterPlannerSettings').showModal()">⚙</button>{% endif %}
       {% endif %}
     </div>
   </header>
@@ -40,6 +41,7 @@
     {% block content %}{% endblock %}
   </main>
   {% if apg_is_admin %}<dialog id="charterEmailSettings" class="charter-settings-modal"><div class="charter-settings-modal-head"><strong>Charter email settings</strong><button type="button" onclick="document.getElementById('charterEmailSettings').close()">Close</button></div><iframe title="Charter email settings" src="{{ url_for('ui.admin_email_settings', embed='1') }}"></iframe></dialog>{% endif %}
+  {% if apg_is_admin %}<dialog id="charterPlannerSettings" class="envision-flights-dialog"><form method="post" action="{{ url_for('ui.ops_charter_planner_debug_settings') }}" class="envision-flights-shell"><input type="hidden" name="csrf_token" value="{{ apg_csrf_token }}"><header><div><p class="brief-kicker">Charter planner</p><h2>Debug settings</h2><p>Use this only when troubleshooting an Envision tail change.</p></div><button class="btn secondary" type="button" onclick="this.closest('dialog').close()">Close</button></header><label style="display:block;padding:18px"><input type="checkbox" name="tail_debug_enabled" value="1" {{ 'checked' if charter_tail_debug_enabled else '' }}> Show Envision tail-change request and response diagnostics</label><footer><button class="btn" type="submit">Save settings</button></footer></form></dialog>{% endif %}
   {% block scripts %}{% endblock %}
 </body>
 </html>

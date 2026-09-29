@@ -326,12 +326,14 @@ def _charter_request_access(user=None):
 @ui_bp.app_context_processor
 def _inject_apg_account_context():
     user = _current_apg_user()
+    config = db.session.get(AppConfig, 1) if user and user.is_admin else None
     return {
         "apg_current_user": user,
         "apg_is_admin": bool(user and user.is_admin),
         "apg_permissions": _user_permissions(user),
         "apg_is_cabin_crew": _is_cabin_crew_user(user),
         "apg_csrf_token": _csrf_token(),
+        "charter_tail_debug_enabled": bool(config and config.charter_tail_debug_enabled),
     }
 
 
@@ -2083,10 +2085,17 @@ def ops_charter_request_create_brief(request_id):
         if source_ids & _charter_brief_request_ids(existing):
             flash("A draft charter brief already exists for one of these requests.", "success")
             return redirect(url_for("ui.ops_charter_brief_edit", brief_id=existing.id))
+    selected_sector_keys = {str(value) for value in request.form.getlist("sector_key") if str(value)}
     sectors = []
     for source_row in source_rows:
-        for sector in _allocate_charter_numbers(_request_sectors(source_row)):
-            sectors.append({**sector, "source_charter_request_id": source_row.id})
+        for sector_index, sector in enumerate(_allocate_charter_numbers(_request_sectors(source_row))):
+            sector_key = f"{source_row.id}:{sector_index}"
+            if selected_sector_keys and sector_key not in selected_sector_keys:
+                continue
+            sectors.append({**sector, "source_charter_request_id": source_row.id, "source_sector_key": sector_key})
+    if not sectors:
+        flash("Select at least one flight to include in the charter brief.", "danger")
+        return redirect(url_for("ui.ops_charter_requests", tab="approved"))
     sectors.sort(key=lambda sector: (str(sector.get("date") or ""), str(sector.get("std") or "")))
     dated = sorted({str(sector.get("date") or "") for sector in sectors if sector.get("date")})
     if not dated:
@@ -2140,7 +2149,7 @@ def ops_charter_request_create_brief(request_id):
     start_date, end_date = date.fromisoformat(dated[0]), date.fromisoformat(dated[-1])
     reference = f"CB-{start_date:%Y%m%d}-{secrets.token_hex(2).upper()}"
     source_label = " + ".join(item.reference for item in source_rows)
-    details = {"source_charter_request_id": row.id, "source_charter_request_ids": [item.id for item in source_rows], "sectors": brief_sectors, "crew": crew, "accommodation": [], "transport": [], "ports": [], "handler_selections": {}, "bag_weights_text": "", "operations_notes": "", "crew_notes": ""}
+    details = {"source_charter_request_id": row.id, "source_charter_request_ids": [item.id for item in source_rows], "source_sector_keys": [sector.get("source_sector_key") for sector in sectors], "sectors": brief_sectors, "crew": crew, "accommodation": [], "transport": [], "ports": [], "handler_selections": {}, "bag_weights_text": "", "operations_notes": "", "crew_notes": ""}
     brief = CharterBrief(reference=reference, title=" + ".join(item.title or item.reference for item in source_rows), charterer=source_label, start_date=start_date, end_date=end_date, details_json=json.dumps(details, ensure_ascii=False))
     db.session.add(brief); db.session.commit()
     flash("Combined draft charter brief created." if len(source_rows) > 1 else "Draft charter brief created from the approved request.", "success")
@@ -2249,12 +2258,18 @@ def ops_charter_requests():
         return redirect(url_for("ui.ops_charter_request_detail", request_id=row.id))
     tab = request.args.get("tab") if request.args.get("tab") in {"approved", "cancelled"} else "pending"
     rows = CharterRequest.query.order_by(CharterRequest.created_at.desc()).all()
+    pending_count = sum(row.status in {"Pending approval", "Cancellation requested"} for row in rows)
+    if tab == "pending" and not pending_count:
+        tab = "approved"
     if tab == "approved": rows = [row for row in rows if row.status in {"Approved", "Pushed to Envision"}]
     elif tab == "cancelled": rows = [row for row in rows if row.status == "Cancelled"]
     else: rows = [row for row in rows if row.status in {"Pending approval", "Cancellation requested"}]
     request_rows = []
     for item in rows:
         sectors = _allocate_charter_numbers(_request_sectors(item))
+        for sector_index, sector in enumerate(sectors):
+            sector["_request_id"] = item.id
+            sector["_sector_key"] = f"{item.id}:{sector_index}"
         days = {}
         for sector in sectors:
             days.setdefault(str(sector.get("date") or "Date TBC"), []).append(sector)
@@ -2291,21 +2306,41 @@ def ops_charter_requests():
             cancellation_codes = envision_get_cancel_codes(envision_authenticate()["token"])
         except Exception:
             current_app.logger.exception("Could not load Envision cancellation codes")
+    groups_by_request_id = {group["request"].id: group for group in request_rows}
     for group in request_rows:
         reference = str(group["request"].reference)
         request_row = group["request"]
         group["brief"] = next((brief for brief in CharterBrief.query.order_by(CharterBrief.updated_at.desc()).all() if str(request_row.id) in _charter_brief_request_ids(brief)), None)
+        brief_details = _charter_brief_details(group["brief"]) if group["brief"] else {}
+        group["brief_sector_keys"] = set(brief_details.get("source_sector_keys", []))
+        group["brief_has_sector_selection"] = "source_sector_keys" in brief_details
         related_ids = set()
         for sectors in group["days"].values():
             for sector in sectors:
                 related_ids.update(str(value) for value in (sector.get("continues_from_id"), sector.get("continues_to_id")) if value)
         group["related_request_ids"] = sorted(related_ids, key=int)
+        connected_tails = set()
+        for sectors in group["days"].values():
+            for sector in sectors:
+                if sector.get("continues_from_id") or sector.get("continues_to_id"):
+                    connected_tails.add(str(sector.get("tail") or "").upper())
+        group["combined_brief_options"] = []
+        for related_id in group["related_request_ids"]:
+            related_group = groups_by_request_id.get(int(related_id))
+            if not related_group:
+                continue
+            options = []
+            for candidate in (group, related_group):
+                for candidate_sectors in candidate["days"].values():
+                    for sector in candidate_sectors:
+                        options.append({"request_id": candidate["request"].id, "reference": str(candidate["request"].reference), "sector": sector, "checked": bool(str(sector.get("tail") or "").upper() in connected_tails)})
+            group["combined_brief_options"].append({"request_id": related_id, "options": options})
         if request_row.status == "Pending approval" or (request_row.status in {"Approved", "Pushed to Envision"} and (user.is_admin or "operations" in _user_permissions(user))):
             group["request"].reference = Markup(f'<a id="charter-request-{request_row.id}" href="{escape(url_for("ui.ops_charter_request_edit", request_id=request_row.id))}">{escape(reference)}</a>')
         else:
             group["request"].reference = Markup(f'<span id="charter-request-{request_row.id}">{escape(reference)}</span>')
     catering_services, _ = _charter_operations_directory()
-    return render_template("charter_requests_tabs.html", request_rows=request_rows, can_operate=bool(user.is_admin or "operations" in _user_permissions(user)), format_date=_brief_print_date, active_tab=tab, cancellation_codes=cancellation_codes, catering_services=catering_services)
+    return render_template("charter_requests_tabs.html", request_rows=request_rows, can_operate=bool(user.is_admin or "operations" in _user_permissions(user)), format_date=_brief_print_date, active_tab=tab, pending_count=pending_count, cancellation_codes=cancellation_codes, catering_services=catering_services)
 
 
 @ui_bp.route("/ops/charter-planner-settings", methods=["GET", "POST"])
