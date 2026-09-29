@@ -2572,7 +2572,7 @@ def ops_charter_request_detail(request_id):
                     registration = registrations_by_id[str(tail_assignments[str(sector.get("aircraft_group") or "aircraft-1")])]
                     flight_id = str(sector.get("envision_flight_id") or "").strip()
                     if not flight_id: raise RuntimeError(f"{sector.get('flight_number') or 'A sector'} is not linked to an Envision flight.")
-                    envision_change_registration(token, int(flight_id), {"ignoreValidations": True, "flightId": int(flight_id), "lineId": int(registration.get("lineId") or registration.get("id") or 0), "crewPositions": [{"id": 0, "employeeId": 0, "crewPositionId": 0}]})
+                    envision_change_registration(token, int(flight_id), {"ignoreValidations": True, "flightId": int(flight_id), "lineId": int(registration.get("id") or 0), "crewPositions": [{"id": 0, "employeeId": 0, "crewPositionId": 0}]})
                     sector["tail"] = str(registration.get("registration") or registration.get("registrationDescription") or "")
                 row.sectors_json = json.dumps(sectors); db.session.add(row); db.session.commit(); clear_gantt_flight_cache()
                 flash("Operating tail changed in Envision and the flight board refreshed.", "success")

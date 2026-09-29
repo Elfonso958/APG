@@ -1,4 +1,4 @@
-const CACHE_NAME = "crew-briefing-shell-v14";
+const CACHE_NAME = "crew-briefing-shell-v15";
 const SHELL_PATHS = [
   "/APG/dcs/crew-briefing",
   "/APG/static/New_Gantt/live_gantt.css?v=crew-apg-6",
@@ -23,6 +23,9 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin || url.pathname.includes("/api/")) return;
+  // This worker is installed from Crew Briefing but has an APG-wide scope.
+  // Never intercept planner, admin or other operational pages.
+  if (!url.pathname.startsWith("/APG/dcs/crew-briefing")) return;
 
   if (request.mode === "navigate") {
     event.respondWith(
@@ -32,7 +35,7 @@ self.addEventListener("fetch", (event) => {
           caches.open(CACHE_NAME).then((cache) => cache.put("/APG/dcs/crew-briefing", copy));
           return response;
         })
-        .catch(() => caches.match("/APG/dcs/crew-briefing")),
+        .catch(() => caches.match("/APG/dcs/crew-briefing").then((cached) => cached || new Response("Offline", { status: 503 }))),
     );
     return;
   }
