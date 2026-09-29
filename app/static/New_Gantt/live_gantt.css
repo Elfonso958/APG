@@ -747,6 +747,18 @@ body {
 .seat-seatbag.has-conflict { border-color: #dc2626; background: color-mix(in srgb, #dc2626 18%, var(--panel)); }
 .seat-seatbag.has-conflict span, .seat-seatbag.has-conflict small { color: #dc2626; }
 .seatmap-conflict { margin-top: 7px; color: #b91c1c; font-weight: 800; }
+.seat-bag-config-dialog { width: min(920px, 96vw); max-height: 92dvh; }
+.seat-bag-config-maps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.seat-bag-config-map { padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-soft); }
+.seat-bag-config-map h4 { margin: 0; color: var(--text); font-size: .9rem; }
+.seat-bag-config-map p { margin: 4px 0 9px; color: var(--muted); font-size: .72rem; }
+.seat-bag-config-rows { display: grid; gap: 4px; max-height: 290px; overflow: auto; }
+.seat-bag-config-row { display: grid; grid-template-columns: 26px 1fr auto; align-items: center; gap: 8px; min-height: 30px; border: 1px solid var(--line); border-radius: 7px; padding: 4px 7px; background: var(--panel); color: var(--text); text-align: left; cursor: pointer; font: inherit; font-size: .7rem; }
+.seat-bag-config-row span { color: var(--muted); white-space: pre; font-family: ui-monospace, monospace; }
+.seat-bag-config-row em { color: var(--muted); font-size: .64rem; font-style: normal; }
+.seat-bag-config-row.is-exit { border-color: #f59e0b; background: color-mix(in srgb, #f59e0b 15%, var(--panel)); }
+.seat-bag-config-row.is-exit em { color: #b45309; font-weight: 800; }
+@media (max-width: 700px) { .seat-bag-config-maps { grid-template-columns: 1fr; } }
 .seat-placeholder {
   visibility: hidden;
   pointer-events: none;

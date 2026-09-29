@@ -91,6 +91,11 @@
   const seatmapGrid = document.getElementById("seatmapGrid");
   const seatmapInfo = document.getElementById("seatmapInfo");
   const seatmapTitle = document.getElementById("seatmapTitle");
+  const seatBagConfigBtn = document.getElementById("seatBagConfigBtn");
+  const seatBagConfigDialog = document.getElementById("seatBagConfigDialog");
+  const seatBagConfigMaps = document.getElementById("seatBagConfigMaps");
+  const saveSeatBagConfig = document.getElementById("saveSeatBagConfig");
+  const seatBagConfigStatus = document.getElementById("seatBagConfigStatus");
   const paxDialog = document.getElementById("paxDialog");
   const paxTitle = document.getElementById("paxTitle");
   const paxTbody = document.getElementById("paxTbody");
@@ -288,6 +293,7 @@
   const freightUrlTemplate = app.dataset.freightUrlTemplate || "";
   const cargoAllocationUrlTemplate = app.dataset.cargoAllocationUrlTemplate || "";
   const freightSettingsUrl = app.dataset.freightSettingsUrl || "";
+  const seatBagExitRowsUrl = app.dataset.seatBagExitRowsUrl || "";
 
   function freightUrl(f) {
     return freightUrlTemplate.replace("__FLIGHT__", encodeURIComponent(String(f?.envision_flight_id || "")));
@@ -2493,6 +2499,17 @@
     const occupied = new Set((f?.pax_list || []).map((p) => String(p.Seat || p.SeatNumber || p.SeatNo || "").trim().toUpperCase()).filter(Boolean));
     return (seats || []).filter((seat) => occupied.has(String(seat).toUpperCase()));
   }
+  function seatBagRestrictedPax(f, seats) {
+    const wanted = new Set((seats || []).map((seat) => String(seat).toUpperCase()));
+    return (f?.pax_list || []).flatMap((p) => {
+      const seat = String(p.Seat || p.SeatNumber || p.SeatNo || "").trim().toUpperCase();
+      if (!wanted.has(seat)) return [];
+      const type = String(p.PassengerType || p.passengerType || "").toUpperCase();
+      const ssrs = Array.isArray(p.Ssrs) ? p.Ssrs : [];
+      const restricted = type === "CH" || type === "CHD" || type === "INF" || hasUmnrSSR(ssrs) || hasInfantSSR(ssrs);
+      return restricted ? [seat] : [];
+    });
+  }
   function seatBagFrontConflicts(f, seats) {
     const occupied = new Set((f?.pax_list || []).map((p) => String(p.Seat || p.SeatNumber || p.SeatNo || "").trim().toUpperCase()).filter(Boolean));
     return seats.map((seat) => { const m = String(seat).match(/^(\d+)([A-Z])$/); return m && Number(m[1]) > 1 ? `${Number(m[1]) - 1}${m[2]}` : ""; }).filter((seat) => seat && occupied.has(seat));
@@ -2520,12 +2537,13 @@
     const editingSaved = Boolean(saved);
     seatBagEditingId = saved?.id || "";
     const conflicts = seatBagPassengerConflicts(f, seats);
+    const restricted = seatBagRestrictedPax(f, seats);
     seatBagWeightTitle.textContent = editingSaved ? "Edit Seat Bag Weight" : "Convert to Seat Bag";
     seatBagWeightSeats.textContent = `Seats ${seats.join(" + ")}`;
     seatBagFreightKg.value = Number(saved?.freight_kg || 0).toFixed(1);
     seatBagConflictWarning.hidden = !conflicts.length;
-    seatBagConflictWarning.textContent = conflicts.length ? `Passenger assigned to ${conflicts.join(", ")}. Remove or move this seat bag before submitting to APG.` : "";
-    saveSeatBagWeight.disabled = conflicts.length > 0;
+    seatBagConflictWarning.textContent = restricted.length ? `Child, UMNR, or infant assigned to ${restricted.join(", ")}. Seat bags are not permitted in this row.` : (conflicts.length ? `Passenger assigned to ${conflicts.join(", ")}. Remove or move this seat bag before submitting to APG.` : "");
+    saveSeatBagWeight.disabled = conflicts.length > 0 || restricted.length > 0;
     const front = seatBagFrontConflicts(f, seats);
     seatBagOverrideWrap.hidden = !front.length;
     seatBagOverride.checked = Boolean(saved?.override);
@@ -2696,10 +2714,11 @@
       const allocation = allocations.find((item) => item.seats.length === 2 && item.seats.every((seat) => seats.includes(seat)));
       if (allocation) {
         const conflicts = seatBagPassengerConflicts(f, seats);
+        const restricted = seatBagRestrictedPax(f, seats);
         const front = seatBagFrontConflicts(f, seats);
-        const warning = conflicts.length || (front.length && !allocation.override);
+        const warning = conflicts.length || restricted.length || (front.length && !allocation.override);
         return `<button type="button" class="freight-seatbag ${warning ? "has-conflict" : ""}" data-edit-seatbag="${escapeHtml(allocation.id)}">
-          <span>${conflicts.length ? "⚠ Occupied" : front.length ? "⚠ In front" : "Seat Bag"}</span>
+          <span>${restricted.length ? "⚠ Restricted pax" : conflicts.length ? "⚠ Occupied" : front.length ? "⚠ In front" : "Seat Bag"}</span>
           <strong>${Number(allocation.freight_kg || 0) > 0 ? `${Number(allocation.freight_kg).toFixed(1)} kg` : "Add weight"}</strong>
         </button>`;
       }
@@ -5610,6 +5629,46 @@
     localStorage.setItem("new_gantt_theme", theme);
   }
 
+  const seatBagAircraftConfigs = [
+    { key: "ATR72", name: "ATR 72 (ZK-MCO / ZK-MCU)", rows: Array.from({ length: 17 }, (_, i) => i + 1), seats: "A B   C D" },
+    { key: "SAAB340", name: "Saab 340", rows: Array.from({ length: 11 }, (_, i) => i + 1), seats: "A   B C" },
+    { key: "SAAB_CIT", name: "Saab 340 (ZK-CIT)", rows: [0, ...Array.from({ length: 11 }, (_, i) => i + 1)], seats: "A   B C" },
+    { key: "SAAB_CIZ", name: "Saab 340B (ZK-CIZ)", rows: Array.from({ length: 11 }, (_, i) => i + 1), seats: "A   B C" },
+  ];
+  let seatBagExitRows = {};
+
+  function renderSeatBagConfigMaps() {
+    if (!seatBagConfigMaps) return;
+    seatBagConfigMaps.innerHTML = seatBagAircraftConfigs.map((cfg) => `
+      <section class="seat-bag-config-map" data-aircraft-key="${cfg.key}">
+        <h4>${escapeHtml(cfg.name)}</h4><p>Click a row to mark or clear it as an emergency exit.</p>
+        <div class="seat-bag-config-rows">${cfg.rows.map((row) => `<button type="button" class="seat-bag-config-row ${(seatBagExitRows[cfg.key] || []).includes(row) ? "is-exit" : ""}" data-exit-row="${row}"><b>${row}</b><span>${cfg.seats}</span><em>${(seatBagExitRows[cfg.key] || []).includes(row) ? "Emergency exit" : "Standard row"}</em></button>`).join("")}</div>
+      </section>`).join("");
+    seatBagConfigMaps.querySelectorAll("[data-exit-row]").forEach((button) => button.addEventListener("click", () => {
+      const key = button.closest("[data-aircraft-key]")?.dataset.aircraftKey;
+      const row = Number(button.dataset.exitRow);
+      if (!key || !Number.isFinite(row)) return;
+      const rows = new Set(seatBagExitRows[key] || []);
+      rows.has(row) ? rows.delete(row) : rows.add(row);
+      seatBagExitRows[key] = [...rows].sort((a, b) => a - b);
+      renderSeatBagConfigMaps();
+    }));
+  }
+
+  async function openSeatBagConfig() {
+    if (!seatBagConfigDialog || !seatBagExitRowsUrl) return;
+    seatBagConfigStatus.textContent = "Loading...";
+    seatBagConfigDialog.showModal();
+    try {
+      const resp = await fetch(seatBagExitRowsUrl);
+      const data = await resp.json();
+      if (!resp.ok || data.ok === false) throw new Error(data.error || "Unable to load emergency-exit rows");
+      seatBagExitRows = data.exit_rows || {};
+      renderSeatBagConfigMaps();
+      seatBagConfigStatus.textContent = "";
+    } catch (err) { seatBagConfigStatus.textContent = err.message || String(err); }
+  }
+
   function setupAutoRefresh() {
     if (timer) clearInterval(timer);
     if (autoRefresh.checked) timer = setInterval(() => loadData({ showSpinner: false }), 60000);
@@ -5800,6 +5859,19 @@
     }
   });
   if (btnCargoRefresh) btnCargoRefresh.addEventListener("click", withBusy(btnCargoRefresh, "Refreshing...", refreshCargoDialog));
+  if (seatBagConfigBtn) seatBagConfigBtn.addEventListener("click", () => openSeatBagConfig());
+  if (saveSeatBagConfig) saveSeatBagConfig.addEventListener("click", async () => {
+    saveSeatBagConfig.disabled = true;
+    seatBagConfigStatus.textContent = "Saving...";
+    try {
+      const resp = await fetch(seatBagExitRowsUrl, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ exit_rows: seatBagExitRows }) });
+      const data = await resp.json();
+      if (!resp.ok || data.ok === false) throw new Error(data.error || "Unable to save emergency-exit rows");
+      seatBagExitRows = data.exit_rows || seatBagExitRows;
+      seatBagConfigStatus.textContent = "Saved.";
+    } catch (err) { seatBagConfigStatus.textContent = err.message || String(err); }
+    finally { saveSeatBagConfig.disabled = false; }
+  });
   if (saveFreightSettings) saveFreightSettings.addEventListener("click", async () => {
     saveFreightSettings.disabled = true;
     try {
@@ -5839,6 +5911,8 @@
     if (seatBagWeightSeatCodes.length !== 2) return;
     const conflicts = seatBagPassengerConflicts(f, seatBagWeightSeatCodes);
     if (conflicts.length) return alert(`Passenger assigned to ${conflicts.join(", ")}. Remove or move the seat bag first.`);
+    const restricted = seatBagRestrictedPax(f, seatBagWeightSeatCodes);
+    if (restricted.length) return alert(`Child, UMNR, or infant assigned to ${restricted.join(", ")}. Seat bags are not permitted in this row.`);
     const front = seatBagFrontConflicts(f, seatBagWeightSeatCodes);
     if (front.length && !seatBagOverride.checked) return alert(`Passenger seated immediately in front at ${front.join(", ")}. Tick the override to continue.`);
     saveSeatBagWeight.disabled = true;

@@ -202,6 +202,7 @@ class AppConfig(db.Model):
     interval_sec = db.Column(db.Integer, default=300, nullable=False)  # default 5 min
     apg_create_ahead_hours = db.Column(db.Integer, default=48, nullable=False)
     seat_bag_tare_kg = db.Column(db.Float, default=7.0, nullable=False)
+    seat_bag_exit_rows_json = db.Column(db.Text, default="{}", nullable=False)
     charter_passenger_weights_json = db.Column(db.Text, default="{}", nullable=False)
     catering_services_json = db.Column(db.Text, default="[]", nullable=False)
     airport_handling_json = db.Column(db.Text, default="[]", nullable=False)

@@ -48,6 +48,7 @@
        data-freight-url-template="{{ url_for('api.api_dcs_freight', flight_id='__FLIGHT__') }}"
        data-cargo-allocation-url-template="{{ url_for('api.api_dcs_cargo_allocation', flight_id='__FLIGHT__') }}"
        data-freight-settings-url="{{ url_for('api.api_dcs_freight_settings') }}"
+       data-seat-bag-exit-rows-url="{{ url_for('api.api_dcs_seat_bag_exit_rows') }}"
        data-envision-env-key="{{ envision_env_key or 'base' }}"
        data-envision-test-available="{{ '1' if envision_test_available else '0' }}"
        data-can-switch-environment="{{ '1' if apg_is_admin else '0' }}"
@@ -92,6 +93,7 @@
         {% if 'crew_briefing' in apg_permissions %}<a class="btn btn-ghost view-link" href="{{ url_for('ui.dcs_crew_briefing', date=day.isoformat()) }}">Crew Briefing</a>{% endif %}
         {% if 'charter_checkin' in apg_permissions %}<a class="btn btn-ghost view-link" href="{{ url_for('ui.dcs_charter_checkin', date=day.isoformat()) }}">Charter Check-in</a>{% endif %}
         {% if apg_is_admin %}<a class="btn btn-ghost view-link" href="{{ url_for('ui.ops_charter_briefs') }}">Charter Briefs</a>{% endif %}
+        {% if apg_is_admin %}<button id="seatBagConfigBtn" class="btn btn-ghost view-link" type="button">Seat Bag Config</button>{% endif %}
         {% if apg_is_admin %}<button id="envSwitchBtn" class="btn btn-ghost view-link" type="button">Envision Test</button>{% endif %}
         {% endif %}
         <label class="ctrl">
@@ -374,6 +376,17 @@
         <div class="dialog-actions">
           <button id="saveFreightSettings" class="btn btn-primary" type="button">Save Settings</button>
         </div>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="seatBagConfigDialog" class="flight-edit-dialog seat-bag-config-dialog">
+    <form method="dialog" class="flight-edit-shell">
+      <header><h3>Seat Bag Emergency-Exit Rows</h3><button class="btn btn-ghost" value="cancel">Close</button></header>
+      <div class="status-body">
+        <p class="muted">Select every emergency-exit row. Seat bags are blocked in these rows. The live Cargo view also warns when a child, UMNR, or infant occupies a seat-bag row.</p>
+        <div id="seatBagConfigMaps" class="seat-bag-config-maps"></div>
+        <div class="dialog-actions"><span id="seatBagConfigStatus" class="cargo-save-status" role="status"></span><button id="saveSeatBagConfig" class="btn btn-primary" type="button">Save emergency-exit rows</button></div>
       </div>
     </form>
   </dialog>

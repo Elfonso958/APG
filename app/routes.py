@@ -3068,6 +3068,28 @@ def _seat_bag_front_conflicts(seats: list[str], occupied: set[str]) -> list[str]
     return sorted(set(conflicts))
 
 
+def _seat_bag_aircraft_key(aircraft_type: str = "", reg: str = "") -> str:
+    reg_code = str(reg or "").replace("-", "").upper()
+    type_code = str(aircraft_type or "").upper()
+    if "ATR" in type_code or reg_code.startswith("ZKMC"):
+        return "ATR72"
+    if reg_code == "ZKCIT":
+        return "SAAB_CIT"
+    if reg_code == "ZKCIZ":
+        return "SAAB_CIZ"
+    return "SAAB340"
+
+
+def _seat_bag_exit_rows(aircraft_type: str = "", reg: str = "") -> set[int]:
+    cfg = db.session.get(AppConfig, 1)
+    try:
+        values = json.loads(cfg.seat_bag_exit_rows_json or "{}") if cfg else {}
+    except (TypeError, ValueError):
+        values = {}
+    rows = values.get(_seat_bag_aircraft_key(aircraft_type, reg), []) if isinstance(values, dict) else []
+    return {int(row) for row in rows if str(row).isdigit()}
+
+
 def _valid_seat_bag_pair(seats: list[str], aircraft_type: str = "", reg: str = "") -> bool:
     """A seat bag occupies exactly two adjacent seats on one side of the aisle."""
     if len(seats) != 2:
@@ -3081,6 +3103,8 @@ def _valid_seat_bag_pair(seats: list[str], aircraft_type: str = "", reg: str = "
     if parsed[0][0] != parsed[1][0]:
         return False
     row_number = parsed[0][0]
+    if row_number in _seat_bag_exit_rows(aircraft_type, reg):
+        return False
     letters = frozenset((parsed[0][1], parsed[1][1]))
     type_code = str(aircraft_type or "").upper()
     reg_code = str(reg or "").replace("-", "").upper()
@@ -3095,6 +3119,34 @@ def _valid_seat_bag_pair(seats: list[str], aircraft_type: str = "", reg: str = "
             return letters == frozenset(("C", "D"))
         return letters == frozenset(("B", "C"))
     return False
+
+
+@api_bp.route("/dcs/seat-bag-exit-rows", methods=["GET", "PUT"])
+def api_dcs_seat_bag_exit_rows():
+    from .views import _current_apg_user
+    user = _current_apg_user()
+    if not user or not user.is_admin:
+        return jsonify({"ok": False, "error": "Only administrators can configure emergency-exit rows."}), 403
+    cfg = db.session.get(AppConfig, 1) or AppConfig(id=1)
+    try:
+        current = json.loads(cfg.seat_bag_exit_rows_json or "{}")
+    except (TypeError, ValueError):
+        current = {}
+    if not isinstance(current, dict): current = {}
+    if request.method == "PUT":
+        incoming = (request.get_json(silent=True) or {}).get("exit_rows", {})
+        if not isinstance(incoming, dict):
+            return jsonify({"ok": False, "error": "Emergency-exit rows must be an aircraft-to-rows map."}), 400
+        clean = {}
+        for key in ("ATR72", "SAAB340", "SAAB_CIT", "SAAB_CIZ"):
+            rows = incoming.get(key, [])
+            if not isinstance(rows, list): return jsonify({"ok": False, "error": "Emergency-exit rows must be lists."}), 400
+            clean[key] = sorted({int(row) for row in rows if str(row).isdigit() and 0 <= int(row) <= 30})
+        cfg.seat_bag_exit_rows_json = json.dumps(clean)
+        db.session.add(cfg)
+        db.session.commit()
+        current = clean
+    return jsonify({"ok": True, "exit_rows": current})
 
 
 @api_bp.route("/dcs/freight/<string:flight_id>", methods=["GET", "PUT"])
@@ -3121,6 +3173,10 @@ def api_dcs_freight(flight_id: str):
         seats = sorted({str(s).strip().upper() for s in (item.get("seats") or []) if str(s).strip()})
         try: freight_kg = float(item.get("freight_kg") or 0)
         except (TypeError, ValueError): return jsonify({"ok": False, "error": "Freight weight must be a number"}), 400
+        rows = {int(match.group(1)) for seat in seats if (match := re.fullmatch(r"(\d+)[A-Z]", seat))}
+        exit_rows = _seat_bag_exit_rows(data.get("aircraft_type") or "", data.get("reg") or "")
+        if rows.intersection(exit_rows):
+            return jsonify({"ok": False, "error": f"Seat bags cannot be allocated to emergency-exit row {min(rows.intersection(exit_rows))}."}), 400
         if freight_kg < 0 or not _valid_seat_bag_pair(seats, data.get("aircraft_type") or "", data.get("reg") or ""):
             return jsonify({"ok": False, "error": "Every seat bag must use two adjacent seats on the same side"}), 400
         if used.intersection(seats): return jsonify({"ok": False, "error": "A seat can only belong to one seat bag"}), 400
