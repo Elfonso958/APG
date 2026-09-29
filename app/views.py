@@ -2573,6 +2573,7 @@ def ops_charter_request_detail(request_id):
                 token = envision_authenticate()["token"]
                 sectors = _request_sectors(row)
                 registrations_by_id = {str(item.get("id") or ""): item for item in envision_get_line_registrations(token)}
+                line_by_registration_id = {str(item.get("regIdDefault") or ""): item for item in envision_get_lines(token)}
                 group_ids = {str(sector.get("aircraft_group") or "aircraft-1") for sector in sectors}
                 legacy_registration_id = request.form.get("registration_id", type=int)
                 if legacy_registration_id and not tail_assignments:
@@ -2583,7 +2584,7 @@ def ops_charter_request_detail(request_id):
                     registration = registrations_by_id[str(tail_assignments[str(sector.get("aircraft_group") or "aircraft-1")])]
                     flight_id = str(sector.get("envision_flight_id") or "").strip()
                     if not flight_id: raise RuntimeError(f"{sector.get('flight_number') or 'A sector'} is not linked to an Envision flight.")
-                    line_id = int(registration.get("planner_line_id") or 0)
+                    line_id = int((line_by_registration_id.get(str(registration.get("id") or "")) or {}).get("id") or 0)
                     if not line_id: raise RuntimeError(f"No Envision operating line is configured for {registration.get('registration') or registration.get('registrationDescription') or 'the selected aircraft'}.")
                     payload = {"ignoreValidations": True, "flightId": int(flight_id), "lineId": line_id, "crewPositions": [{"id": 0, "employeeId": 0, "crewPositionId": 0}]}
                     try:
