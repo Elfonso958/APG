@@ -2299,9 +2299,10 @@ def _send_email_via_graph(sender: str, recipients: list[str], subject: str, body
             "body": {"contentType": "HTML" if html_body else "Text", "content": html_body or body},
             "toRecipients": [{"emailAddress": {"address": address}} for address in recipients],
         }
-        # The delivery endpoint remains the real Graph mailbox, but Graph can
-        # send using an authorised alias/shared-mailbox From identity.
-        if sender and sender.strip().lower() != mailbox.strip().lower():
+        # Keep normal operational delivery on the authorised Graph mailbox.
+        # A custom From is only attempted after Exchange has been configured to
+        # permit this app to Send As that branded identity.
+        if _email_env("GRAPH_ALLOW_CUSTOM_FROM", default="false").lower() in {"1", "true", "yes"} and sender and sender.strip().lower() != mailbox.strip().lower():
             message["from"] = {"emailAddress": {"address": sender.strip()}}
         response = requests.post(
             f"https://graph.microsoft.com/v1.0/users/{mailbox}/sendMail",
