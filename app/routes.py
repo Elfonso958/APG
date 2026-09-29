@@ -3158,7 +3158,12 @@ def api_dcs_seat_bag_exit_rows():
             if not isinstance(seats, list): return jsonify({"ok": False, "error": "Emergency-exit seats must be lists."}), 400
             max_row = 17 if key == "ATR72" else 11
             allowed_letters = "ABCD" if key == "ATR72" else "ABC"
-            clean[key] = sorted({seat for value in seats if (match := re.fullmatch(r"(\d+)([A-D])", str(value or "").strip().upper())) and 0 <= int(match.group(1)) <= max_row and match.group(2) in allowed_letters}, key=lambda seat: (int(re.match(r"\d+", seat).group()), seat[-1]))
+            clean_seats = set()
+            for value in seats:
+                match = re.fullmatch(r"(\d+)([A-D])", str(value or "").strip().upper())
+                if match and 0 <= int(match.group(1)) <= max_row and match.group(2) in allowed_letters:
+                    clean_seats.add(match.group(0))
+            clean[key] = sorted(clean_seats, key=lambda seat: (int(re.match(r"\d+", seat).group()), seat[-1]))
         cfg.seat_bag_exit_rows_json = json.dumps(clean)
         db.session.add(cfg)
         db.session.commit()
