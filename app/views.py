@@ -53,6 +53,7 @@ from .sync.envision_apg_sync import (
     envision_get_line_registrations,
     envision_get_flight_types,
     envision_create_flight,
+    fetch_envision_crew_for_apg,
     calculate_dcs_passenger_seat_loads,
 )
 
@@ -2022,6 +2023,77 @@ def ops_charter_requests_sync_envision():
     except Exception as exc:
         current_app.logger.exception("Charter Envision matching failed"); flash(f"Envision sync failed: {exc}", "danger")
     return redirect(url_for("ui.ops_charter_requests"))
+
+
+@ui_bp.post("/ops/charter-requests/<int:request_id>/create-brief")
+@_login_required
+def ops_charter_request_create_brief(request_id):
+    """Create the first draft crew brief directly from an approved charter request."""
+    user = _current_apg_user()
+    if not (user and (user.is_admin or "operations" in _user_permissions(user))) or not _csrf_is_valid(): abort(403)
+    row = db.session.get(CharterRequest, request_id)
+    if not row or row.status not in {"Approved", "Pushed to Envision"}: abort(404)
+    for existing in CharterBrief.query.filter_by(status="Draft").all():
+        if str(_charter_brief_details(existing).get("source_charter_request_id") or "") == str(row.id):
+            flash("A draft charter brief already exists for this request.", "success")
+            return redirect(url_for("ui.ops_charter_brief_edit", brief_id=existing.id))
+    sectors = _allocate_charter_numbers(_request_sectors(row))
+    dated = sorted({str(sector.get("date") or "") for sector in sectors if sector.get("date")})
+    if not dated:
+        flash("This request has no dated sectors to put into a brief.", "danger")
+        return redirect(url_for("ui.ops_charter_requests", tab="approved"))
+    try:
+        token = envision_authenticate()["token"]
+        start_day, end_day = date.fromisoformat(dated[0]), date.fromisoformat(dated[-1])
+        envision_flights = _list_from_envision_payload(envision_get_flights(token, datetime.combine(start_day, time.min, tzinfo=NZ).astimezone(timezone.utc), datetime.combine(end_day + timedelta(days=1), time.min, tzinfo=NZ).astimezone(timezone.utc)))
+        for sector in sectors:
+            if sector.get("envision_flight_id"):
+                continue
+            try:
+                requested_etd = _parse_charter_local(sector.get("std"), sector.get("date"))
+            except Exception:
+                continue
+            candidates = []
+            for flight in envision_flights:
+                etd = _parse_env_time_to_nz(flight.get("departureEstimate") or flight.get("departureScheduled"))
+                if not etd or etd.date().isoformat() != str(sector.get("date")): continue
+                if (str(flight.get("departurePlaceDescription") or "").upper(), str(flight.get("arrivalPlaceDescription") or "").upper()) != (str(sector.get("dep") or "").upper(), str(sector.get("arr") or "").upper()): continue
+                delta = abs((etd - requested_etd).total_seconds())
+                if delta <= 7200: candidates.append((delta, flight))
+            if candidates:
+                _, flight = min(candidates, key=lambda item: item[0])
+                sector["envision_flight_id"] = str(flight.get("id") or "")
+                sector["flight_number"] = str(flight.get("flightNumberDescription") or sector.get("flight_number") or "")
+                sector["tail"] = str(flight.get("flightRegistrationDescription") or sector.get("tail") or "")
+    except Exception:
+        current_app.logger.exception("Unable to enrich charter brief from Envision")
+        flash("Draft created, but Envision flights/crew could not be refreshed. Use Refresh operational data in the brief.", "warning")
+    brief_sectors, crew, crew_keys = [], [], set()
+    for sector in sectors:
+        flight_id = str(sector.get("envision_flight_id") or "")
+        codes = []
+        if flight_id:
+            try:
+                for member in fetch_envision_crew_for_apg(int(flight_id), include_available_employees=False):
+                    code = str(member.get("employee_no") or member.get("employeeNo") or member.get("code") or "").upper()
+                    name = str(member.get("name") or "")
+                    role_raw = str(member.get("position") or member.get("role") or "")
+                    role = "Captain" if role_raw.upper() in {"PIC", "CPT"} or "CAPTAIN" in role_raw.upper() else "First Officer" if role_raw.upper() == "FO" or "FIRST" in role_raw.upper() else "FA Crew" if role_raw.upper() == "FA" or "CABIN" in role_raw.upper() else role_raw or "Crew"
+                    if code: codes.append(code)
+                    key = code or name.upper()
+                    if key and key not in crew_keys:
+                        crew.append({"code": code, "name": name, "role": role, "phone": "", "source": "envision"}); crew_keys.add(key)
+            except Exception:
+                current_app.logger.warning("Could not load crew for charter brief flight %s", flight_id)
+        passenger = str(sector.get("passengers") or "").strip()
+        brief_sectors.append({"date": sector.get("date") or "", "source_flight_id": flight_id, "flight": sector.get("flight_number") or "", "dep": sector.get("dep") or "", "arr": sector.get("arr") or "", "std": sector.get("std") or "", "sta": sector.get("sta") or "", "aircraft": sector.get("tail") or sector.get("aircraft_type") or "", "flight_type": sector.get("flight_type") or "", "passenger_info": f"{passenger} pax (manual)" if passenger.isdigit() else (passenger or "No passenger total entered"), "manual_pax_count": int(passenger) if passenger.isdigit() else None, "crew_codes": ", ".join(codes), "catering": "" if "position" in str(sector.get("flight_type") or "").lower() else sector.get("catering") or "", "notes": sector.get("notes") or ""})
+    start_date, end_date = date.fromisoformat(dated[0]), date.fromisoformat(dated[-1])
+    reference = f"CB-{start_date:%Y%m%d}-{secrets.token_hex(2).upper()}"
+    details = {"source_charter_request_id": row.id, "sectors": brief_sectors, "crew": crew, "accommodation": [], "transport": [], "ports": [], "handler_selections": {}, "bag_weights_text": "", "operations_notes": "", "crew_notes": ""}
+    brief = CharterBrief(reference=reference, title=row.title or row.reference, charterer=row.reference, start_date=start_date, end_date=end_date, details_json=json.dumps(details, ensure_ascii=False))
+    db.session.add(brief); db.session.commit()
+    flash("Draft charter brief created from the approved request.", "success")
+    return redirect(url_for("ui.ops_charter_brief_edit", brief_id=brief.id))
 
 
 @ui_bp.route("/ops/charter-requests", methods=["GET", "POST"])
