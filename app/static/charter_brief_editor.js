@@ -30,6 +30,10 @@
     if (flight.pax_count) return `${flight.pax_count} pax${types.length ? ` · ${types.join(" · ")}` : ""}`;
     return flight.charter_manifest_uploaded ? "Manifest uploaded · 0 pax" : "No manifest uploaded";
   };
+  const passengerCountInput = (sector) => {
+    const index = details.sectors.indexOf(sector), value = sector.manual_pax_count ?? sector.pax_count ?? "";
+    return `<label class="sector-passenger-input"><input type="number" min="0" step="1" inputmode="numeric" data-sector-passengers="${index}" value="${esc(value)}" placeholder="Enter total"><small>Manual total</small></label>`;
+  };
   const isCharterSector = (sector) => /charter/i.test(String(sector.flight_type || ""));
   const hotelTools = (index) => {
     const results = hotelResults.get(index) || [];
@@ -44,7 +48,7 @@
     const displayFields = fields.sectors.filter((field) => !["date", "source_flight_id"].includes(field));
     const byDay = new Map();
     details.sectors.forEach((sector) => { const day = sector.date || "Date TBC"; if (!byDay.has(day)) byDay.set(day, []); byDay.get(day).push(sector); });
-    $("sectorsRows").innerHTML = [...byDay.entries()].map(([day, sectors]) => `<tr class="duty-date-heading"><td colspan="12">${esc(longDate(day))}</td></tr>${sectors.map((sector) => `<tr data-list-row="sectors">${displayFields.map((field) => `<td>${field === "catering" ? (isCharterSector(sector) ? `<select data-sector-catering="${details.sectors.indexOf(sector)}"><option value="">No catering selected</option>${cateringServices.map((service) => `<option value="${esc(service)}" ${service === sector.catering ? "selected" : ""}>${esc(service)}</option>`).join("")}</select>` : "") : readOnly(field, field === "notes" && sector.notes === "Imported from Envision" ? "" : sector[field])}</td>`).join("")}<td><button type="button" class="remove-row">Remove</button></td></tr>`).join("")}`).join("");
+    $("sectorsRows").innerHTML = [...byDay.entries()].map(([day, sectors]) => `<tr class="duty-date-heading"><td colspan="12">${esc(longDate(day))}</td></tr>${sectors.map((sector) => `<tr data-list-row="sectors">${displayFields.map((field) => `<td>${field === "passenger_info" ? passengerCountInput(sector) : field === "catering" ? (isCharterSector(sector) ? `<select data-sector-catering="${details.sectors.indexOf(sector)}"><option value="">No catering selected</option>${cateringServices.map((service) => `<option value="${esc(service)}" ${service === sector.catering ? "selected" : ""}>${esc(service)}</option>`).join("")}</select>` : "") : readOnly(field, field === "notes" && sector.notes === "Imported from Envision" ? "" : sector[field])}</td>`).join("")}<td><button type="button" class="remove-row">Remove</button></td></tr>`).join("")}`).join("");
   }
   const isEnvisionCrew = (crew) => crew.source === "envision" || crew.notes === "Assigned in Envision";
   function renderTable(name) { $( `${name}Rows` ).innerHTML = details[name].map((row) => `<tr data-list-row="${name}"${name === "crew" && isEnvisionCrew(row) ? ' data-source="envision"' : ""}>${fields[name].map((field) => `<td>${input(field, row[field])}</td>`).join("")}<td><button type="button" class="remove-row">×</button></td></tr>`).join(""); }
@@ -106,6 +110,8 @@
     render();
   });
   app.addEventListener("change", (event) => {
+    const passengerCount = event.target.closest("[data-sector-passengers]");
+    if (passengerCount) { const sector = details.sectors[Number(passengerCount.dataset.sectorPassengers)]; if (sector) { const value = passengerCount.value.trim(); sector.manual_pax_count = value === "" ? null : Number(value); sector.passenger_info = value === "" ? "No passenger total entered" : `${value} pax (manual)`; } return; }
     const transportScope = event.target.closest("[data-transport-scope]");
     if (transportScope) { if (details.transport[Number(transportScope.dataset.transportScope)]) details.transport[Number(transportScope.dataset.transportScope)].transport_search_scope = transportScope.value; return; }
     const scope = event.target.closest("[data-hotel-scope]");
@@ -210,7 +216,7 @@
   $("addSelectedEnvisionFlights").addEventListener("click", async () => {
     const selected = [...flightList.querySelectorAll('[data-envision-flight]:checked')].map((box) => flights[Number(box.dataset.envisionFlight)]).filter(Boolean); if (!selected.length) return alert("Select at least one flight.");
     const button = $("addSelectedEnvisionFlights"); button.disabled = true; button.textContent = "Adding crew…";
-    const added = selected.map((flight) => ({ date:flight._briefDate, source_flight_id:flight.envision_flight_id || flight.id || flight.flight_id || "", flight:flight.flight_number || flight.flight || "", dep:flight.dep || flight.adep || "", arr:flight.ades || flight.dest || "", std:flight.std_nz || flight.std || "", sta:flight.sta_nz || flight.sta || "", aircraft:flight.reg || flight.registration || "", flight_type:flight.flight_type || flight.service_type || "", passenger_info:passengerInfo(flight), crew_codes:"", notes:"" }));
+    const added = selected.map((flight) => ({ date:flight._briefDate, source_flight_id:flight.envision_flight_id || flight.id || flight.flight_id || "", flight:flight.flight_number || flight.flight || "", dep:flight.dep || flight.adep || "", arr:flight.ades || flight.dest || "", std:flight.std_nz || flight.std || "", sta:flight.sta_nz || flight.sta || "", aircraft:flight.reg || flight.registration || "", flight_type:flight.flight_type || flight.service_type || "", passenger_info:passengerInfo(flight), pax_count:flight.pax_count ?? "", crew_codes:"", notes:"" }));
     details.sectors.push(...added); await assignedCrew(selected, added); render(); dialog.close(); button.disabled = false; button.textContent = "Add selected flights";
   });
   $("refreshTourData").addEventListener("click", async () => {
@@ -221,7 +227,7 @@
       details.sectors.forEach((sector) => {
         const flight = feed.find((row) => String(row.envision_flight_id || row.id || row.flight_id || "") === String(sector.source_flight_id || "")) || feed.find((row) => row._briefDate === sector.date && String(row.flight_number || row.flight || "") === String(sector.flight || ""));
         if (!flight) return;
-        Object.assign(sector, { source_flight_id:flight.envision_flight_id || flight.id || flight.flight_id || sector.source_flight_id, flight:flight.flight_number || flight.flight || sector.flight, dep:flight.dep || flight.adep || sector.dep, arr:flight.ades || flight.dest || sector.arr, std:flight.std_nz || flight.std || sector.std, sta:flight.sta_nz || flight.sta || sector.sta, aircraft:flight.reg || flight.registration || sector.aircraft, flight_type:flight.flight_type || flight.service_type || sector.flight_type, passenger_info:passengerInfo(flight), crew_codes:"", notes:"" });
+        Object.assign(sector, { source_flight_id:flight.envision_flight_id || flight.id || flight.flight_id || sector.source_flight_id, flight:flight.flight_number || flight.flight || sector.flight, dep:flight.dep || flight.adep || sector.dep, arr:flight.ades || flight.dest || sector.arr, std:flight.std_nz || flight.std || sector.std, sta:flight.sta_nz || flight.sta || sector.sta, aircraft:flight.reg || flight.registration || sector.aircraft, flight_type:flight.flight_type || flight.service_type || sector.flight_type, passenger_info:sector.manual_pax_count == null ? passengerInfo(flight) : `${sector.manual_pax_count} pax (manual)`, pax_count:flight.pax_count ?? sector.pax_count ?? "", crew_codes:"", notes:"" });
         refreshed.push(sector); selected.push(flight);
       });
       details.crew = details.crew.filter((crew) => !isEnvisionCrew(crew)); await assignedCrew(selected, refreshed); render();
