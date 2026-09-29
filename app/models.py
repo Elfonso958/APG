@@ -153,6 +153,26 @@ class ManualDcsFlightLink(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
+class AirportHandlingProvider(db.Model):
+    """Structured handling and fuel information used by charter operations."""
+    __tablename__ = "airport_handling_providers"
+
+    id = db.Column(db.Integer, primary_key=True)
+    airport = db.Column(db.String(8), nullable=False, index=True)
+    label = db.Column(db.String(180), nullable=False)
+    handler = db.Column(db.String(180), nullable=True)
+    contact = db.Column(db.String(180), nullable=True)
+    phone = db.Column(db.String(80), nullable=True)
+    additional_phone = db.Column(db.String(80), nullable=True)
+    email_addresses = db.Column(db.Text, nullable=True)
+    frequency = db.Column(db.String(80), nullable=True)
+    gpu = db.Column(db.String(255), nullable=True)
+    fuel = db.Column(db.Text, nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class AppUser(db.Model):
     """APG access assignments, optionally authenticated by Envision."""
     __tablename__ = "app_users"

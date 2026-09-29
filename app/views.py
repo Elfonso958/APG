@@ -1,7 +1,7 @@
 ﻿from flask import Blueprint, render_template, request, redirect, jsonify, flash, current_app,send_file, abort, url_for, make_response
 from datetime import date, datetime, time, timezone, timedelta
 from flask import session
-from .models import SyncRun, SyncFlightLog, AppConfig, CharterManifest, CharterBrief, AppUser, EmailSettings, PowerBiApiKey, ManualDcsFlightLink
+from .models import SyncRun, SyncFlightLog, AppConfig, CharterManifest, CharterBrief, AppUser, EmailSettings, PowerBiApiKey, ManualDcsFlightLink, AirportHandlingProvider
 from .airport_handling import AIRPORT_HANDLERS, DEFAULT_CATERING_SERVICES, handlers_for_airports
 from . import db
 from .kmh_auth import create_kmh_session, clear_kmh_session, get_kmh_session
@@ -324,10 +324,8 @@ def _charter_operations_directory():
         catering = json.loads(cfg.catering_services_json or "[]") if cfg else []
     except (TypeError, ValueError):
         catering = []
-    try:
-        handlers = json.loads(cfg.airport_handling_json or "[]") if cfg else []
-    except (TypeError, ValueError):
-        handlers = []
+    providers = AirportHandlingProvider.query.order_by(AirportHandlingProvider.airport, AirportHandlingProvider.label).all()
+    handlers = [{"airport": item.airport, "label": item.label, "handler": item.handler or "", "contact": item.contact or "", "phone": item.phone or "", "additional_phone": item.additional_phone or "", "emails": [email.strip() for email in (item.email_addresses or "").splitlines() if email.strip()], "frequency": item.frequency or "", "gpu": item.gpu or "", "fuel": item.fuel or "", "notes": item.notes or ""} for item in providers]
     return (catering if isinstance(catering, list) and catering else DEFAULT_CATERING_SERVICES,
             handlers if isinstance(handlers, list) and handlers else AIRPORT_HANDLERS)
 
@@ -1281,21 +1279,34 @@ def admin_charter_operations():
         if not _csrf_is_valid():
             flash("Your form expired. Please try again.", "danger")
             return redirect(url_for("ui.admin_charter_operations"))
-        catering = [line.strip() for line in str(request.form.get("catering_services") or "").splitlines() if line.strip()]
-        try:
-            handlers = json.loads(request.form.get("airport_handling_json") or "[]")
-            if not isinstance(handlers, list):
-                raise ValueError
-        except ValueError:
-            flash("Airport handling directory must be valid JSON containing a list of entries.", "danger")
-            return redirect(url_for("ui.admin_charter_operations"))
-        cfg.catering_services_json = json.dumps(catering)
-        cfg.airport_handling_json = json.dumps(handlers)
-        db.session.add(cfg); db.session.commit()
-        flash("Charter operations directory saved.", "success")
+        action = str(request.form.get("action") or "").strip()
+        if action == "save_catering":
+            cfg.catering_services_json = json.dumps([line.strip() for line in str(request.form.get("catering_services") or "").splitlines() if line.strip()])
+            db.session.add(cfg)
+            flash("Catering services saved.", "success")
+        elif action == "delete_provider":
+            provider = db.session.get(AirportHandlingProvider, request.form.get("provider_id"))
+            if provider: db.session.delete(provider); flash("Handling provider removed.", "success")
+        elif action in {"create_provider", "update_provider"}:
+            airport = re.sub(r"[^A-Z0-9]", "", str(request.form.get("airport") or "").upper())
+            label = str(request.form.get("label") or "").strip()
+            if not airport or not label:
+                flash("Airport code and provider label are required.", "danger")
+                return redirect(url_for("ui.admin_charter_operations"))
+            provider = db.session.get(AirportHandlingProvider, request.form.get("provider_id")) if action == "update_provider" else AirportHandlingProvider(airport=airport, label=label)
+            if provider is None:
+                flash("Handling provider was not found.", "danger")
+                return redirect(url_for("ui.admin_charter_operations"))
+            for field in ("airport", "label", "handler", "contact", "phone", "additional_phone", "frequency", "gpu", "fuel", "notes"):
+                setattr(provider, field, airport if field == "airport" else label if field == "label" else str(request.form.get(field) or "").strip())
+            provider.email_addresses = "\n".join(line.strip() for line in str(request.form.get("email_addresses") or "").splitlines() if line.strip())
+            db.session.add(provider)
+            flash("Handling provider saved.", "success")
+        db.session.commit()
         return redirect(url_for("ui.admin_charter_operations"))
-    catering, handlers = _charter_operations_directory()
-    return render_template("admin_charter_operations.html", catering_services="\n".join(catering), airport_handling_json=json.dumps(handlers, indent=2))
+    catering, _ = _charter_operations_directory()
+    providers = AirportHandlingProvider.query.order_by(AirportHandlingProvider.airport, AirportHandlingProvider.label).all()
+    return render_template("admin_charter_operations.html", catering_services="\n".join(catering), providers=providers)
 
 
 @ui_bp.route("/settings", methods=["GET", "POST"])
