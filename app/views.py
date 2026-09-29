@@ -56,6 +56,7 @@ from .sync.envision_apg_sync import (
     envision_cancel_flight,
     envision_get_cancel_codes,
     envision_get_flight_crew,
+    envision_change_registration,
     fetch_envision_crew_for_apg,
     calculate_dcs_passenger_seat_loads,
 )
@@ -2275,7 +2276,7 @@ def ops_charter_request_planning(request_id):
     user = _current_apg_user()
     if not _charter_request_access(user): abort(403)
     row = db.session.get(CharterRequest, request_id)
-    if not row or row.status != "Pending approval": abort(404)
+    if not row or row.status not in {"Pending approval", "Approved", "Pushed to Envision"}: abort(404)
     if not (user.is_admin or "operations" in _user_permissions(user)): abort(403)
     sectors = _allocate_charter_numbers(_request_sectors(row))
     available_days = sorted({str(sector.get("date") or "") for sector in sectors if sector.get("date")})
@@ -2348,7 +2349,7 @@ def ops_charter_request_planning(request_id):
                 maintenance_by_registration[str(registration_id)] = items
             except Exception:
                 current_app.logger.warning("Charter planner maintenance lookup failed for registration %s", registration_id)
-    return render_template("charter_request_planning.html", charter_request=row, day=day_value, available_days=available_days, ghosts=ghosts, scheduled=scheduled, registrations=registrations, maintenance_by_registration=maintenance_by_registration, ground_positions=ground_positions)
+    return render_template("charter_request_planning.html", charter_request=row, day=day_value, available_days=available_days, ghosts=ghosts, scheduled=scheduled, registrations=registrations, maintenance_by_registration=maintenance_by_registration, ground_positions=ground_positions, planning_mode="change_tail" if row.status == "Pushed to Envision" else "approve")
 
 
 @ui_bp.post("/ops/charter-requests/import")
@@ -2454,16 +2455,44 @@ def ops_charter_request_detail(request_id):
                     if conflicts:
                         flash(f"Approval stopped: flight number already exists — {', '.join(conflicts[:5])}. Choose another middle digit.", "danger")
                         return redirect(url_for("ui.ops_charter_request_planning", request_id=row.id))
-                    if registration_id:
-                        registration = next((item for item in envision_get_line_registrations(token) if int(item.get("id") or 0) == registration_id), None)
-                        if not registration: raise RuntimeError("The selected aircraft is no longer available in Envision.")
-                        for sector in sectors: sector["tail"] = str(registration.get("registration") or registration.get("registrationDescription") or "")
+                    registration = next((item for item in envision_get_line_registrations(token) if int(item.get("id") or 0) == registration_id), None)
+                    if not registration: raise RuntimeError("Select an operating tail in the planning Gantt before approval.")
+                    for sector in sectors: sector["tail"] = str(registration.get("registration") or registration.get("registrationDescription") or "")
+                    types = envision_get_flight_types(token)
+                    for sector in sectors:
+                        if sector.get("envision_flight_id"): continue
+                        ftype = str(sector.get("flight_type") or "Charter").lower()
+                        type_row = next((item for item in types if ("position" in ftype and "position" in str(item.get("description") or item.get("flightTypeDescription") or "").lower()) or ("position" not in ftype and "charter" in str(item.get("description") or item.get("flightTypeDescription") or "").lower())), None)
+                        if not type_row: raise RuntimeError(f"No Envision flight type found for {sector.get('flight_type') or 'Charter'}.")
+                        etd, eta = _parse_charter_local(sector.get("std"), sector.get("date")), _parse_charter_local(sector.get("sta"), sector.get("date"))
+                        if eta <= etd: eta += timedelta(days=1)
+                        created = envision_create_flight(token, {"ignoreValidations":False,"flightDate":etd.astimezone(timezone.utc).isoformat().replace("+00:00","Z"),"departurePlaceId":_resolve_charter_place(token, sector.get("dep")),"arrivalPlaceId":_resolve_charter_place(token, sector.get("arr")),"scheduledTimeDeparture":etd.astimezone(timezone.utc).isoformat().replace("+00:00","Z"),"scheduledTimeArrival":eta.astimezone(timezone.utc).isoformat().replace("+00:00","Z"),"flightTypeId":int(type_row["id"]),"modelId":int(registration.get("modelId") or 0),"registrationId":registration_id,"flightNumber":sector["flight_number"]})
+                        sector["envision_flight_id"] = str(created.get("id") or "")
                     row.sectors_json = json.dumps(sectors)
+                    row.status = "Pushed to Envision"
+                    clear_gantt_flight_cache()
                 except Exception as exc:
                     flash(f"Request was not approved: {exc}", "danger")
                     return redirect(url_for("ui.ops_charter_request_planning", request_id=row.id))
             row.decision_by = user.display_name or user.email; row.decision_note = str(request.form.get("decision_note") or "").strip() or None; row.decided_at = datetime.utcnow()
             db.session.add(row); db.session.commit(); flash(f"Request {row.status.lower()}.", "success")
+        elif action == "change_tail" and row.status == "Pushed to Envision":
+            try:
+                registration_id = int(request.form.get("registration_id") or 0)
+                token = envision_authenticate()["token"]
+                registration = next((item for item in envision_get_line_registrations(token) if int(item.get("id") or 0) == registration_id), None)
+                if not registration: raise RuntimeError("Select a current Envision aircraft registration.")
+                sectors = _request_sectors(row)
+                for sector in sectors:
+                    flight_id = str(sector.get("envision_flight_id") or "").strip()
+                    if not flight_id: raise RuntimeError(f"{sector.get('flight_number') or 'A sector'} is not linked to an Envision flight.")
+                    envision_change_registration(token, int(flight_id), {"ignoreValidations": True, "flightId": int(flight_id), "lineId": int(registration.get("lineId") or registration.get("id") or 0), "crewPositions": [{"id": 0, "employeeId": 0, "crewPositionId": 0}]})
+                    sector["tail"] = str(registration.get("registration") or registration.get("registrationDescription") or "")
+                row.sectors_json = json.dumps(sectors); db.session.add(row); db.session.commit(); clear_gantt_flight_cache()
+                flash("Operating tail changed in Envision and the flight board refreshed.", "success")
+            except Exception as exc:
+                current_app.logger.exception("Charter Envision tail change failed")
+                flash(f"Tail was not changed: {exc}", "danger")
         elif action == "push_envision" and row.status == "Approved":
             sectors = _request_sectors(row)
             try:
