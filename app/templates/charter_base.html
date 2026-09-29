@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#061f32">
+  <title>{% block title %}Charter Operations{% endblock %} · ACCharters</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='charter_workspace.css') }}?v=1">
+  <link rel="stylesheet" href="{{ url_for('static', filename='charter_briefs.css') }}?v=4">
+  <link rel="stylesheet" href="{{ url_for('static', filename='charter_workspace_overrides.css') }}?v=1">
+  {% block head_extra %}{% endblock %}
+</head>
+<body class="charter-workspace-body">
+  <header class="charter-nav">
+    <a class="charter-nav-brand" href="{{ url_for('ui.ops_charter_briefs') }}" aria-label="ACCharters home">
+      <img src="{{ url_for('ui.charter_brand_asset', asset='main-logo') }}" alt="ACCharters">
+      <span><b>Charter Operations</b><small>Air Chathams</small></span>
+    </a>
+    <nav class="charter-nav-links" aria-label="Charter navigation">
+      <a href="{{ url_for('ui.dcs_charter_checkin') }}">Charter Check-in</a>
+      <a href="{{ url_for('ui.dcs_crew_briefing') }}">Crew Brief</a>
+      <a class="{{ 'active' if request.path.startswith('/ops/charter-briefs') else '' }}" href="{{ url_for('ui.ops_charter_briefs') }}">Charter Briefs</a>
+    </nav>
+    <div class="charter-nav-actions">
+      <a class="charter-apg-link" href="{{ url_for('ui.dcs_new_live_gantt') }}">← APG flight board</a>
+      {% if apg_current_user %}
+      <details class="charter-account"><summary>{{ apg_current_user.display_name or apg_current_user.email }}</summary><form method="post" action="{{ url_for('ui.apg_logout') }}"><input type="hidden" name="csrf_token" value="{{ apg_csrf_token }}"><button type="submit">Sign out</button></form></details>
+      {% endif %}
+    </div>
+  </header>
+  <main class="charter-main">
+    {% with messages = get_flashed_messages(with_categories=true) %}{% for category, message in messages %}<div class="charter-flash {{ category }}">{{ message }}</div>{% endfor %}{% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
