@@ -11,17 +11,18 @@
   try { cateringServices = JSON.parse(app.dataset.cateringServices || "[]"); } catch (_) { cateringServices = []; }
   let hotelFavourites = [];
   const hotelResults = new Map();
+  const transportResults = new Map();
   const lists = ["sectors", "crew", "accommodation", "transport", "ports"];
   const fields = {
     sectors:["date", "source_flight_id", "flight", "dep", "arr", "std", "sta", "aircraft", "flight_type", "passenger_info", "crew_codes", "catering", "notes"],
     crew:["code", "name", "role", "phone"],
     accommodation:["date", "location", "hotel_lookup", "hotel", "address", "phone", "website", "notes", "google_place_id"],
-    transport:["date", "location", "time", "service", "contact", "details"],
+    transport:["date", "location", "transport_lookup", "time", "service", "contact", "details"],
     ports:["airport", "source", "notes"],
   };
   lists.forEach((name) => { if (!Array.isArray(details[name])) details[name] = []; });
   const timeValue = (value) => (String(value || "").match(/T(\d\d:\d\d)/) || [])[1] || String(value || "");
-  const input = (field, value) => field === "hotel_lookup" ? `${hotelTools(Number(value))}<input type="hidden" data-field="google_place_id" value="${esc(details.accommodation[Number(value)]?.google_place_id || "")}">` : `<input type="${["std", "sta"].includes(field) ? "time" : "text"}" data-field="${field}" value="${esc(["std", "sta"].includes(field) ? timeValue(value) : value)}">`;
+  const input = (field, value) => field === "hotel_lookup" ? `${hotelTools(Number(value))}<input type="hidden" data-field="google_place_id" value="${esc(details.accommodation[Number(value)]?.google_place_id || "")}">` : field === "transport_lookup" ? transportTools(Number(value)) : `<input type="${["std", "sta"].includes(field) ? "time" : "text"}" data-field="${field}" value="${esc(["std", "sta"].includes(field) ? timeValue(value) : value)}">`;
   const readOnly = (field, value) => `<span class="duty-readonly">${esc(["std", "sta"].includes(field) ? timeValue(value) : value || "—")}</span>`;
   const longDate = (value) => { const date = new Date(`${value}T12:00:00`); return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("en-NZ", { weekday:"long", day:"numeric", month:"long" }).format(date); };
   const passengerInfo = (flight) => {
@@ -34,6 +35,10 @@
     const results = hotelResults.get(index) || [];
     const nzOnly = details.accommodation[index]?.hotel_search_scope !== "worldwide";
     return `<div class="hotel-tools"><label class="hotel-search-label">Find a hotel<input data-hotel-search="${index}" placeholder="Type a hotel name" autocomplete="off"></label><button type="button" class="btn secondary" data-hotel-search-button="${index}">Search</button><label class="hotel-scope-label">Search area<select data-hotel-scope="${index}"><option value="nz" ${nzOnly ? "selected" : ""}>New Zealand only</option><option value="worldwide" ${nzOnly ? "" : "selected"}>Search worldwide</option></select></label><label class="hotel-favourite-label">Saved favourite<select data-hotel-favourite="${index}"><option value="">Select a saved hotel…</option>${hotelFavourites.map((hotel) => `<option value="${hotel.id}">${esc(hotel.name)}</option>`).join("")}</select></label><button type="button" class="btn secondary" data-save-hotel="${index}">Save current hotel</button>${results.length ? `<div class="hotel-results">${results.map((hotel) => `<button type="button" class="hotel-result" data-hotel-result="${index}" data-hotel-id="${esc(hotel.google_place_id)}" data-hotel-name="${esc(hotel.name)}" data-hotel-address="${esc(hotel.address)}" data-hotel-phone="${esc(hotel.phone)}" data-hotel-website="${esc(hotel.website)}"><strong>${esc(hotel.name)}</strong><span>${esc(hotel.address || "Address unavailable")}</span>${hotel.phone ? `<small>${esc(hotel.phone)}</small>` : ""}</button>`).join("")}</div>` : ""}</div>`;
+  };
+  const transportTools = (index) => {
+    const results = transportResults.get(index) || [], nzOnly = details.transport[index]?.transport_search_scope !== "worldwide";
+    return `<div class="place-tools"><label class="place-search-label">Find transport<input data-transport-search="${index}" placeholder="Taxi, shuttle or transport provider" autocomplete="off"></label><button type="button" class="btn secondary" data-transport-search-button="${index}">Search</button><label class="place-scope-label">Search area<select data-transport-scope="${index}"><option value="nz" ${nzOnly ? "selected" : ""}>New Zealand only</option><option value="worldwide" ${nzOnly ? "" : "selected"}>Search worldwide</option></select></label>${results.length ? `<div class="place-results">${results.map((place) => `<button type="button" class="place-result" data-transport-result="${index}" data-place-name="${esc(place.name)}" data-place-address="${esc(place.address)}" data-place-phone="${esc(place.phone)}" data-place-website="${esc(place.website)}"><strong>${esc(place.name)}</strong><span>${esc(place.address || "Address unavailable")}</span>${place.phone ? `<small>${esc(place.phone)}</small>` : ""}</button>`).join("")}</div>` : ""}</div>`;
   };
   function renderSectors() {
     const displayFields = fields.sectors.filter((field) => !["date", "source_flight_id"].includes(field));
@@ -58,9 +63,10 @@
     const isGround = ["accommodation", "transport"].includes(name);
     $( `${name}Rows` ).innerHTML = details[name].map((row, index) => {
       if (name === "accommodation") row.hotel_lookup = index;
+      if (name === "transport") row.transport_lookup = index;
       const contentFields = isGround ? fields[name].filter((field) => !["date", "location", "google_place_id"].includes(field)) : fields[name];
       const heading = isGround ? `<h3 class="ground-day-heading">${esc(longDate(row.date || "Date TBC"))} · ${esc(row.location || "Location TBC")}</h3><input type="hidden" data-field="date" value="${esc(row.date)}"><input type="hidden" data-field="location" value="${esc(row.location)}">` : "";
-      return `<article class="brief-item" data-list-row="${name}"><div class="brief-item-grid">${heading}${contentFields.map((field) => field === "hotel_lookup" ? input(field, row[field]) : `<label>${field.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())}${input(field, row[field])}</label>`).join("")}</div>${row._auto_ground ? "" : '<button type="button" class="remove-row">×</button>'}</article>`;
+      return `<article class="brief-item" data-list-row="${name}"><div class="brief-item-grid">${heading}${contentFields.map((field) => ["hotel_lookup", "transport_lookup"].includes(field) ? input(field, row[field]) : `<label>${field.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())}${input(field, row[field])}</label>`).join("")}</div>${row._auto_ground ? "" : '<button type="button" class="remove-row">×</button>'}</article>`;
     }).join("");
   }
   function renderHandlersOld() {
@@ -79,6 +85,10 @@
   }
   function render() { syncDailyGroundArrangements(); $("cateringAll").innerHTML = `<option value="">Apply catering to all flights...</option>${cateringServices.map((service) => `<option value="${esc(service)}">${esc(service)}</option>`).join("")}`; renderSectors(); renderTable("crew"); renderHandlers(); renderCards("accommodation"); renderCards("transport"); renderCards("ports"); $("operationsNotes").value = details.operations_notes || ""; $("crewNotes").value = details.crew_notes || ""; }
   app.addEventListener("click", async (event) => {
+    const transportSearchButton = event.target.closest("[data-transport-search-button]");
+    if (transportSearchButton) { await searchTransport(Number(transportSearchButton.dataset.transportSearchButton)); return; }
+    const transportResult = event.target.closest("[data-transport-result]");
+    if (transportResult) { selectTransport(Number(transportResult.dataset.transportResult), { name:transportResult.dataset.placeName || "", address:transportResult.dataset.placeAddress || "", phone:transportResult.dataset.placePhone || "", website:transportResult.dataset.placeWebsite || "" }); return; }
     const searchButton = event.target.closest("[data-hotel-search-button]");
     if (searchButton) { await searchHotels(Number(searchButton.dataset.hotelSearchButton)); return; }
     const hotelResult = event.target.closest("[data-hotel-result]");
@@ -96,6 +106,8 @@
     render();
   });
   app.addEventListener("change", (event) => {
+    const transportScope = event.target.closest("[data-transport-scope]");
+    if (transportScope) { if (details.transport[Number(transportScope.dataset.transportScope)]) details.transport[Number(transportScope.dataset.transportScope)].transport_search_scope = transportScope.value; return; }
     const scope = event.target.closest("[data-hotel-scope]");
     if (scope) { if (details.accommodation[Number(scope.dataset.hotelScope)]) details.accommodation[Number(scope.dataset.hotelScope)].hotel_search_scope = scope.value; return; }
     const favourite = event.target.closest("[data-hotel-favourite]");
@@ -110,6 +122,8 @@
     renderHandlers();
   });
   app.addEventListener("keydown", (event) => {
+    const transportSearch = event.target.closest("[data-transport-search]");
+    if (transportSearch && event.key === "Enter") { event.preventDefault(); searchTransport(Number(transportSearch.dataset.transportSearch)); return; }
     const search = event.target.closest("[data-hotel-search]");
     if (search && event.key === "Enter") { event.preventDefault(); searchHotels(Number(search.dataset.hotelSearch)); }
   });
@@ -131,6 +145,20 @@
       const response = await fetch(app.dataset.hotelSearchUrl, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({query, location, nz_only:nzOnly}) });
       const data = await response.json(); if (!response.ok || data.ok === false) throw Error(data.error || "Unable to search for hotels.");
       hotelResults.set(index, data.hotels || []); render();
+    } catch (error) { alert(error.message); }
+  }
+  function selectTransport(index, place) {
+    if (!details.transport[index]) return;
+    Object.assign(details.transport[index], { service:place.name || "", contact:place.phone || "", details:[place.address, place.website].filter(Boolean).join(" · ") });
+    transportResults.delete(index); render();
+  }
+  async function searchTransport(index) {
+    const search = app.querySelector(`[data-transport-search="${index}"]`), query = search?.value.trim() || "", location = details.transport[index]?.location || "", nzOnly = details.transport[index]?.transport_search_scope !== "worldwide";
+    if (query.length < 3) return alert("Enter at least three characters to search for transport.");
+    try {
+      const response = await fetch(app.dataset.hotelSearchUrl, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({query, location, nz_only:nzOnly}) });
+      const data = await response.json(); if (!response.ok || data.ok === false) throw Error(data.error || "Unable to search for transport.");
+      transportResults.set(index, data.hotels || []); render();
     } catch (error) { alert(error.message); }
   }
   async function loadHotelFavourites() {
