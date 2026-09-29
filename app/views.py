@@ -2054,7 +2054,10 @@ def ops_charter_requests():
                 current_app.logger.exception("Charter approval notification could not be sent")
         flash("Charter request submitted for Operations approval.", "success")
         return redirect(url_for("ui.ops_charter_request_detail", request_id=row.id))
+    tab = "approved" if request.args.get("tab") == "approved" else "pending"
     rows = CharterRequest.query.order_by(CharterRequest.created_at.desc()).all()
+    if tab == "approved": rows = [row for row in rows if row.status in {"Approved", "Pushed to Envision"}]
+    else: rows = [row for row in rows if row.status == "Pending approval"]
     request_rows = []
     for item in rows:
         sectors = _allocate_charter_numbers(_request_sectors(item))
@@ -2091,7 +2094,7 @@ def ops_charter_requests():
     for group in request_rows:
         reference = str(group["request"].reference)
         group["request"].reference = Markup(f'<span id="charter-request-{group["request"].id}">{escape(reference)}</span>')
-    return render_template("charter_requests_board_v5.html", request_rows=request_rows, can_operate=bool(user.is_admin or "operations" in _user_permissions(user)), format_date=_brief_print_date)
+    return render_template("charter_requests_tabs.html", request_rows=request_rows, can_operate=bool(user.is_admin or "operations" in _user_permissions(user)), format_date=_brief_print_date, active_tab=tab)
 
 
 @ui_bp.post("/ops/charter-requests/import")
