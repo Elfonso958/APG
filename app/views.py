@@ -2310,6 +2310,11 @@ def ops_charter_request_planning(request_id):
     row = db.session.get(CharterRequest, request_id)
     if not row or row.status not in {"Pending approval", "Approved", "Pushed to Envision"}: abort(404)
     if not (user.is_admin or "operations" in _user_permissions(user)): abort(403)
+    tail_change_debug = session.get("charter_tail_change_debug")
+    if isinstance(tail_change_debug, dict) and str(tail_change_debug.get("request_id")) == str(row.id):
+        session.pop("charter_tail_change_debug", None)
+    else:
+        tail_change_debug = None
     sectors = _allocate_charter_numbers(_request_sectors(row))
     available_days = sorted({str(sector.get("date") or "") for sector in sectors if sector.get("date")})
     requested_day = request.args.get("date")
@@ -2403,7 +2408,7 @@ def ops_charter_request_planning(request_id):
         registration_id = registration_by_tail.get(str(sector.get("tail") or "").upper())
         if registration_id:
             saved_tail_assignments[group_id] = registration_id
-    return render_template("charter_request_planning.html", charter_request=row, day=day_value, available_days=available_days, ghosts=ghosts, aircraft_groups=aircraft_groups, scheduled=scheduled, registrations=registrations, maintenance_by_registration=maintenance_by_registration, ground_positions=ground_positions, saved_tail_assignments=saved_tail_assignments, planning_mode="change_tail" if row.status == "Pushed to Envision" else "approve")
+    return render_template("charter_request_planning.html", charter_request=row, day=day_value, available_days=available_days, ghosts=ghosts, aircraft_groups=aircraft_groups, scheduled=scheduled, registrations=registrations, maintenance_by_registration=maintenance_by_registration, ground_positions=ground_positions, saved_tail_assignments=saved_tail_assignments, tail_change_debug=tail_change_debug, planning_mode="change_tail" if row.status == "Pushed to Envision" else "approve")
 
 
 @ui_bp.post("/ops/charter-requests/import")
@@ -2554,6 +2559,7 @@ def ops_charter_request_detail(request_id):
             row.decision_by = user.display_name or user.email; row.decision_note = str(request.form.get("decision_note") or "").strip() or None; row.decided_at = datetime.utcnow()
             db.session.add(row); db.session.commit(); flash(f"Request {row.status.lower()}.", "success")
         elif action == "change_tail" and row.status == "Pushed to Envision":
+            change_debug = []
             try:
                 try:
                     tail_assignments = json.loads(request.form.get("tail_assignments") or "{}")
@@ -2572,13 +2578,22 @@ def ops_charter_request_detail(request_id):
                     registration = registrations_by_id[str(tail_assignments[str(sector.get("aircraft_group") or "aircraft-1")])]
                     flight_id = str(sector.get("envision_flight_id") or "").strip()
                     if not flight_id: raise RuntimeError(f"{sector.get('flight_number') or 'A sector'} is not linked to an Envision flight.")
-                    envision_change_registration(token, int(flight_id), {"ignoreValidations": True, "flightId": int(flight_id), "lineId": int(registration.get("id") or 0), "crewPositions": [{"id": 0, "employeeId": 0, "crewPositionId": 0}]})
+                    payload = {"ignoreValidations": True, "flightId": int(flight_id), "lineId": int(registration.get("id") or 0), "crewPositions": [{"id": 0, "employeeId": 0, "crewPositionId": 0}]}
+                    try:
+                        response = envision_change_registration(token, int(flight_id), payload)
+                        change_debug.append({"flight": sector.get("flight_number"), "target_tail": registration.get("registration") or registration.get("registrationDescription"), "request": payload, "response": response})
+                    except Exception as exc:
+                        change_debug.append({"flight": sector.get("flight_number"), "target_tail": registration.get("registration") or registration.get("registrationDescription"), "request": payload, "error": str(exc)})
+                        raise
                     sector["tail"] = str(registration.get("registration") or registration.get("registrationDescription") or "")
                 row.sectors_json = json.dumps(sectors); db.session.add(row); db.session.commit(); clear_gantt_flight_cache()
+                session["charter_tail_change_debug"] = {"request_id": row.id, "attempts": change_debug}
                 flash("Operating tail changed in Envision and the flight board refreshed.", "success")
             except Exception as exc:
+                session["charter_tail_change_debug"] = {"request_id": row.id, "attempts": change_debug}
                 current_app.logger.exception("Charter Envision tail change failed")
                 flash(f"Tail was not changed: {exc}", "danger")
+            return redirect(url_for("ui.ops_charter_request_planning", request_id=row.id))
         elif action == "push_envision" and row.status == "Approved":
             sectors = _request_sectors(row)
             try:
