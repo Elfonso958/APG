@@ -32,6 +32,7 @@
   const initialEnvisionEnvKey = (app.dataset.envisionEnvKey || "base").toLowerCase();
   const envisionTestAvailable = app.dataset.envisionTestAvailable === "1";
   const canSwitchEnvisionEnvironment = app.dataset.canSwitchEnvironment === "1";
+  const canModifyFlights = app.dataset.canModifyFlights === "1";
 
   const dayInput = document.getElementById("dayInput");
   const tzSelect = document.getElementById("tzSelect");
@@ -3968,6 +3969,7 @@
       renderRows();
     });
     group.addEventListener("dblclick", (ev) => {
+      if (!canModifyFlights) return;
       ev.preventDefault();
       ev.stopPropagation();
       openModifyLegDialog(f);

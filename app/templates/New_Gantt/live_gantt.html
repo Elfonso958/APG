@@ -51,6 +51,7 @@
        data-envision-env-key="{{ envision_env_key or 'base' }}"
        data-envision-test-available="{{ '1' if envision_test_available else '0' }}"
        data-can-switch-environment="{{ '1' if apg_is_admin else '0' }}"
+       data-can-modify-flights="{{ '1' if apg_is_admin else '0' }}"
        data-cabin-crew-restricted="{{ '1' if is_cabin_crew else '0' }}"
        data-signed-in-crew-code="{{ signed_in_crew_code or '' }}"
        data-day="{{ day.isoformat() }}">
@@ -179,7 +180,6 @@
           <button id="btnCharterManifest" class="btn btn-ghost" type="button">Charter Manifest</button>
           <button id="btnResetApg" class="btn btn-ghost" type="button">Reset APG Pax</button>
           <button id="btnSeatmap" class="btn btn-ghost" type="button">Seatmap</button>
-          <button id="btnMovementMsg" class="btn btn-ghost" type="button">Movement Message</button>
           <button id="btnSubmitApg" class="btn btn-primary" type="button">Submit to APG</button>
           {% endif %}
         </div>
