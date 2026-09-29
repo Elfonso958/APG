@@ -2272,7 +2272,12 @@ def _send_email_via_graph(sender: str, recipients: list[str], subject: str, body
     tenant_id = _email_env("GRAPH_TENANT_ID", "MS_TENANT_ID")
     client_id = _email_env("GRAPH_CLIENT_ID", "MS_CLIENT_ID")
     client_secret = _email_env("GRAPH_CLIENT_SECRET", "MS_CLIENT_SECRET")
-    mailbox = sender or _email_env("GRAPH_MAILBOX_UPN", "TEAMS_ORGANIZER_UPN")
+    # Graph's /users/{id}/sendMail endpoint must address an actual Exchange
+    # mailbox in the tenant.  The user-selected From address may be an external
+    # branded SMTP identity (for example info@accharters.co.nz), which produces
+    # a misleading 404 if used as the Graph mailbox path.  Prefer the configured
+    # Graph mailbox; it is the identity Graph is authorised to send as.
+    mailbox = _email_env("GRAPH_MAILBOX_UPN", "TEAMS_ORGANIZER_UPN") or sender
     if not all((tenant_id, client_id, client_secret, mailbox)):
         return False
 
