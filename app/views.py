@@ -20,6 +20,7 @@ import time as _time
 import re
 import secrets
 from werkzeug.security import check_password_hash, generate_password_hash
+from markupsafe import Markup, escape
 from zoneinfo import ZoneInfo
 NZ = ZoneInfo("Pacific/Auckland")
 
@@ -2080,8 +2081,10 @@ def ops_charter_requests():
         if tail != next_tail or previous_group is next_group or handover_airport == "AKL" or handover_airport != str(next_sector.get("dep") or "").upper(): continue
         gap = (next_etd - previous_eta).total_seconds() / 60
         if 0 <= gap <= 24 * 60:
-            previous_sector["continues_to"] = next_group["request"].reference
-            next_sector["continues_from"] = previous_group["request"].reference
+            previous_sector["continues_to"] = Markup(f'<a href="{escape(url_for("ui.ops_charter_request_detail", request_id=next_group["request"].id))}">{escape(next_group["request"].reference)}</a>')
+            previous_sector["continues_to_id"] = next_group["request"].id
+            next_sector["continues_from"] = Markup(f'<a href="{escape(url_for("ui.ops_charter_request_detail", request_id=previous_group["request"].id))}">{escape(previous_group["request"].reference)}</a>')
+            next_sector["continues_from_id"] = previous_group["request"].id
             next_sector["connection_gap_minutes"] = round(gap)
     return render_template("charter_requests_board_v4.html", request_rows=request_rows, can_operate=bool(user.is_admin or "operations" in _user_permissions(user)), format_date=_brief_print_date)
 
