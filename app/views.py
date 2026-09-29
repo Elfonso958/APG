@@ -51,6 +51,7 @@ from .sync.envision_apg_sync import (
     envision_get_employees,
     envision_get_places,
     envision_get_line_registrations,
+    envision_get_lines,
     envision_get_flight_types,
     envision_create_flight,
     envision_cancel_flight,
@@ -2295,6 +2296,10 @@ def ops_charter_planner_settings():
     try:
         token = envision_authenticate()["token"]
         registrations = sorted(envision_get_line_registrations(token), key=lambda item: str(item.get("registration") or ""))
+        line_by_registration_id = {str(item.get("regIdDefault") or ""): item for item in envision_get_lines(token)}
+        for item in registrations:
+            line = line_by_registration_id.get(str(item.get("id") or ""))
+            item["planner_line_id"] = int(line.get("id") or 0) if line else 0
     except Exception as exc:
         registrations = []
         flash(f"Current Envision aircraft could not be loaded: {exc}", "danger")
@@ -2578,7 +2583,9 @@ def ops_charter_request_detail(request_id):
                     registration = registrations_by_id[str(tail_assignments[str(sector.get("aircraft_group") or "aircraft-1")])]
                     flight_id = str(sector.get("envision_flight_id") or "").strip()
                     if not flight_id: raise RuntimeError(f"{sector.get('flight_number') or 'A sector'} is not linked to an Envision flight.")
-                    payload = {"ignoreValidations": True, "flightId": int(flight_id), "registrationId": int(registration.get("id") or 0), "crewPositions": [{"id": 0, "employeeId": 0, "crewPositionId": 0}]}
+                    line_id = int(registration.get("planner_line_id") or 0)
+                    if not line_id: raise RuntimeError(f"No Envision operating line is configured for {registration.get('registration') or registration.get('registrationDescription') or 'the selected aircraft'}.")
+                    payload = {"ignoreValidations": True, "flightId": int(flight_id), "lineId": line_id, "crewPositions": [{"id": 0, "employeeId": 0, "crewPositionId": 0}]}
                     try:
                         response = envision_change_registration(token, int(flight_id), payload)
                         change_debug.append({"flight": sector.get("flight_number"), "target_tail": registration.get("registration") or registration.get("registrationDescription"), "request": payload, "response": response})

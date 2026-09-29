@@ -655,6 +655,20 @@ def envision_get_line_registrations(token: str) -> list[dict]:
     return data
 
 
+def envision_get_lines(token: str) -> list[dict]:
+    """Return Envision operational lines, including each line's default registration."""
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    url = f"{ENVISION_BASE.rstrip('/')}/Lines"
+    resp = requests.get(url, headers=headers, timeout=30)
+    resp.raise_for_status()
+    data = resp.json() or []
+    if isinstance(data, dict):
+        data = data.get("items") or data.get("data") or []
+    if not isinstance(data, list):
+        raise RuntimeError(f"Unexpected /Lines response: {data!r}")
+    return data
+
+
 def envision_get_flight_types(token: str) -> list[dict]:
     """
     GET /v1/Flights/Types
