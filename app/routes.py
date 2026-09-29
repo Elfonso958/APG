@@ -96,6 +96,10 @@ from .otp_cache import get_cached_otp_rows, parse_otp_cache_date, upsert_otp_cac
 api_bp = Blueprint("api", __name__)
 
 _CREW_BRIEFING_RAW_CACHE: dict[int, dict] = {}
+_POWERBI_REPORTING_ENDPOINTS = {
+    "api.api_envision_otp_flights_cached",
+    "api.api_envision_defects_powerbi",
+}
 
 
 def _clear_live_gantt_cache() -> None:
@@ -121,7 +125,7 @@ def _require_authenticated_operations_api():
     """Keep operational data APIs behind the same role controls as their UI."""
     # Power BI cannot use the interactive APG browser session. Its reporting
     # endpoint is protected by an administrator-managed, revocable API key.
-    if request.endpoint == "api.api_envision_otp_flights_cached":
+    if request.endpoint in _POWERBI_REPORTING_ENDPOINTS:
         supplied_key = request.headers.get("X-API-Key") or ""
         supplied_hash = PowerBiApiKey.hash_secret(supplied_key) if supplied_key else ""
         valid_key = PowerBiApiKey.query.filter_by(key_hash=supplied_hash, revoked_at=None).first() if supplied_hash else None
@@ -5903,7 +5907,8 @@ def api_envision_otp_flights_cache_refresh():
 @api_bp.get("/api/envision/defects_powerbi")  # legacy path
 def api_envision_defects_powerbi():
     """
-    Return Envision defects as a JSON array for PowerBI.
+    Return Envision defects as a JSON array for PowerBI. Requires an active
+    administrator-managed X-API-Key.
 
     Query params:
       defectStatusId / defect_status_id: optional; if omitted all statuses are fetched.

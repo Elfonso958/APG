@@ -129,6 +129,18 @@ class OtpRouteTests(unittest.TestCase):
         )
         self.assertEqual(valid.status_code, 200)
 
+    def test_defects_powerbi_requires_powerbi_api_key(self):
+        client = self.create_client()
+
+        missing = client.get("/api/envision/defects_powerbi")
+        self.assertEqual(missing.status_code, 401)
+
+        invalid = client.get(
+            "/api/envision/defects_powerbi",
+            headers={"X-API-Key": "wrong-key"},
+        )
+        self.assertEqual(invalid.status_code, 401)
+
 
 if __name__ == "__main__":
     unittest.main()
