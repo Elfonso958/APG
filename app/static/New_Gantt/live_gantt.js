@@ -103,6 +103,8 @@
   const cargoTitle = document.getElementById("cargoTitle");
   const cargoWeightsSummary = document.getElementById("cargoWeightsSummary");
   const cargoEditor = document.getElementById("cargoEditor");
+  const btnCargoSave = document.getElementById("btnCargoSave");
+  const cargoSaveStatus = document.getElementById("cargoSaveStatus");
   const btnCargoRefresh = document.getElementById("btnCargoRefresh");
   const freightSettingsDialog = document.getElementById("freightSettingsDialog");
   const seatBagTareKg = document.getElementById("seatBagTareKg");
@@ -3395,6 +3397,7 @@
   async function openCargoDialog(testMode = false) {
     const f = selectedFlight;
     if (!f || !cargoDialog) return;
+    if (cargoSaveStatus) cargoSaveStatus.textContent = "";
     f.cargoTestMode = testMode;
     const planId = getApgPlanId(f.apg_plan_id);
     cargoTitle.textContent = `${testMode ? "Cargo (Test)" : "Cargo"} - ${flightCode(f)} ${f.dep || ""}-${f.ades || ""}${planId ? ` - APG ${planId}` : ""}`;
@@ -3430,6 +3433,20 @@
     renderCargoWeightsSummary(refreshed);
     renderCargoEditor(refreshed);
     await Promise.allSettled([populateCargoWeightsSummary(refreshed), populateCargoEditor(refreshed)]);
+  }
+
+  async function saveCargoDialog() {
+    const f = selectedFlight;
+    if (!f || !cargoDialog?.open) return;
+    if (cargoSaveStatus) cargoSaveStatus.textContent = "Saving…";
+    try {
+      await persistCargoAllocation(f);
+      cacheCargoAllocationsForFlight(f);
+      if (cargoSaveStatus) cargoSaveStatus.textContent = "Saved";
+    } catch (err) {
+      if (cargoSaveStatus) cargoSaveStatus.textContent = "Not saved";
+      throw err;
+    }
   }
 
   function updateEnvisionEnvPill(env) {
@@ -5674,6 +5691,16 @@
   if (btnPreviewManifest) btnPreviewManifest.addEventListener("click", withBusy(btnPreviewManifest, "Loading...", previewManifest));
   if (btnCargo) btnCargo.addEventListener("click", withBusy(btnCargo, "Loading...", openCargoDialog));
   if (btnCargoTest) btnCargoTest.addEventListener("click", withBusy(btnCargoTest, "Loading...", openCargoTestDialog));
+  if (btnCargoSave) btnCargoSave.addEventListener("click", async () => {
+    btnCargoSave.disabled = true;
+    try {
+      await saveCargoDialog();
+    } catch (err) {
+      alert(err.message || String(err));
+    } finally {
+      btnCargoSave.disabled = false;
+    }
+  });
   if (btnCargoRefresh) btnCargoRefresh.addEventListener("click", withBusy(btnCargoRefresh, "Refreshing...", refreshCargoDialog));
   if (saveFreightSettings) saveFreightSettings.addEventListener("click", async () => {
     saveFreightSettings.disabled = true;

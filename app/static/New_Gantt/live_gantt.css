@@ -1183,6 +1183,7 @@ body {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
 }
+.cargo-save-status { min-width: 48px; color: var(--muted); font-size: .78rem; font-weight: 700; text-align: right; }
 
 .topbar { position: relative; }
 
