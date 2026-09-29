@@ -2393,7 +2393,17 @@ def ops_charter_request_planning(request_id):
                 maintenance_by_registration[str(registration_id)] = items
             except Exception:
                 current_app.logger.warning("Charter planner maintenance lookup failed for registration %s", registration_id)
-    return render_template("charter_request_planning.html", charter_request=row, day=day_value, available_days=available_days, ghosts=ghosts, aircraft_groups=aircraft_groups, scheduled=scheduled, registrations=registrations, maintenance_by_registration=maintenance_by_registration, ground_positions=ground_positions, planning_mode="change_tail" if row.status == "Pushed to Envision" else "approve")
+    registration_by_tail = {
+        str(item.get("registration") or item.get("registrationDescription") or "").upper(): str(item.get("id") or "")
+        for item in registrations
+    }
+    saved_tail_assignments = {}
+    for sector in sectors:
+        group_id = str(sector.get("aircraft_group") or "aircraft-1")
+        registration_id = registration_by_tail.get(str(sector.get("tail") or "").upper())
+        if registration_id:
+            saved_tail_assignments[group_id] = registration_id
+    return render_template("charter_request_planning.html", charter_request=row, day=day_value, available_days=available_days, ghosts=ghosts, aircraft_groups=aircraft_groups, scheduled=scheduled, registrations=registrations, maintenance_by_registration=maintenance_by_registration, ground_positions=ground_positions, saved_tail_assignments=saved_tail_assignments, planning_mode="change_tail" if row.status == "Pushed to Envision" else "approve")
 
 
 @ui_bp.post("/ops/charter-requests/import")
