@@ -2264,7 +2264,7 @@ def _charter_email_sender() -> str:
             return str(settings.from_email).strip()
     except Exception:
         db.session.rollback()
-    return _email_env("SMTP_FROM", "MAIL_FROM", "MAIL_DEFAULT_SENDER")
+    return _email_env("SMTP_FROM", "MAIL_FROM", "MAIL_DEFAULT_SENDER", default="info@accharters.co.nz")
 
 
 def _send_email_via_graph(sender: str, recipients: list[str], subject: str, body: str, *, html_body: str | None = None) -> bool:

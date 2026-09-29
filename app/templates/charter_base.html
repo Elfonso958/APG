@@ -39,7 +39,7 @@
     {% with messages = get_flashed_messages(with_categories=true) %}{% for category, message in messages %}<div class="charter-flash {{ category }}">{{ message }}</div>{% endfor %}{% endwith %}
     {% block content %}{% endblock %}
   </main>
-  {% if apg_is_admin %}<dialog id="charterEmailSettings" class="charter-settings-modal"><div class="charter-settings-modal-head"><strong>Charter email settings</strong><button type="button" onclick="document.getElementById('charterEmailSettings').close()">Close</button></div><iframe title="Charter email settings" src="{{ url_for('ui.admin_email_settings') }}"></iframe></dialog>{% endif %}
+  {% if apg_is_admin %}<dialog id="charterEmailSettings" class="charter-settings-modal"><div class="charter-settings-modal-head"><strong>Charter email settings</strong><button type="button" onclick="document.getElementById('charterEmailSettings').close()">Close</button></div><iframe title="Charter email settings" src="{{ url_for('ui.admin_email_settings', embed='1') }}"></iframe></dialog>{% endif %}
   {% block scripts %}{% endblock %}
 </body>
 </html>

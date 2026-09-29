@@ -533,6 +533,8 @@ def admin_email_settings():
         value = _normalise_user_email(value)
         if value and value not in sender_options:
             sender_options.append(value)
+    if "info@accharters.co.nz" not in sender_options:
+        sender_options.append("info@accharters.co.nz")
     if request.method == "POST":
         if not _csrf_is_valid():
             flash("Your form expired. Please try again.", "danger")
@@ -554,10 +556,10 @@ def admin_email_settings():
             db.session.add(settings)
             db.session.commit()
             flash("Email settings saved.", "success")
-        return redirect(url_for("ui.admin_email_settings"))
+        return redirect(url_for("ui.admin_email_settings", embed="1") if request.args.get("embed") else url_for("ui.admin_email_settings"))
     configured_recipients = (settings.flight_operations_email if settings else None) or os.getenv("FLIGHT_OPERATIONS_EMAIL", "")
     return render_template(
-        "admin_email_settings_v2.html",
+        "admin_email_settings_embed.html" if request.args.get("embed") else "admin_email_settings_v2.html",
         settings=settings,
         configured_recipients=configured_recipients,
         charter_request_recipients=(settings.charter_request_recipients if settings else "") or configured_recipients,
