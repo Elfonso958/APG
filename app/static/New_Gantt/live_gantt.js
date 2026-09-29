@@ -2822,18 +2822,6 @@
     host.innerHTML = `
       <div class="cargo-editor-shell">
         ${f.cargoAllocationStale ? `<div class="cargo-stale-warning"><div><strong>Out of date</strong><span>Cargo or seat-bag weights were updated on another device.</span></div><button type="button" class="btn btn-primary" data-refresh-saved-cargo>Refresh</button></div>` : ""}
-        <div class="cargo-editor-head">
-          <div>
-            <div class="card-title">${isTestLayout ? "Cargo Test Layout" : (isFullFreighter ? "Freight Allocation" : "Cargo Allocation")}</div>
-            <div class="card-sub">${isTestLayout ? "Experimental hold layout using this flight's current cargo allocations." : (isFullFreighter ? "Allocate cargo by aircraft zone, then check the live limit warning above." : "Split baggage and cargo by hold, then check the live limit warning above.")}</div>
-          </div>
-          ${isFullFreighter ? "" : `<div class="weight-status-pill ${Math.abs(totals.remaining) < 0.05 ? "is-ok" : totals.remaining > 0 ? "is-near" : "is-over"}" id="cargoRemainingBadge">
-            ${Math.abs(totals.remaining) < 0.05 ? "Baggage complete" : totals.remaining > 0 ? "Baggage remaining" : "Over allocated"}
-          </div>`}
-          </div>
-          ${isTestLayout ? "" : `<div class="cargo-editor-tabs" role="tablist" aria-label="Cargo allocation mode">
-            <button type="button" class="cargo-editor-tab is-active" data-cargo-tab="freight">Freight</button>
-          </div>`}
         <div class="cargo-editor-panel" data-cargo-panel="${isTestLayout ? "test" : "freight"}">
           ${isTestLayout ? renderCargoTestPanel() : renderFreightPanel()}
         </div>
