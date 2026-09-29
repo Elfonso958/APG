@@ -5630,27 +5630,27 @@
   }
 
   const seatBagAircraftConfigs = [
-    { key: "ATR72", name: "ATR 72 (ZK-MCO / ZK-MCU)", rows: Array.from({ length: 17 }, (_, i) => i + 1), seats: "A B   C D" },
-    { key: "SAAB340", name: "Saab 340", rows: Array.from({ length: 11 }, (_, i) => i + 1), seats: "A   B C" },
-    { key: "SAAB_CIT", name: "Saab 340 (ZK-CIT)", rows: [0, ...Array.from({ length: 11 }, (_, i) => i + 1)], seats: "A   B C" },
-    { key: "SAAB_CIZ", name: "Saab 340B (ZK-CIZ)", rows: Array.from({ length: 11 }, (_, i) => i + 1), seats: "A   B C" },
+    { key: "ATR72", name: "ATR 72 (ZK-MCO / ZK-MCU)", rows: Array.from({ length: 17 }, (_, i) => i + 1), columns: ["A", "B", "C", "D"] },
+    { key: "SAAB340", name: "Saab 340", rows: Array.from({ length: 11 }, (_, i) => i + 1), columns: ["A", "B", "C"] },
+    { key: "SAAB_CIT", name: "Saab 340 (ZK-CIT)", rows: [0, ...Array.from({ length: 11 }, (_, i) => i + 1)], columns: ["A", "B", "C"] },
+    { key: "SAAB_CIZ", name: "Saab 340B (ZK-CIZ)", rows: Array.from({ length: 11 }, (_, i) => i + 1), columns: ["A", "B", "C"] },
   ];
-  let seatBagExitRows = {};
+  let seatBagExitSeats = {};
 
   function renderSeatBagConfigMaps() {
     if (!seatBagConfigMaps) return;
     seatBagConfigMaps.innerHTML = seatBagAircraftConfigs.map((cfg) => `
       <section class="seat-bag-config-map" data-aircraft-key="${cfg.key}">
-        <h4>${escapeHtml(cfg.name)}</h4><p>Click a row to mark or clear it as an emergency exit.</p>
-        <div class="seat-bag-config-rows">${cfg.rows.map((row) => `<button type="button" class="seat-bag-config-row ${(seatBagExitRows[cfg.key] || []).includes(row) ? "is-exit" : ""}" data-exit-row="${row}"><b>${row}</b><span>${cfg.seats}</span><em>${(seatBagExitRows[cfg.key] || []).includes(row) ? "Emergency exit" : "Standard row"}</em></button>`).join("")}</div>
+        <h4>${escapeHtml(cfg.name)}</h4><p>Click an individual seat to mark or clear it as an emergency exit.</p>
+        <div class="seat-bag-config-rows">${cfg.rows.map((row) => `<div class="seat-bag-config-row"><b>${row}</b><div class="seat-bag-config-seats">${cfg.columns.map((column) => { const seat = `${row}${column}`; const isExit = (seatBagExitSeats[cfg.key] || []).includes(seat); return `<button type="button" class="seat-bag-config-seat ${isExit ? "is-exit" : ""}" data-exit-seat="${seat}" aria-pressed="${isExit}">${seat}</button>`; }).join("")}</div></div>`).join("")}</div>
       </section>`).join("");
-    seatBagConfigMaps.querySelectorAll("[data-exit-row]").forEach((button) => button.addEventListener("click", () => {
+    seatBagConfigMaps.querySelectorAll("[data-exit-seat]").forEach((button) => button.addEventListener("click", () => {
       const key = button.closest("[data-aircraft-key]")?.dataset.aircraftKey;
-      const row = Number(button.dataset.exitRow);
-      if (!key || !Number.isFinite(row)) return;
-      const rows = new Set(seatBagExitRows[key] || []);
-      rows.has(row) ? rows.delete(row) : rows.add(row);
-      seatBagExitRows[key] = [...rows].sort((a, b) => a - b);
+      const seat = button.dataset.exitSeat;
+      if (!key || !/^\d+[A-D]$/.test(seat || "")) return;
+      const seats = new Set(seatBagExitSeats[key] || []);
+      seats.has(seat) ? seats.delete(seat) : seats.add(seat);
+      seatBagExitSeats[key] = [...seats].sort((a, b) => Number.parseInt(a, 10) - Number.parseInt(b, 10) || a.localeCompare(b));
       renderSeatBagConfigMaps();
     }));
   }
@@ -5662,8 +5662,8 @@
     try {
       const resp = await fetch(seatBagExitRowsUrl);
       const data = await resp.json();
-      if (!resp.ok || data.ok === false) throw new Error(data.error || "Unable to load emergency-exit rows");
-      seatBagExitRows = data.exit_rows || {};
+      if (!resp.ok || data.ok === false) throw new Error(data.error || "Unable to load emergency-exit seats");
+      seatBagExitSeats = data.exit_seats || {};
       renderSeatBagConfigMaps();
       seatBagConfigStatus.textContent = "";
     } catch (err) { seatBagConfigStatus.textContent = err.message || String(err); }
@@ -5864,10 +5864,10 @@
     saveSeatBagConfig.disabled = true;
     seatBagConfigStatus.textContent = "Saving...";
     try {
-      const resp = await fetch(seatBagExitRowsUrl, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ exit_rows: seatBagExitRows }) });
+      const resp = await fetch(seatBagExitRowsUrl, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ exit_seats: seatBagExitSeats }) });
       const data = await resp.json();
-      if (!resp.ok || data.ok === false) throw new Error(data.error || "Unable to save emergency-exit rows");
-      seatBagExitRows = data.exit_rows || seatBagExitRows;
+      if (!resp.ok || data.ok === false) throw new Error(data.error || "Unable to save emergency-exit seats");
+      seatBagExitSeats = data.exit_seats || seatBagExitSeats;
       seatBagConfigStatus.textContent = "Saved.";
     } catch (err) { seatBagConfigStatus.textContent = err.message || String(err); }
     finally { saveSeatBagConfig.disabled = false; }

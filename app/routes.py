@@ -3080,14 +3080,29 @@ def _seat_bag_aircraft_key(aircraft_type: str = "", reg: str = "") -> str:
     return "SAAB340"
 
 
-def _seat_bag_exit_rows(aircraft_type: str = "", reg: str = "") -> set[int]:
+def _seat_bag_exit_seats(aircraft_type: str = "", reg: str = "") -> set[str]:
+    """Return configured emergency-exit seats for an aircraft.
+
+    Numeric values are retained as a backwards-compatible interpretation of the
+    earlier row-level configuration: every seat in that row remains protected
+    until an administrator saves the new per-seat configuration.
+    """
     cfg = db.session.get(AppConfig, 1)
     try:
         values = json.loads(cfg.seat_bag_exit_rows_json or "{}") if cfg else {}
     except (TypeError, ValueError):
         values = {}
-    rows = values.get(_seat_bag_aircraft_key(aircraft_type, reg), []) if isinstance(values, dict) else []
-    return {int(row) for row in rows if str(row).isdigit()}
+    key = _seat_bag_aircraft_key(aircraft_type, reg)
+    configured = values.get(key, []) if isinstance(values, dict) else []
+    letters = "ABCD" if key == "ATR72" else "ABC"
+    result = set()
+    for value in configured if isinstance(configured, list) else []:
+        seat = str(value or "").strip().upper()
+        if re.fullmatch(r"\d+[A-D]", seat):
+            result.add(seat)
+        elif seat.isdigit():
+            result.update(f"{int(seat)}{letter}" for letter in letters)
+    return result
 
 
 def _valid_seat_bag_pair(seats: list[str], aircraft_type: str = "", reg: str = "") -> bool:
@@ -3103,7 +3118,7 @@ def _valid_seat_bag_pair(seats: list[str], aircraft_type: str = "", reg: str = "
     if parsed[0][0] != parsed[1][0]:
         return False
     row_number = parsed[0][0]
-    if row_number in _seat_bag_exit_rows(aircraft_type, reg):
+    if {str(seat).strip().upper() for seat in seats}.intersection(_seat_bag_exit_seats(aircraft_type, reg)):
         return False
     letters = frozenset((parsed[0][1], parsed[1][1]))
     type_code = str(aircraft_type or "").upper()
@@ -3126,7 +3141,7 @@ def api_dcs_seat_bag_exit_rows():
     from .views import _current_apg_user
     user = _current_apg_user()
     if not user or not user.is_admin:
-        return jsonify({"ok": False, "error": "Only administrators can configure emergency-exit rows."}), 403
+        return jsonify({"ok": False, "error": "Only administrators can configure emergency-exit seats."}), 403
     cfg = db.session.get(AppConfig, 1) or AppConfig(id=1)
     try:
         current = json.loads(cfg.seat_bag_exit_rows_json or "{}")
@@ -3134,19 +3149,24 @@ def api_dcs_seat_bag_exit_rows():
         current = {}
     if not isinstance(current, dict): current = {}
     if request.method == "PUT":
-        incoming = (request.get_json(silent=True) or {}).get("exit_rows", {})
+        incoming = (request.get_json(silent=True) or {}).get("exit_seats", {})
         if not isinstance(incoming, dict):
-            return jsonify({"ok": False, "error": "Emergency-exit rows must be an aircraft-to-rows map."}), 400
+            return jsonify({"ok": False, "error": "Emergency-exit seats must be an aircraft-to-seats map."}), 400
         clean = {}
         for key in ("ATR72", "SAAB340", "SAAB_CIT", "SAAB_CIZ"):
-            rows = incoming.get(key, [])
-            if not isinstance(rows, list): return jsonify({"ok": False, "error": "Emergency-exit rows must be lists."}), 400
-            clean[key] = sorted({int(row) for row in rows if str(row).isdigit() and 0 <= int(row) <= 30})
+            seats = incoming.get(key, [])
+            if not isinstance(seats, list): return jsonify({"ok": False, "error": "Emergency-exit seats must be lists."}), 400
+            max_row = 17 if key == "ATR72" else 11
+            allowed_letters = "ABCD" if key == "ATR72" else "ABC"
+            clean[key] = sorted({seat for value in seats if (match := re.fullmatch(r"(\d+)([A-D])", str(value or "").strip().upper())) and 0 <= int(match.group(1)) <= max_row and match.group(2) in allowed_letters}, key=lambda seat: (int(re.match(r"\d+", seat).group()), seat[-1]))
         cfg.seat_bag_exit_rows_json = json.dumps(clean)
         db.session.add(cfg)
         db.session.commit()
         current = clean
-    return jsonify({"ok": True, "exit_rows": current})
+    normalized = {}
+    for key in ("ATR72", "SAAB340", "SAAB_CIT", "SAAB_CIZ"):
+        normalized[key] = sorted(_seat_bag_exit_seats("ATR" if key == "ATR72" else "SAAB", {"SAAB_CIT": "ZK-CIT", "SAAB_CIZ": "ZK-CIZ"}.get(key, "")), key=lambda seat: (int(re.match(r"\d+", seat).group()), seat[-1]))
+    return jsonify({"ok": True, "exit_seats": normalized})
 
 
 @api_bp.route("/dcs/freight/<string:flight_id>", methods=["GET", "PUT"])
@@ -3173,10 +3193,9 @@ def api_dcs_freight(flight_id: str):
         seats = sorted({str(s).strip().upper() for s in (item.get("seats") or []) if str(s).strip()})
         try: freight_kg = float(item.get("freight_kg") or 0)
         except (TypeError, ValueError): return jsonify({"ok": False, "error": "Freight weight must be a number"}), 400
-        rows = {int(match.group(1)) for seat in seats if (match := re.fullmatch(r"(\d+)[A-Z]", seat))}
-        exit_rows = _seat_bag_exit_rows(data.get("aircraft_type") or "", data.get("reg") or "")
-        if rows.intersection(exit_rows):
-            return jsonify({"ok": False, "error": f"Seat bags cannot be allocated to emergency-exit row {min(rows.intersection(exit_rows))}."}), 400
+        exit_seats = set(seats).intersection(_seat_bag_exit_seats(data.get("aircraft_type") or "", data.get("reg") or ""))
+        if exit_seats:
+            return jsonify({"ok": False, "error": f"Seat bags cannot be allocated to emergency-exit seat {sorted(exit_seats)[0]}."}), 400
         if freight_kg < 0 or not _valid_seat_bag_pair(seats, data.get("aircraft_type") or "", data.get("reg") or ""):
             return jsonify({"ok": False, "error": "Every seat bag must use two adjacent seats on the same side"}), 400
         if used.intersection(seats): return jsonify({"ok": False, "error": "A seat can only belong to one seat bag"}), 400

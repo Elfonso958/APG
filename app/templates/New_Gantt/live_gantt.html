@@ -382,11 +382,11 @@
 
   <dialog id="seatBagConfigDialog" class="flight-edit-dialog seat-bag-config-dialog">
     <form method="dialog" class="flight-edit-shell">
-      <header><h3>Seat Bag Emergency-Exit Rows</h3><button class="btn btn-ghost" value="cancel">Close</button></header>
+      <header><h3>Seat Bag Emergency-Exit Seats</h3><button class="btn btn-ghost" value="cancel">Close</button></header>
       <div class="status-body">
-        <p class="muted">Select every emergency-exit row. Seat bags are blocked in these rows. The live Cargo view also warns when a child, UMNR, or infant occupies a seat-bag row.</p>
+        <p class="muted">Select each emergency-exit seat. Seat bags are blocked only in the selected seats, so an exit such as 1B and 1C does not block 1A. The live Cargo view also warns when a child, UMNR, or infant occupies a seat-bag row.</p>
         <div id="seatBagConfigMaps" class="seat-bag-config-maps"></div>
-        <div class="dialog-actions"><span id="seatBagConfigStatus" class="cargo-save-status" role="status"></span><button id="saveSeatBagConfig" class="btn btn-primary" type="button">Save emergency-exit rows</button></div>
+        <div class="dialog-actions"><span id="seatBagConfigStatus" class="cargo-save-status" role="status"></span><button id="saveSeatBagConfig" class="btn btn-primary" type="button">Save emergency-exit seats</button></div>
       </div>
     </form>
   </dialog>
