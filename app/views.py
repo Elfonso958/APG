@@ -2267,7 +2267,7 @@ def ops_charter_requests():
         reference = str(group["request"].reference)
         request_row = group["request"]
         group["brief"] = next((brief for brief in CharterBrief.query.order_by(CharterBrief.updated_at.desc()).all() if str(_charter_brief_details(brief).get("source_charter_request_id") or "") == str(request_row.id)), None)
-        if request_row.status == "Pending approval":
+        if request_row.status == "Pending approval" or (request_row.status in {"Approved", "Pushed to Envision"} and (user.is_admin or "operations" in _user_permissions(user))):
             group["request"].reference = Markup(f'<a id="charter-request-{request_row.id}" href="{escape(url_for("ui.ops_charter_request_edit", request_id=request_row.id))}">{escape(reference)}</a>')
         else:
             group["request"].reference = Markup(f'<span id="charter-request-{request_row.id}">{escape(reference)}</span>')
@@ -2436,7 +2436,9 @@ def ops_charter_request_edit(request_id):
     user = _current_apg_user()
     if not _charter_request_access(user): abort(403)
     row = db.session.get(CharterRequest, request_id)
-    if not row or row.status != "Pending approval": abort(404)
+    can_operate = bool(user.is_admin or "operations" in _user_permissions(user))
+    if not row or row.status not in {"Pending approval", "Approved", "Pushed to Envision"}: abort(404)
+    if row.status != "Pending approval" and not can_operate: abort(403)
     if request.method == "POST":
         if not _csrf_is_valid(): abort(403)
         try:
@@ -2445,8 +2447,13 @@ def ops_charter_request_edit(request_id):
         except ValueError:
             flash("Add at least one complete sector before resubmitting.", "danger")
             return redirect(url_for("ui.ops_charter_request_edit", request_id=row.id))
-        row.reference = str(request.form.get("reference") or row.reference).strip().upper(); row.title = str(request.form.get("title") or row.title).strip(); row.sectors_json = json.dumps(sectors); row.created_by = user.display_name or user.email; row.decision_by = row.decision_note = None; row.decided_at = None
-        db.session.add(row); db.session.commit(); flash("Charter request updated and resubmitted for approval.", "success")
+        existing_sectors = _request_sectors(row)
+        sectors = [{**(existing_sectors[index] if index < len(existing_sectors) else {}), **sector} for index, sector in enumerate(sectors)]
+        row.reference = str(request.form.get("reference") or row.reference).strip().upper(); row.title = str(request.form.get("title") or row.title).strip(); row.sectors_json = json.dumps(sectors); row.created_by = user.display_name or user.email
+        if row.status == "Pending approval":
+            row.decision_by = row.decision_note = None; row.decided_at = None
+        db.session.add(row); db.session.commit(); clear_gantt_flight_cache()
+        flash("Approved charter details updated." if row.status in {"Approved", "Pushed to Envision"} else "Charter request updated and resubmitted for approval.", "success")
         return redirect(url_for("ui.ops_charter_requests"))
     return render_template("charter_request_edit_v2.html", charter_request=row, sectors=_request_sectors(row))
 
@@ -2520,7 +2527,7 @@ def ops_charter_request_detail(request_id):
                         if sector.get("envision_flight_id"): continue
                         current_sector = sector
                         ftype = str(sector.get("flight_type") or "Charter").lower()
-                        type_row = next((item for item in types if ("position" in ftype and "position" in str(item.get("description") or item.get("flightTypeDescription") or "").lower()) or ("position" not in ftype and "charter" in str(item.get("description") or item.get("flightTypeDescription") or "").lower())), None)
+                        type_row = next((item for item in types if "charter" in str(item.get("description") or item.get("flightTypeDescription") or "").lower() and (("position" in ftype) == ("position" in str(item.get("description") or item.get("flightTypeDescription") or "").lower()))), None)
                         if not type_row: raise RuntimeError(f"No Envision flight type found for {sector.get('flight_type') or 'Charter'}.")
                         etd, eta = _parse_charter_local(sector.get("std"), sector.get("date")), _parse_charter_local(sector.get("sta"), sector.get("date"))
                         if eta <= etd: eta += timedelta(days=1)
@@ -2578,7 +2585,7 @@ def ops_charter_request_detail(request_id):
                 for sector in sectors:
                     if sector.get("envision_flight_id"): continue
                     ftype = str(sector.get("flight_type") or "Charter").lower()
-                    type_row = next((item for item in types if ("position" in ftype and "position" in str(item.get("description") or item.get("flightTypeDescription") or "").lower()) or ("position" not in ftype and "charter" in str(item.get("description") or item.get("flightTypeDescription") or "").lower())), None)
+                    type_row = next((item for item in types if "charter" in str(item.get("description") or item.get("flightTypeDescription") or "").lower() and (("position" in ftype) == ("position" in str(item.get("description") or item.get("flightTypeDescription") or "").lower()))), None)
                     if not type_row: raise RuntimeError(f"No Envision flight type found for {sector.get('flight_type') or 'Charter'}.")
                     etd, eta = _parse_charter_local(sector.get("std"), sector.get("date")), _parse_charter_local(sector.get("sta"), sector.get("date"))
                     if eta <= etd: eta += timedelta(days=1)
