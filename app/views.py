@@ -2578,7 +2578,7 @@ def ops_charter_request_detail(request_id):
                     registration = registrations_by_id[str(tail_assignments[str(sector.get("aircraft_group") or "aircraft-1")])]
                     flight_id = str(sector.get("envision_flight_id") or "").strip()
                     if not flight_id: raise RuntimeError(f"{sector.get('flight_number') or 'A sector'} is not linked to an Envision flight.")
-                    payload = {"ignoreValidations": True, "flightId": int(flight_id), "lineId": int(registration.get("id") or 0), "crewPositions": [{"id": 0, "employeeId": 0, "crewPositionId": 0}]}
+                    payload = {"ignoreValidations": True, "flightId": int(flight_id), "registrationId": int(registration.get("id") or 0), "crewPositions": [{"id": 0, "employeeId": 0, "crewPositionId": 0}]}
                     try:
                         response = envision_change_registration(token, int(flight_id), payload)
                         change_debug.append({"flight": sector.get("flight_number"), "target_tail": registration.get("registration") or registration.get("registrationDescription"), "request": payload, "response": response})
