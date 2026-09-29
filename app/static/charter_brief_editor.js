@@ -12,9 +12,10 @@
   let hotelFavourites = [];
   const hotelResults = new Map();
   const transportResults = new Map();
-  const lists = ["sectors", "crew", "accommodation", "transport", "ports"];
+  const lists = ["sectors", "bag_weights", "crew", "accommodation", "transport", "ports"];
   const fields = {
     sectors:["date", "source_flight_id", "flight", "dep", "arr", "std", "sta", "aircraft", "flight_type", "passenger_info", "crew_codes", "catering", "notes"],
+    bag_weights:["date", "flight", "bags_kg", "notes"],
     crew:["code", "name", "role", "phone"],
     accommodation:["date", "location", "hotel_lookup", "hotel", "address", "phone", "website", "notes", "google_place_id"],
     transport:["date", "location", "transport_lookup", "time", "service", "contact", "details"],
@@ -89,7 +90,7 @@
       return `<article class="handler-card"><h3>${esc(airport)} handling</h3><label class="handler-select-label">Handling provider<select data-handler-airport="${esc(airport)}"><option value="">Select handling provider...</option>${options.map((entry) => `<option value="${esc(entry.label)}" ${entry.label === selectedLabel ? "selected" : ""}>${esc(entry.label)} — ${esc(entry.handler)}</option>`).join("")}</select></label>${selected ? detail(selected) : `<p class="section-help">Choose the handling provider for this airport.</p>`}</article>`;
     }).join("") : `<p class="section-help">Select a flight to show handling and fuel details for its airports.</p>`;
   }
-  function render() { syncDailyGroundArrangements(); $("cateringAll").innerHTML = `<option value="">Apply catering to all flights...</option>${cateringServices.map((service) => `<option value="${esc(service)}">${esc(service)}</option>`).join("")}`; renderSectors(); renderTable("crew"); renderHandlers(); renderCards("accommodation"); renderCards("transport"); renderCards("ports"); $("operationsNotes").value = details.operations_notes || ""; $("crewNotes").value = details.crew_notes || ""; }
+  function render() { syncDailyGroundArrangements(); $("cateringAll").innerHTML = `<option value="">Apply catering to all flights...</option>${cateringServices.map((service) => `<option value="${esc(service)}">${esc(service)}</option>`).join("")}`; renderSectors(); renderTable("bag_weights"); renderTable("crew"); renderHandlers(); renderCards("accommodation"); renderCards("transport"); renderCards("ports"); $("operationsNotes").value = details.operations_notes || ""; $("crewNotes").value = details.crew_notes || ""; }
   app.addEventListener("click", async (event) => {
     const transportSearchButton = event.target.closest("[data-transport-search-button]");
     if (transportSearchButton) { await searchTransport(Number(transportSearchButton.dataset.transportSearchButton)); return; }
