@@ -173,6 +173,21 @@ class AirportHandlingProvider(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
+class HotelFavourite(db.Model):
+    """A shared hotel directory saved from the charter-brief accommodation search."""
+    __tablename__ = "hotel_favourites"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(255), nullable=False)
+    google_place_id = db.Column(db.String(255), unique=True, nullable=True)
+    address = db.Column(db.Text, nullable=True)
+    phone = db.Column(db.String(100), nullable=True)
+    website = db.Column(db.String(500), nullable=True)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey("app_users.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class AppUser(db.Model):
     """APG access assignments, optionally authenticated by Envision."""
     __tablename__ = "app_users"

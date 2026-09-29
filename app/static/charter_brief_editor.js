@@ -9,17 +9,19 @@
   try { handlerDirectory = JSON.parse(app.dataset.handlerDirectory || "[]"); } catch (_) { handlerDirectory = []; }
   let cateringServices = [];
   try { cateringServices = JSON.parse(app.dataset.cateringServices || "[]"); } catch (_) { cateringServices = []; }
+  let hotelFavourites = [];
+  const hotelResults = new Map();
   const lists = ["sectors", "crew", "accommodation", "transport", "ports"];
   const fields = {
     sectors:["date", "source_flight_id", "flight", "dep", "arr", "std", "sta", "aircraft", "flight_type", "passenger_info", "crew_codes", "catering", "notes"],
     crew:["code", "name", "role", "phone"],
-    accommodation:["date", "location", "hotel", "address", "phone", "notes"],
+    accommodation:["date", "location", "hotel_lookup", "hotel", "address", "phone", "website", "notes", "google_place_id"],
     transport:["date", "location", "time", "service", "contact", "details"],
     ports:["airport", "source", "notes"],
   };
   lists.forEach((name) => { if (!Array.isArray(details[name])) details[name] = []; });
   const timeValue = (value) => (String(value || "").match(/T(\d\d:\d\d)/) || [])[1] || String(value || "");
-  const input = (field, value) => `<input type="${["std", "sta"].includes(field) ? "time" : "text"}" data-field="${field}" value="${esc(["std", "sta"].includes(field) ? timeValue(value) : value)}">`;
+  const input = (field, value) => field === "hotel_lookup" ? `${hotelTools(Number(value))}<input type="hidden" data-field="google_place_id" value="${esc(details.accommodation[Number(value)]?.google_place_id || "")}">` : `<input type="${["std", "sta"].includes(field) ? "time" : "text"}" data-field="${field}" value="${esc(["std", "sta"].includes(field) ? timeValue(value) : value)}">`;
   const readOnly = (field, value) => `<span class="duty-readonly">${esc(["std", "sta"].includes(field) ? timeValue(value) : value || "—")}</span>`;
   const longDate = (value) => { const date = new Date(`${value}T12:00:00`); return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("en-NZ", { weekday:"long", day:"numeric", month:"long" }).format(date); };
   const passengerInfo = (flight) => {
@@ -28,6 +30,10 @@
     return flight.charter_manifest_uploaded ? "Manifest uploaded · 0 pax" : "No manifest uploaded";
   };
   const isCharterSector = (sector) => /charter/i.test(String(sector.flight_type || ""));
+  const hotelTools = (index) => {
+    const results = hotelResults.get(index) || [];
+    return `<div class="hotel-tools"><label class="hotel-search-label">Find a hotel<input data-hotel-search="${index}" placeholder="Type a hotel name" autocomplete="off"></label><button type="button" class="btn secondary" data-hotel-search-button="${index}">Search</button><label class="hotel-favourite-label">Saved favourite<select data-hotel-favourite="${index}"><option value="">Select a saved hotel…</option>${hotelFavourites.map((hotel) => `<option value="${hotel.id}">${esc(hotel.name)}</option>`).join("")}</select></label><button type="button" class="btn secondary" data-save-hotel="${index}">Save current hotel</button>${results.length ? `<div class="hotel-results">${results.map((hotel) => `<button type="button" class="hotel-result" data-hotel-result="${index}" data-hotel-id="${esc(hotel.google_place_id)}" data-hotel-name="${esc(hotel.name)}" data-hotel-address="${esc(hotel.address)}" data-hotel-phone="${esc(hotel.phone)}" data-hotel-website="${esc(hotel.website)}"><strong>${esc(hotel.name)}</strong><span>${esc(hotel.address || "Address unavailable")}</span>${hotel.phone ? `<small>${esc(hotel.phone)}</small>` : ""}</button>`).join("")}</div>` : ""}</div>`;
+  };
   function renderSectors() {
     const displayFields = fields.sectors.filter((field) => !["date", "source_flight_id"].includes(field));
     const byDay = new Map();
@@ -49,8 +55,9 @@
   }
   function renderCards(name) {
     const isGround = ["accommodation", "transport"].includes(name);
-    $( `${name}Rows` ).innerHTML = details[name].map((row) => {
-      const contentFields = isGround ? fields[name].filter((field) => !["date", "location"].includes(field)) : fields[name];
+    $( `${name}Rows` ).innerHTML = details[name].map((row, index) => {
+      if (name === "accommodation") row.hotel_lookup = index;
+      const contentFields = isGround ? fields[name].filter((field) => !["date", "location", "google_place_id"].includes(field)) : fields[name];
       const heading = isGround ? `<h3 class="ground-day-heading">${esc(longDate(row.date || "Date TBC"))} · ${esc(row.location || "Location TBC")}</h3><input type="hidden" data-field="date" value="${esc(row.date)}"><input type="hidden" data-field="location" value="${esc(row.location)}">` : "";
       return `<article class="brief-item" data-list-row="${name}"><div class="brief-item-grid">${heading}${contentFields.map((field) => `<label>${field.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())}${input(field, row[field])}</label>`).join("")}</div>${row._auto_ground ? "" : '<button type="button" class="remove-row">×</button>'}</article>`;
     }).join("");
@@ -71,6 +78,12 @@
   }
   function render() { syncDailyGroundArrangements(); $("cateringAll").innerHTML = `<option value="">Apply catering to all flights...</option>${cateringServices.map((service) => `<option value="${esc(service)}">${esc(service)}</option>`).join("")}`; renderSectors(); renderTable("crew"); renderHandlers(); renderCards("accommodation"); renderCards("transport"); renderCards("ports"); $("operationsNotes").value = details.operations_notes || ""; $("crewNotes").value = details.crew_notes || ""; }
   app.addEventListener("click", async (event) => {
+    const searchButton = event.target.closest("[data-hotel-search-button]");
+    if (searchButton) { await searchHotels(Number(searchButton.dataset.hotelSearchButton)); return; }
+    const hotelResult = event.target.closest("[data-hotel-result]");
+    if (hotelResult) { selectHotel(Number(hotelResult.dataset.hotelResult), { google_place_id:hotelResult.dataset.hotelId || "", name:hotelResult.dataset.hotelName || "", address:hotelResult.dataset.hotelAddress || "", phone:hotelResult.dataset.hotelPhone || "", website:hotelResult.dataset.hotelWebsite || "" }); return; }
+    const saveHotel = event.target.closest("[data-save-hotel]");
+    if (saveHotel) { await saveHotelFavourite(Number(saveHotel.dataset.saveHotel)); return; }
     const add = event.target.closest(".add-row");
     if (add) { details[add.dataset.list].push({}); render(); return; }
     const row = event.target.closest(".remove-row")?.closest("[data-list-row]");
@@ -82,6 +95,8 @@
     render();
   });
   app.addEventListener("change", (event) => {
+    const favourite = event.target.closest("[data-hotel-favourite]");
+    if (favourite) { const hotel = hotelFavourites.find((item) => String(item.id) === favourite.value); if (hotel) selectHotel(Number(favourite.dataset.hotelFavourite), hotel); return; }
     const catering = event.target.closest("[data-sector-catering]");
     if (catering) { const sector = details.sectors[Number(catering.dataset.sectorCatering)]; if (sector) sector.catering = catering.value; return; }
     const select = event.target.closest("[data-handler-airport]");
@@ -91,11 +106,41 @@
     else delete details.handler_selections[select.dataset.handlerAirport];
     renderHandlers();
   });
+  app.addEventListener("keydown", (event) => {
+    const search = event.target.closest("[data-hotel-search]");
+    if (search && event.key === "Enter") { event.preventDefault(); searchHotels(Number(search.dataset.hotelSearch)); }
+  });
   $("applyCateringAll").addEventListener("click", () => { if (!$("cateringAll").value) return alert("Choose a catering service first."); details.sectors.forEach((sector) => { if (isCharterSector(sector)) sector.catering = $("cateringAll").value; }); renderSectors(); });
   $("briefForm").addEventListener("submit", () => {
     lists.filter((name) => name !== "sectors").forEach((name) => { details[name] = [...document.querySelectorAll(`[data-list-row="${name}"]`)].map((row) => { const item = Object.fromEntries(fields[name].map((field) => [field, row.querySelector(`[data-field="${field}"]`)?.value.trim() || ""])); if (name === "crew" && row.dataset.source === "envision") item.source = "envision"; return item; }); });
     details.operations_notes = $("operationsNotes").value.trim(); details.crew_notes = $("crewNotes").value.trim(); $("detailsJson").value = JSON.stringify(details);
   });
+
+  function selectHotel(index, hotel) {
+    if (!details.accommodation[index]) return;
+    Object.assign(details.accommodation[index], { hotel:hotel.name || "", address:hotel.address || "", phone:hotel.phone || "", website:hotel.website || "", google_place_id:hotel.google_place_id || "" });
+    hotelResults.delete(index); render();
+  }
+  async function searchHotels(index) {
+    const search = app.querySelector(`[data-hotel-search="${index}"]`), query = search?.value.trim() || "", location = details.accommodation[index]?.location || "";
+    if (query.length < 3) return alert("Enter at least three characters to search for a hotel.");
+    try {
+      const response = await fetch(app.dataset.hotelSearchUrl, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({query, location}) });
+      const data = await response.json(); if (!response.ok || data.ok === false) throw Error(data.error || "Unable to search for hotels.");
+      hotelResults.set(index, data.hotels || []); render();
+    } catch (error) { alert(error.message); }
+  }
+  async function loadHotelFavourites() {
+    try { const response = await fetch(app.dataset.hotelFavouritesUrl); const data = await response.json(); if (response.ok && data.ok !== false) { hotelFavourites = data.favourites || []; render(); } } catch (_) { /* Manual accommodation entry remains available. */ }
+  }
+  async function saveHotelFavourite(index) {
+    const hotel = details.accommodation[index] || {}; if (!String(hotel.hotel || "").trim()) return alert("Choose or enter a hotel before saving it as a favourite.");
+    try {
+      const response = await fetch(app.dataset.hotelFavouritesUrl, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({name:hotel.hotel, address:hotel.address, phone:hotel.phone, website:hotel.website, google_place_id:hotel.google_place_id}) });
+      const data = await response.json(); if (!response.ok || data.ok === false) throw Error(data.error || "Unable to save this hotel.");
+      hotelFavourites = [...hotelFavourites.filter((item) => item.id !== data.favourite.id), data.favourite].sort((a, b) => a.name.localeCompare(b.name)); render();
+    } catch (error) { alert(error.message); }
+  }
 
   const dialog = $("envisionFlightsDialog"), flightList = $("envisionFlightsList"), flightStatus = $("envisionFlightsStatus"), from = $("envisionFrom"), to = $("envisionTo");
   let flights = [];
@@ -147,4 +192,5 @@
   });
   $("addSupplementaryCrew").addEventListener("click", async () => { const code = window.prompt("Enter the supplementary crew member's crew code:"); if (!code) return; try { const response = await fetch(`${app.dataset.crewLookupUrl}?crew_code=${encodeURIComponent(code.trim().toUpperCase())}`); const data = await response.json(); if (!response.ok || data.ok === false) throw Error(data.error || "Crew member not found"); const crew = data.crew; if (details.crew.some((item) => String(item.code || "").toUpperCase() === crew.code)) return alert(`${crew.code} is already on this brief.`); details.crew.push({ code:crew.code, name:crew.name, role:"Supplementary", phone:crew.phone || "", hotel:"", notes:"Supplementary crew" }); render(); } catch (error) { alert(error.message); } });
   render();
+  loadHotelFavourites();
 })();

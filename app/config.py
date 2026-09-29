@@ -29,3 +29,5 @@ class Config:
     DCS_API_KEY = os.getenv("DCS_API_KEY")
     PROD_DCS_API_KEY = os.getenv("PROD_DCS_API_KEY")
     DCS_DEFAULT_AIRLINE = os.getenv("DCS_DEFAULT_AIRLINE")
+    # Server-side only.  Never expose this value to a template or browser.
+    GOOGLE_PLACES_API_KEY = os.getenv("GOOGLE_PLACES_API_KEY", "")

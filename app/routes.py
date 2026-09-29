@@ -12,7 +12,7 @@ from . import db, _normalise_sync_result
 import requests
 from sqlalchemy import func
 from zoneinfo import ZoneInfo
-from .models import SyncRun, SyncFlightLog, SyncFlightState, ManualApgFlightLink, ManualDcsFlightLink, AppConfig, ManifestUploadState, CharterManifest, EnvisionOtpFlightCache, FlightFreightAllocation, FlightCargoAllocation, EmailSettings, AppUser, PowerBiApiKey
+from .models import SyncRun, SyncFlightLog, SyncFlightState, ManualApgFlightLink, ManualDcsFlightLink, AppConfig, ManifestUploadState, CharterManifest, EnvisionOtpFlightCache, FlightFreightAllocation, FlightCargoAllocation, EmailSettings, AppUser, PowerBiApiKey, HotelFavourite
 from .kmh_auth import get_kmh_session
 from .helpers_manifest import _seat_sort_key, _format_ssrs, _calc_age, _parse_dcs_dob, generate_manifest_pdf_from_html, generate_pdf_modern
 from .charter_wallet import apple_wallet_pass, google_wallet_link, make_wallet_token, parse_wallet_token
@@ -115,6 +115,102 @@ def _manual_link_user():
     from .views import _current_apg_user, _can_access
     user = _current_apg_user()
     return user if user and (user.is_admin or _can_access("operations", user)) else None
+
+
+def _charter_brief_user():
+    """Return the signed-in user allowed to work on a charter brief."""
+    from .views import _current_apg_user
+    return _current_apg_user()
+
+
+def _hotel_favourite_payload(favourite: HotelFavourite) -> dict:
+    return {
+        "id": favourite.id,
+        "name": favourite.name,
+        "google_place_id": favourite.google_place_id or "",
+        "address": favourite.address or "",
+        "phone": favourite.phone or "",
+        "website": favourite.website or "",
+    }
+
+
+@api_bp.post("/charter/hotels/search")
+def api_charter_hotel_search():
+    """Search Google Places from the server, keeping the Google key private."""
+    if not _charter_brief_user():
+        return jsonify(ok=False, error="Sign in is required."), 401
+    data = request.get_json(silent=True) or {}
+    query = str(data.get("query") or "").strip()
+    location = str(data.get("location") or "").strip()
+    if len(query) < 3:
+        return jsonify(ok=False, error="Enter at least three characters to search."), 400
+    key = str(current_app.config.get("GOOGLE_PLACES_API_KEY") or "").strip()
+    if not key:
+        return jsonify(ok=False, error="Hotel search has not been configured yet."), 503
+    search_text = " ".join(part for part in (query, "hotel", location) if part)
+    try:
+        response = requests.post(
+            "https://places.googleapis.com/v1/places:searchText",
+            headers={
+                "Content-Type": "application/json",
+                "X-Goog-Api-Key": key,
+                "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.internationalPhoneNumber,places.websiteUri",
+            },
+            json={"textQuery": search_text, "pageSize": 5},
+            timeout=10,
+        )
+        if not response.ok:
+            current_app.logger.warning("Google Places hotel search failed with status %s", response.status_code)
+            return jsonify(ok=False, error="Hotel search is unavailable. Please try again or enter the details manually."), 502
+        places = response.json().get("places", [])
+    except requests.RequestException:
+        current_app.logger.exception("Google Places hotel search failed")
+        return jsonify(ok=False, error="Hotel search is unavailable. Please try again or enter the details manually."), 502
+    results = [{
+        "google_place_id": str(place.get("id") or ""),
+        "name": str((place.get("displayName") or {}).get("text") or ""),
+        "address": str(place.get("formattedAddress") or ""),
+        "phone": str(place.get("internationalPhoneNumber") or ""),
+        "website": str(place.get("websiteUri") or ""),
+    } for place in places if isinstance(place, dict) and place.get("displayName")]
+    return jsonify(ok=True, hotels=results)
+
+
+@api_bp.route("/charter/hotel-favourites", methods=["GET", "POST"])
+def api_charter_hotel_favourites():
+    user = _charter_brief_user()
+    if not user:
+        return jsonify(ok=False, error="Sign in is required."), 401
+    if request.method == "GET":
+        favourites = HotelFavourite.query.order_by(HotelFavourite.name).all()
+        return jsonify(ok=True, favourites=[_hotel_favourite_payload(item) for item in favourites])
+    data = request.get_json(silent=True) or {}
+    name = str(data.get("name") or "").strip()
+    place_id = str(data.get("google_place_id") or "").strip() or None
+    if not name:
+        return jsonify(ok=False, error="A hotel name is required."), 400
+    favourite = HotelFavourite.query.filter_by(google_place_id=place_id).first() if place_id else None
+    if favourite is None:
+        favourite = HotelFavourite(name=name, google_place_id=place_id, created_by_user_id=user.id)
+        db.session.add(favourite)
+    favourite.name = name
+    favourite.address = str(data.get("address") or "").strip() or None
+    favourite.phone = str(data.get("phone") or "").strip() or None
+    favourite.website = str(data.get("website") or "").strip() or None
+    db.session.commit()
+    return jsonify(ok=True, favourite=_hotel_favourite_payload(favourite))
+
+
+@api_bp.delete("/charter/hotel-favourites/<int:favourite_id>")
+def api_charter_hotel_favourite_delete(favourite_id: int):
+    if not _charter_brief_user():
+        return jsonify(ok=False, error="Sign in is required."), 401
+    favourite = db.session.get(HotelFavourite, favourite_id)
+    if not favourite:
+        return jsonify(ok=False, error="Hotel favourite was not found."), 404
+    db.session.delete(favourite)
+    db.session.commit()
+    return jsonify(ok=True)
 
 
 def _manual_link_plan_options() -> list[dict]:
