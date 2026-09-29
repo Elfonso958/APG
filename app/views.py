@@ -2010,7 +2010,14 @@ def ops_charter_requests():
         flash("Charter request submitted for Operations approval.", "success")
         return redirect(url_for("ui.ops_charter_request_detail", request_id=row.id))
     rows = CharterRequest.query.order_by(CharterRequest.created_at.desc()).all()
-    return render_template("charter_requests_import.html", requests=rows, can_operate=bool(user.is_admin or "operations" in _user_permissions(user)))
+    request_rows = []
+    for item in rows:
+        sectors = _allocate_charter_numbers(_request_sectors(item))
+        days = {}
+        for sector in sectors:
+            days.setdefault(str(sector.get("date") or "Date TBC"), []).append(sector)
+        request_rows.append({"request": item, "days": days})
+    return render_template("charter_requests_board.html", request_rows=request_rows, can_operate=bool(user.is_admin or "operations" in _user_permissions(user)), format_date=_brief_print_date)
 
 
 @ui_bp.post("/ops/charter-requests/import")
