@@ -145,7 +145,13 @@
   const dialog = $("envisionFlightsDialog"), flightList = $("envisionFlightsList"), flightStatus = $("envisionFlightsStatus"), from = $("envisionFrom"), to = $("envisionTo");
   let flights = [];
   const timeLabel = (value) => { if (!value) return "TBC"; const date = new Date(value); return Number.isNaN(date.getTime()) ? String(value) : new Intl.DateTimeFormat("en-NZ", { hour:"2-digit", minute:"2-digit", hour12:true }).format(date); };
-  function dateRange(start, end) { const out = [], cursor = new Date(`${start}T00:00:00`), finish = new Date(`${end}T00:00:00`); while (cursor <= finish && out.length <= 14) { out.push(cursor.toISOString().slice(0, 10)); cursor.setDate(cursor.getDate() + 1); } return out; }
+  const localDateKey = (value) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+  function dateRange(start, end) {
+    const parseLocalDay = (value) => { const [year, month, day] = String(value || "").split("-").map(Number); return new Date(year, (month || 1) - 1, day || 1); };
+    const out = [], cursor = parseLocalDay(start), finish = parseLocalDay(end);
+    while (cursor <= finish && out.length <= 14) { out.push(localDateKey(cursor)); cursor.setDate(cursor.getDate() + 1); }
+    return out;
+  }
   function renderFlightSelector() {
     const days = new Map();
     flights.forEach((flight, index) => { const day = flight._briefDate, reg = String(flight.reg || flight.registration || "Aircraft TBC").toUpperCase(); if (!days.has(day)) days.set(day, new Map()); const regs = days.get(day); if (!regs.has(reg)) regs.set(reg, []); regs.get(reg).push({ flight, index }); });
