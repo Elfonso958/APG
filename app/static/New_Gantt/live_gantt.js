@@ -2804,14 +2804,17 @@
           <div><div class="card-title">${isFullFreighter ? "Freighter Cargo Zones" : "Seat-bag Freight"}</div><div class="card-sub">${isFullFreighter ? "This is a full freighter. Only the APG freight and cargo zones are shown." : "Select one or more adjacent seat pairs, convert them together, then click each seat bag to enter its weight."}</div></div>
           ${isFullFreighter ? "" : '<div class="freight-header-actions"><span data-freight-selection>Select one or more adjacent pairs.</span><button type="button" class="btn btn-ghost" data-freight-settings>Settings</button><button type="button" class="btn btn-primary" data-convert-freight disabled>Convert to Seat Bags</button></div>'}
         </div>
-        <div class="freight-aircraft">
-          <div class="freight-aircraft-nose" aria-hidden="true"></div>
-          <div class="freight-aircraft-map seatmap-grid">
-            ${forwardAircraftLoads}
-            ${isFullFreighter ? "" : freightAircraftMap}
-            ${aftAircraftLoads}
+        <div class="freight-aircraft-with-trim">
+          <div class="freight-aircraft">
+            <div class="freight-aircraft-nose" aria-hidden="true"></div>
+            <div class="freight-aircraft-map seatmap-grid">
+              ${forwardAircraftLoads}
+              ${isFullFreighter ? "" : freightAircraftMap}
+              ${aftAircraftLoads}
+            </div>
+            <div class="freight-aircraft-tail" aria-hidden="true"></div>
           </div>
-          <div class="freight-aircraft-tail" aria-hidden="true"></div>
+          ${renderCargoTrimBar(f)}
         </div>
         ${cargoSummaryHtml}
       </div>
@@ -3184,6 +3187,39 @@
     return { key: "within", label: "Within trim envelope", detail: `${rangeLabel}${nearest.toFixed(1)} cm to the nearest limit.` };
   }
 
+  function renderCargoTrimBar(f) {
+    const summary = f?.apgCargoWeightSummary;
+    if (!summary) return '<aside class="cargo-trim-bar is-loading" aria-label="Loaded aircraft trim">Loading trim...</aside>';
+    const trim = projectedLoadedTrim(f, summary.loaded_trim || null);
+    if (!trim?.available) return `<aside class="cargo-trim-bar is-unavailable" aria-label="Loaded aircraft trim">Trim unavailable: ${escapeHtml(trim?.reason || "APG aircraft station arms are unavailable")}</aside>`;
+    const trimState = trimDisplayState(trim);
+    const envelope = trim.envelope || {};
+    const scaleMin = envelope.available
+      ? Math.min(Number(envelope.forwardArm ?? envelope.overallForwardArm), Number(trim.cg_arm))
+      : Number(trim.scale_forward_arm);
+    const scaleMax = envelope.available
+      ? Math.max(Number(envelope.aftArm ?? envelope.overallAftArm), Number(trim.cg_arm))
+      : Number(trim.scale_aft_arm);
+    const scaleSpan = Math.max(0.1, scaleMax - scaleMin);
+    const markerPosition = ((Number(trim.cg_arm) - scaleMin) / scaleSpan) * 100;
+    const forwardPosition = envelope.forwardArm !== undefined ? ((Number(envelope.forwardArm) - scaleMin) / scaleSpan) * 100 : 0;
+    const aftPosition = envelope.aftArm !== undefined ? ((Number(envelope.aftArm) - scaleMin) / scaleSpan) * 100 : 100;
+    const massUnit = summary.units?.mass || "kg";
+    const lengthUnit = summary.units?.length || "cm";
+    return `
+      <aside class="cargo-trim-bar trim-${trimState.key}" aria-label="Loaded aircraft trim">
+        <div class="cargo-trim-bar-heading"><strong>Loaded Trim</strong><b>${Number(trim.percent_mac).toFixed(1)}% MAC</b></div>
+        <div class="cargo-trim-bar-status" title="${escapeHtml(trimState.detail)}">${escapeHtml(trimState.label)}</div>
+        <div class="cargo-trim-vertical-scale" aria-label="Nose to tail trim scale">
+          <span class="cargo-trim-vertical-valid-range" style="top:${Math.max(0, forwardPosition).toFixed(1)}%;bottom:${Math.max(0, 100 - aftPosition).toFixed(1)}%" aria-hidden="true"></span>
+          <span class="cargo-trim-vertical-marker" style="top:${Math.max(0, Math.min(100, markerPosition)).toFixed(1)}%" title="Current loaded CG"></span>
+        </div>
+        <div class="cargo-trim-bar-labels"><span>Nose</span><strong>CG ${Number(trim.cg_arm).toFixed(1)} ${escapeHtml(lengthUnit)}</strong><span>Tail</span></div>
+        <small>${Number(trim.mass).toFixed(0)} ${escapeHtml(massUnit)} loaded</small>
+      </aside>
+    `;
+  }
+
   function renderCargoWeightsSummary(f) {
     if (!cargoWeightsSummary) return;
     if (!getApgPlanId(f?.apg_plan_id)) {
@@ -3257,7 +3293,6 @@
         <div class="cargo-safety-text">${overallState.text}</div>
         <div class="cargo-safety-focus">${overallState.subtext}</div>
       </div>
-      ${trimHtml}
       <details class="cargo-weight-accordion" ${detailsOpen ? "open" : ""}>
         <summary>
           <span>Weight and estimate details</span>
@@ -3332,6 +3367,8 @@
     accordion?.addEventListener("toggle", () => {
       f.apgCargoWeightDetailsOpen = accordion.open;
     });
+    const trimBar = cargoEditor?.querySelector(".cargo-trim-bar");
+    if (trimBar) trimBar.outerHTML = renderCargoTrimBar(f);
   }
 
   function renderDetailWeightBalanceSummary(f, summary) {
@@ -3396,7 +3433,12 @@
     } finally {
       f.apgCargoSummaryLoading = false;
     }
-    if (selectedFlight === f) renderCargoWeightsSummary(f);
+    if (selectedFlight === f) {
+      renderCargoWeightsSummary(f);
+      // The trim bar lives beside the aircraft map, so repaint the editor
+      // once APG's loaded-trim summary arrives.
+      if (cargoDialog?.open && f.apgCargoStationsLoaded) renderCargoEditor(f);
+    }
   }
 
   async function openCargoDialog(testMode = false) {

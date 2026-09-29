@@ -1366,7 +1366,26 @@ body.view-gantt .bar { height: 30px; font-size: .9rem; }
 .freight-editor-head { position: sticky; top: 54px; z-index: 15; margin: -4px -4px 0; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--panel) 96%, transparent); box-shadow: 0 8px 24px rgba(15, 23, 42, .12); backdrop-filter: blur(10px); }
 .freight-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .freight-header-actions [data-freight-selection] { max-width: 260px; color: var(--muted); font-size: .72rem; font-weight: 700; }
+.freight-aircraft-with-trim { width: min(100%, 560px); margin: 0 auto; display: grid; grid-template-columns: minmax(0, 390px) minmax(110px, 150px); gap: 14px; align-items: stretch; }
 .freight-aircraft { width: min(100%, 390px); margin: 0 auto; }
+.cargo-trim-bar { min-width: 0; display: flex; flex-direction: column; gap: 7px; padding: 9px 8px; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--panel) 96%, white 4%); color: var(--muted); font-size: .62rem; }
+.cargo-trim-bar.is-loading, .cargo-trim-bar.is-unavailable { display: grid; place-content: center; text-align: center; }
+.cargo-trim-bar-heading { display: flex; justify-content: space-between; gap: 5px; color: var(--text); font-size: .7rem; }
+.cargo-trim-bar-heading b { color: var(--accent); white-space: nowrap; }
+.cargo-trim-bar-status { padding: 5px 6px; border-radius: 6px; background: color-mix(in srgb, var(--line) 35%, transparent); color: var(--muted); font-weight: 800; text-align: center; }
+.trim-within .cargo-trim-bar-heading b, .trim-within .cargo-trim-bar-status { color: #22c55e; }
+.trim-near .cargo-trim-bar-heading b, .trim-near .cargo-trim-bar-status { color: #f59e0b; }
+.trim-outside .cargo-trim-bar-heading b, .trim-outside .cargo-trim-bar-status { color: #ef4444; }
+.cargo-trim-vertical-scale { position: relative; flex: 1 1 180px; min-height: 180px; width: 4px; margin: 3px auto; border-radius: 999px; background: color-mix(in srgb, #ef4444 65%, var(--line)); }
+.cargo-trim-vertical-valid-range { position: absolute; right: 0; left: 0; min-height: 2px; border-radius: inherit; background: #22c55e; box-shadow: 0 0 0 2px color-mix(in srgb, #22c55e 18%, transparent); }
+.cargo-trim-vertical-marker { position: absolute; left: 50%; width: 18px; height: 4px; border-radius: 999px; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); transform: translate(-50%, -50%); }
+.trim-within .cargo-trim-vertical-marker { background: #22c55e; }
+.trim-near .cargo-trim-vertical-marker { background: #f59e0b; }
+.trim-outside .cargo-trim-vertical-marker { background: #ef4444; box-shadow: 0 0 0 4px color-mix(in srgb, #ef4444 24%, transparent); }
+.cargo-trim-bar-labels { display: grid; gap: 3px; text-align: center; }
+.cargo-trim-bar-labels span { color: var(--muted); font-size: .58rem; }
+.cargo-trim-bar-labels strong { color: var(--text); font-size: .64rem; }
+.cargo-trim-bar > small { color: var(--muted); text-align: center; }
 .freight-aircraft-nose, .freight-aircraft-tail { width: 76%; height: 42px; margin: 0 auto; border: 2px solid var(--line); background: var(--panel); }
 .freight-aircraft-nose { border-bottom: 0; border-radius: 50% 50% 0 0 / 100% 100% 0 0; }
 .freight-aircraft-tail { height: 30px; border-top: 0; border-radius: 0 0 45% 45%; }
@@ -1428,6 +1447,9 @@ body.view-gantt .bar { height: 30px; font-size: .9rem; }
 }
 @media (max-width: 760px) {
   .freight-editor-head { top: 66px; }
+  .freight-aircraft-with-trim { grid-template-columns: minmax(0, 1fr); }
+  .cargo-trim-bar { min-height: 0; }
+  .cargo-trim-vertical-scale { flex-basis: 120px; min-height: 120px; }
   .freight-header-actions { width: 100%; flex-wrap: wrap; justify-content: stretch; }
   .freight-header-actions [data-freight-selection] { flex: 1 0 100%; max-width: none; }
   .freight-header-actions .btn { flex: 1; }
