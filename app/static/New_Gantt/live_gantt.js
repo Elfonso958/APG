@@ -99,6 +99,11 @@
   const manualApgLinkSearch = document.getElementById("manualApgLinkSearch");
   const manualApgLinkOptions = document.getElementById("manualApgLinkOptions");
   const manualApgLinkStatus = document.getElementById("manualApgLinkStatus");
+  const manualDcsSearchFields = document.getElementById("manualDcsSearchFields");
+  const manualDcsLinkDate = document.getElementById("manualDcsLinkDate");
+  const manualDcsLinkFlight = document.getElementById("manualDcsLinkFlight");
+  const manualDcsLinkDeparture = document.getElementById("manualDcsLinkDeparture");
+  const manualDcsLinkSearchBtn = document.getElementById("manualDcsLinkSearchBtn");
   const seatBagConfigBtn = document.getElementById("seatBagConfigBtn");
   const seatBagConfigDialog = document.getElementById("seatBagConfigDialog");
   const seatBagConfigMaps = document.getElementById("seatBagConfigMaps");
@@ -4026,8 +4031,11 @@
     return manualApgLinkUrlTemplate.replace("__FLIGHT__", encodeURIComponent(String(f?.envision_flight_id || "")));
   }
 
-  function manualDcsLinkUrl(f) {
-    const params = new URLSearchParams({ dep: String(f?.dep || ""), date: String(dayInput?.value || app.dataset.day || ""), designator: String(f?.designator || ""), flight_number: String(f?.flight_number || f?.flight || "") });
+  function manualDcsLinkUrl(f, values = {}) {
+    const defaultFlight = f?.designator && f?.flight_number ? `${f.designator}${f.flight_number}` : (f?.flight || "");
+    const fullFlight = String(values.flight || defaultFlight).replace(/\s+/g, "").toUpperCase();
+    const match = fullFlight.match(/^([A-Z0-9]{2})(\d+)$/);
+    const params = new URLSearchParams({ dep: String(values.dep || f?.dep || "").toUpperCase(), date: String(values.date || dayInput?.value || app.dataset.day || ""), designator: match?.[1] || "", flight_number: match?.[2] || "" });
     return `${manualDcsLinkUrlTemplate.replace("__FLIGHT__", encodeURIComponent(String(f?.envision_flight_id || "")))}?${params}`;
   }
 
@@ -4036,10 +4044,20 @@
     manualApgLinkTitle.textContent = `Manually Link ${flightCode(f)} to DCS`;
     manualApgLinkOptions.innerHTML = "";
     manualApgLinkSearch.hidden = true;
-    manualApgLinkStatus.textContent = "Loading DCS flights...";
+    manualDcsSearchFields.hidden = false;
+    manualDcsLinkDate.value = String(dayInput?.value || app.dataset.day || "");
+    manualDcsLinkFlight.value = `${f.designator || ""}${f.flight_number || f.flight || ""}`.replace(/\s+/g, "");
+    manualDcsLinkDeparture.value = String(f.dep || "").toUpperCase();
     manualApgLinkDialog.showModal();
-    try {
-      const response = await fetch(manualDcsLinkUrl(f));
+    const search = async () => {
+      const values = { date: manualDcsLinkDate.value, flight: manualDcsLinkFlight.value, dep: manualDcsLinkDeparture.value };
+      if (!/^([A-Z0-9]{2})(\d+)$/.test(String(values.flight || "").replace(/\s+/g, "").toUpperCase()) || !String(values.dep || "").trim() || !values.date) {
+        manualApgLinkStatus.textContent = "Enter a date, flight number (e.g. L818), and departure airport.";
+        return;
+      }
+      manualApgLinkStatus.textContent = "Loading DCS flights...";
+      try {
+      const response = await fetch(manualDcsLinkUrl(f, values));
       const data = await response.json();
       if (!response.ok || data.ok === false) throw new Error(data.error || "Unable to load DCS flights");
       const choices = Array.isArray(data.flights) ? data.flights : [];
@@ -4048,7 +4066,7 @@
         button.disabled = true;
         manualApgLinkStatus.textContent = "Saving link...";
         try {
-          const save = await fetch(manualDcsLinkUrl(f), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ index: Number(button.dataset.dcsIndex) }) });
+          const save = await fetch(manualDcsLinkUrl(f, values), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ index: Number(button.dataset.dcsIndex) }) });
           const result = await save.json();
           if (!save.ok || result.ok === false) throw new Error(result.error || "Unable to save manual DCS link");
           manualApgLinkDialog.close();
@@ -4056,7 +4074,10 @@
         } catch (err) { manualApgLinkStatus.textContent = err.message || String(err); button.disabled = false; }
       }));
       manualApgLinkStatus.textContent = `${choices.length} DCS flight${choices.length === 1 ? "" : "s"} available.`;
-    } catch (err) { manualApgLinkStatus.textContent = err.message || String(err); }
+      } catch (err) { manualApgLinkStatus.textContent = err.message || String(err); }
+    };
+    manualDcsLinkSearchBtn.onclick = search;
+    manualApgLinkStatus.textContent = "Enter the DCS flight details, then search.";
   }
 
   async function openManualApgLink(f) {
@@ -4065,6 +4086,7 @@
     manualApgLinkOptions.innerHTML = "";
     manualApgLinkSearch.value = "";
     manualApgLinkSearch.hidden = false;
+    manualDcsSearchFields.hidden = true;
     manualApgLinkStatus.textContent = "Loading APG flights...";
     manualApgLinkDialog.showModal();
     try {

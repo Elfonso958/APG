@@ -347,6 +347,7 @@
       <header><h3 id="manualApgLinkTitle">Manually Link APG Flight</h3><button class="btn btn-ghost" value="cancel">Close</button></header>
       <div class="status-body">
         <p class="muted">Choose the APG flight that belongs to this Live Gantt flight. This is an Operations fallback when automatic linking has not found the correct plan.</p>
+        <div id="manualDcsSearchFields" class="manual-dcs-search-fields" hidden><input id="manualDcsLinkDate" class="form-control" type="date"><input id="manualDcsLinkFlight" class="form-control" placeholder="Flight, e.g. L818"><input id="manualDcsLinkDeparture" class="form-control" placeholder="Departure, e.g. TBU" maxlength="4"><button id="manualDcsLinkSearchBtn" class="btn btn-ghost" type="button">Search DCS</button></div>
         <input id="manualApgLinkSearch" class="form-control" type="search" placeholder="Search flight, route, registration, time or APG ID">
         <div id="manualApgLinkOptions" class="manual-apg-link-options"></div>
         <div id="manualApgLinkStatus" class="cargo-save-status" role="status"></div>

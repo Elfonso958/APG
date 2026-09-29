@@ -750,10 +750,12 @@ body {
 .seatmap-warning-title { color: #b91c1c; font-weight: 900; margin-bottom: 8px; }
 .detail-manual-link { margin-left: 6px; border: 1px solid var(--accent); border-radius: 5px; background: transparent; color: var(--accent); cursor: pointer; font: inherit; font-size: .67rem; font-weight: 800; padding: 3px 6px; }
 .manual-apg-link-dialog { width: min(720px, 96vw); }
+.manual-dcs-search-fields { display: grid; grid-template-columns: 1fr 1fr 110px auto; gap: 7px; margin-bottom: 10px; }
 .manual-apg-link-options { display: grid; gap: 7px; max-height: 48dvh; overflow: auto; margin-top: 10px; }
 .manual-apg-link-option { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(100px, 1fr); gap: 3px 12px; text-align: left; border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; background: var(--panel-soft); color: var(--text); cursor: pointer; font: inherit; }
 .manual-apg-link-option:hover { border-color: var(--accent); }
 .manual-apg-link-option small { grid-column: 1 / -1; color: var(--muted); }
+@media (max-width: 700px) { .manual-dcs-search-fields { grid-template-columns: 1fr 1fr; } }
 .seatmap-select-instruction { color: var(--muted); margin-bottom: 10px; }
 .seat-bag-config-dialog { width: min(920px, 96vw); max-height: 92dvh; }
 .seatmap-config-section { margin: 12px 0; padding: 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-soft); }
