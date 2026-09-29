@@ -2166,6 +2166,7 @@ def ops_charter_requests():
     for group in request_rows:
         reference = str(group["request"].reference)
         request_row = group["request"]
+        group["brief"] = next((brief for brief in CharterBrief.query.order_by(CharterBrief.updated_at.desc()).all() if str(_charter_brief_details(brief).get("source_charter_request_id") or "") == str(request_row.id)), None)
         if request_row.status == "Pending approval":
             group["request"].reference = Markup(f'<a id="charter-request-{request_row.id}" href="{escape(url_for("ui.ops_charter_request_edit", request_id=request_row.id))}">{escape(reference)}</a>')
         else:
@@ -2238,7 +2239,7 @@ def ops_charter_request_planning(request_id):
         etd = _parse_env_time_to_nz(flight.get("departureEstimate") or flight.get("departureScheduled"))
         eta = _parse_env_time_to_nz(flight.get("arrivalEstimate") or flight.get("arrivalScheduled"))
         if not etd or etd.date() != day: continue
-        scheduled.append({"tail": str(flight.get("flightRegistrationDescription") or flight.get("aircraftRegistration") or "Unassigned"), "flight": str(flight.get("flightNumberDescription") or "Flight"), "dep": str(flight.get("departurePlaceDescription") or ""), "arr": str(flight.get("arrivalPlaceDescription") or ""), "std": etd.strftime("%H%M"), "sta": eta.strftime("%H%M") if eta else ""})
+        scheduled.append({"tail": str(flight.get("flightRegistrationDescription") or flight.get("aircraftRegistration") or "Unassigned"), "flight": str(flight.get("flightNumberDescription") or "Flight"), "dep": str(flight.get("departurePlaceDescription") or ""), "arr": str(flight.get("arrivalPlaceDescription") or ""), "std": etd.strftime("%H%M"), "sta": eta.strftime("%H%M") if eta else "", "flight_type": str(flight.get("flightTypeDescription") or flight.get("flightType") or "")})
     ghosts = [sector for sector in sectors if str(sector.get("date")) == day_value]
     ground_positions = {}
     day_start = datetime.combine(day, time.min, tzinfo=NZ)
@@ -2351,18 +2352,48 @@ def ops_charter_request_detail(request_id):
         if action in {"approve", "reject"}:
             row.status = "Approved" if action == "approve" else "Rejected"
             if action == "approve":
+                try:
+                    tour_group = int(request.form.get("tour_group") or 0)
+                    if not 0 <= tour_group <= 9: raise ValueError
+                except ValueError:
+                    flash("Choose one flight-number middle digit from 0 to 9.", "danger")
+                    return redirect(url_for("ui.ops_charter_request_planning", request_id=row.id))
+                sectors = _request_sectors(row)
+                _allocate_charter_numbers(sectors, tour_group)
                 registration_id = request.form.get("registration_id", type=int)
-                if registration_id:
-                    try:
-                        token = envision_authenticate()["token"]
+                try:
+                    token = envision_authenticate()["token"]
+                    # A flight number must be unique on its operating day. Check both
+                    # Envision (authoritative schedule) and approved local requests.
+                    flights_by_day = {}
+                    for sector in sectors:
+                        day_text = str(sector.get("date") or "")
+                        if not day_text or day_text in flights_by_day: continue
+                        day_value = date.fromisoformat(day_text)
+                        flights_by_day[day_text] = _list_from_envision_payload(envision_get_flights(token, datetime.combine(day_value, time.min, tzinfo=NZ).astimezone(timezone.utc), datetime.combine(day_value + timedelta(days=1), time.min, tzinfo=NZ).astimezone(timezone.utc)))
+                    conflicts = []
+                    for sector in sectors:
+                        number = str(sector.get("flight_number") or "").strip().upper()
+                        day_text = str(sector.get("date") or "")
+                        if not number or not day_text: continue
+                        if any(str(flight.get("flightNumberDescription") or "").strip().upper() == number for flight in flights_by_day.get(day_text, [])):
+                            conflicts.append(f"{number} on {day_text}")
+                    for other in CharterRequest.query.filter(CharterRequest.id != row.id, CharterRequest.status.in_(["Approved", "Pushed to Envision"])).all():
+                        for other_sector in _request_sectors(other):
+                            candidate = f"{str(other_sector.get('flight_number') or '').strip().upper()} on {str(other_sector.get('date') or '')}"
+                            if candidate in conflicts or not other_sector.get("flight_number"): continue
+                            if any(candidate == f"{str(sector.get('flight_number') or '').strip().upper()} on {str(sector.get('date') or '')}" for sector in sectors): conflicts.append(candidate)
+                    if conflicts:
+                        flash(f"Approval stopped: flight number already exists — {', '.join(conflicts[:5])}. Choose another middle digit.", "danger")
+                        return redirect(url_for("ui.ops_charter_request_planning", request_id=row.id))
+                    if registration_id:
                         registration = next((item for item in envision_get_line_registrations(token) if int(item.get("id") or 0) == registration_id), None)
                         if not registration: raise RuntimeError("The selected aircraft is no longer available in Envision.")
-                        sectors = _request_sectors(row)
                         for sector in sectors: sector["tail"] = str(registration.get("registration") or registration.get("registrationDescription") or "")
-                        row.sectors_json = json.dumps(sectors)
-                    except Exception as exc:
-                        flash(f"Request was not approved: {exc}", "danger")
-                        return redirect(url_for("ui.ops_charter_request_detail", request_id=row.id))
+                    row.sectors_json = json.dumps(sectors)
+                except Exception as exc:
+                    flash(f"Request was not approved: {exc}", "danger")
+                    return redirect(url_for("ui.ops_charter_request_planning", request_id=row.id))
             row.decision_by = user.display_name or user.email; row.decision_note = str(request.form.get("decision_note") or "").strip() or None; row.decided_at = datetime.utcnow()
             db.session.add(row); db.session.commit(); flash(f"Request {row.status.lower()}.", "success")
         elif action == "push_envision" and row.status == "Approved":
