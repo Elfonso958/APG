@@ -1979,6 +1979,41 @@ def _parse_charter_local(value, day):
     return datetime.combine(date.fromisoformat(str(day)), time(int(raw[:2]), int(raw[2:])), tzinfo=NZ)
 
 
+@ui_bp.post("/ops/charter-requests/sync-envision")
+@_login_required
+def ops_charter_requests_sync_envision():
+    user = _current_apg_user()
+    if not (user and (user.is_admin or "operations" in _user_permissions(user))) or not _csrf_is_valid(): abort(403)
+    approved = CharterRequest.query.filter_by(status="Approved").all()
+    sectors_by_request = [(row, _request_sectors(row)) for row in approved]
+    dates = [str(s.get("date") or "") for _, sectors in sectors_by_request for s in sectors if s.get("date")]
+    if not dates: flash("There are no approved dated sectors to sync.", "danger"); return redirect(url_for("ui.ops_charter_requests"))
+    try:
+        first, last = date.fromisoformat(min(dates)), date.fromisoformat(max(dates))
+        token = envision_authenticate()["token"]
+        payload = envision_get_flights(token, datetime.combine(first, time.min, tzinfo=NZ).astimezone(timezone.utc), datetime.combine(last + timedelta(days=1), time.min, tzinfo=NZ).astimezone(timezone.utc))
+        flights = _list_from_envision_payload(payload)
+        linked = 0
+        for row, sectors in sectors_by_request:
+            changed = False
+            for sector in sectors:
+                if sector.get("envision_flight_id"): continue
+                std = str(sector.get("std") or "").replace(":", "")
+                sta = str(sector.get("sta") or "").replace(":", "")
+                for flight in flights:
+                    dep = str(flight.get("departurePlaceDescription") or "").upper().strip()
+                    arr = str(flight.get("arrivalPlaceDescription") or "").upper().strip()
+                    etd = _parse_env_time_to_nz(flight.get("departureScheduled")); eta = _parse_env_time_to_nz(flight.get("arrivalScheduled"))
+                    if not etd or not eta: continue
+                    if (dep, arr, etd.date().isoformat(), etd.strftime("%H%M"), eta.strftime("%H%M")) != (str(sector.get("dep") or "").upper(), str(sector.get("arr") or "").upper(), str(sector.get("date")), std, sta): continue
+                    sector.update({"envision_flight_id":str(flight.get("id") or ""),"flight_number":str(flight.get("flightNumberDescription") or sector.get("flight_number") or ""),"tail":str(flight.get("flightRegistrationDescription") or flight.get("aircraftRegistration") or "")}); linked += 1; changed = True; break
+            if changed: row.sectors_json = json.dumps(sectors); db.session.add(row)
+        db.session.commit(); flash(f"Envision sync linked {linked} existing sector(s).", "success")
+    except Exception as exc:
+        current_app.logger.exception("Charter Envision matching failed"); flash(f"Envision sync failed: {exc}", "danger")
+    return redirect(url_for("ui.ops_charter_requests"))
+
+
 @ui_bp.route("/ops/charter-requests", methods=["GET", "POST"])
 @_login_required
 def ops_charter_requests():
@@ -2020,7 +2055,7 @@ def ops_charter_requests():
         start = date.fromisoformat(dated[0]) if dated else None
         request_rows.append({"request": item, "days": days, "start_date": start, "days_to_charter": (start - _nz_today()).days if start else None})
     request_rows.sort(key=lambda item: (item["start_date"] is None, item["start_date"] or date.max))
-    return render_template("charter_requests_board_v2.html", request_rows=request_rows, can_operate=bool(user.is_admin or "operations" in _user_permissions(user)), format_date=_brief_print_date)
+    return render_template("charter_requests_board_v3.html", request_rows=request_rows, can_operate=bool(user.is_admin or "operations" in _user_permissions(user)), format_date=_brief_print_date)
 
 
 @ui_bp.post("/ops/charter-requests/import")
