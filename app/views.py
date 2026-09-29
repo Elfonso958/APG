@@ -2010,7 +2010,41 @@ def ops_charter_requests():
         flash("Charter request submitted for Operations approval.", "success")
         return redirect(url_for("ui.ops_charter_request_detail", request_id=row.id))
     rows = CharterRequest.query.order_by(CharterRequest.created_at.desc()).all()
-    return render_template("charter_requests.html", requests=rows, can_operate=bool(user.is_admin or "operations" in _user_permissions(user)))
+    return render_template("charter_requests_import.html", requests=rows, can_operate=bool(user.is_admin or "operations" in _user_permissions(user)))
+
+
+@ui_bp.post("/ops/charter-requests/import")
+@_login_required
+def ops_charter_requests_import():
+    user = _current_apg_user()
+    if not _charter_request_access(user): abort(403)
+    if not _csrf_is_valid():
+        flash("Your form expired. Please try again.", "danger"); return redirect(url_for("ui.ops_charter_requests"))
+    groups, current = [], []
+    for line in str(request.form.get("schedule_text") or "").splitlines():
+        cells = [cell.strip() for cell in line.split("\t")]
+        if not any(cells):
+            if current: groups.append(current); current = []
+            continue
+        if len(cells) < 7 or cells[0].lower() in {"booking ref", "saab one", "saab two"}: continue
+        current.append(cells)
+    if current: groups.append(current)
+    created = 0
+    for rows in groups:
+        reference = rows[0][0]
+        if CharterRequest.query.filter_by(reference=reference).first():
+            reference = f"{reference} ({rows[0][1] if len(rows[0]) > 1 else created + 1})"
+        sectors = []
+        for row in rows:
+            def col(index): return row[index] if len(row) > index else ""
+            raw_date = col(1)
+            try: sector_date = datetime.strptime(raw_date.replace(",", ""), "%A %d %B %Y").date().isoformat()
+            except ValueError: continue
+            sectors.append({"date":sector_date,"dep":col(2).upper(),"arr":col(3).upper(),"std":col(4).replace(":", ""),"sta":col(5).replace(":", ""),"aircraft_type":col(6),"flight_type":col(7),"passengers":col(8),"baggage":col(9),"catering":col(10),"ground_handling":col(11),"notes":col(12)})
+        if sectors:
+            db.session.add(CharterRequest(reference=reference, title=reference, status="Approved", sectors_json=json.dumps(sectors), created_by="Spreadsheet import", decision_by="Spreadsheet import", decided_at=datetime.utcnow())); created += 1
+    db.session.commit(); flash(f"Imported {created} approved charter request(s).", "success")
+    return redirect(url_for("ui.ops_charter_requests"))
 
 
 @ui_bp.route("/ops/charter-requests/<int:request_id>", methods=["GET", "POST"])
