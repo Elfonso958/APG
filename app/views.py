@@ -2533,8 +2533,14 @@ def ops_charter_request_planning(request_id):
         tail_change_debug = None
     sectors = _allocate_charter_numbers(_request_sectors(row))
     available_days = sorted({str(sector.get("date") or "") for sector in sectors if sector.get("date")})
+    planner_days = []
+    if available_days:
+        cursor, last = date.fromisoformat(available_days[0]), date.fromisoformat(available_days[-1])
+        while cursor <= last:
+            planner_days.append(cursor.isoformat())
+            cursor += timedelta(days=1)
     requested_day = request.args.get("date")
-    day_value = requested_day if requested_day in available_days else (available_days[0] if available_days else _nz_today().isoformat())
+    day_value = requested_day if requested_day in planner_days else (available_days[0] if available_days else _nz_today().isoformat())
     try:
         day = date.fromisoformat(day_value)
         token = envision_authenticate()["token"]
@@ -2627,7 +2633,10 @@ def ops_charter_request_planning(request_id):
         registration_id = registration_by_tail.get(str(sector.get("tail") or "").upper())
         if registration_id:
             saved_tail_assignments[group_id] = registration_id
-    return render_template("charter_request_planning.html", charter_request=row, day=day_value, available_days=available_days, ghosts=ghosts, aircraft_groups=aircraft_groups, scheduled=scheduled, registrations=registrations, maintenance_by_registration=maintenance_by_registration, ground_positions=ground_positions, saved_tail_assignments=saved_tail_assignments, tail_change_debug=tail_change_debug, tail_debug_enabled=tail_debug_enabled, planning_mode="change_tail" if row.status == "Pushed to Envision" else "approve")
+    payload = {"day": day_value, "ghosts": ghosts, "aircraft_groups": aircraft_groups, "scheduled": scheduled, "registrations": registrations, "maintenance_by_registration": maintenance_by_registration, "ground_positions": ground_positions, "saved_tail_assignments": saved_tail_assignments}
+    if request.args.get("format") == "json":
+        return jsonify(payload)
+    return render_template("charter_request_planning.html", charter_request=row, day=day_value, available_days=available_days, planner_days=planner_days, **payload, tail_change_debug=tail_change_debug, tail_debug_enabled=tail_debug_enabled, planning_mode="change_tail" if row.status == "Pushed to Envision" else "approve")
 
 
 @ui_bp.post("/ops/charter-planner-debug-settings")
