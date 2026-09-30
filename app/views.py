@@ -2095,9 +2095,14 @@ def _charter_sector_direction(sector):
     return "south"
 
 
-def _allocate_charter_numbers(sectors, group_digit=0):
+def _allocate_charter_numbers(sectors, group_digit=0, replace_generated=False):
     counters = {"south": 0, "north": 1}
     for sector in sectors:
+        # Preview numbers are assigned before approval so they can appear on
+        # the planner. Replacing only that generated pattern keeps any genuine
+        # manually-entered flight number intact.
+        if replace_generated and re.fullmatch(r"3C9\d\d", str(sector.get("flight_number") or "").strip(), re.IGNORECASE):
+            sector["flight_number"] = ""
         if str(sector.get("flight_number") or "").strip():
             continue
         direction = _charter_sector_direction(sector)
@@ -2636,7 +2641,7 @@ def ops_charter_request_planning(request_id):
     payload = {"day": day_value, "ghosts": ghosts, "aircraft_groups": aircraft_groups, "scheduled": scheduled, "registrations": registrations, "maintenance_by_registration": maintenance_by_registration, "ground_positions": ground_positions, "saved_tail_assignments": saved_tail_assignments}
     if request.args.get("format") == "json":
         return jsonify(payload)
-    return render_template("charter_request_planning.html", charter_request=row, available_days=available_days, planner_days=planner_days, **payload, tail_change_debug=tail_change_debug, tail_debug_enabled=tail_debug_enabled, planning_mode="change_tail" if row.status == "Pushed to Envision" else "approve")
+    return render_template("charter_request_planning.html", charter_request=row, available_days=available_days, planner_days=planner_days, planner_preview_sectors=sectors, **payload, tail_change_debug=tail_change_debug, tail_debug_enabled=tail_debug_enabled, planning_mode="change_tail" if row.status == "Pushed to Envision" else "approve")
 
 
 @ui_bp.post("/ops/charter-planner-debug-settings")
@@ -2887,7 +2892,7 @@ def ops_charter_request_detail(request_id):
                     flash("Choose one flight-number middle digit from 0 to 9.", "danger")
                     return redirect(url_for("ui.ops_charter_request_planning", request_id=row.id))
                 sectors = _request_sectors(row)
-                _allocate_charter_numbers(sectors, tour_group)
+                _allocate_charter_numbers(sectors, tour_group, replace_generated=True)
                 try:
                     tail_assignments = json.loads(request.form.get("tail_assignments") or "{}")
                 except (TypeError, ValueError):
