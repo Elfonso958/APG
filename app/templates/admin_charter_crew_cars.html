@@ -1,0 +1,4 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card" style="max-width:820px;margin:28px auto;padding:28px"><p class="page-kicker">Charter settings</p><h1>Crew cars by port</h1><p>Save the ports that have a crew car and the local key, parking or availability notes. Example: <code>{"WSZ":"Keys held by ground crew"}</code>.</p><form method="post"><input type="hidden" name="csrf_token" value="{{ apg_csrf_token }}"><label style="display:grid;gap:8px;font-weight:800">Port settings<textarea name="crew_cars_json" rows="16" style="font-family:monospace">{{ crew_cars|tojson(indent=2) }}</textarea></label><p><button class="btn" type="submit">Save crew-car settings</button> <a class="btn secondary" href="{{ url_for('ui.admin_charter_operations') }}">Back to Charter operations</a></p></form></section>
+{% endblock %}

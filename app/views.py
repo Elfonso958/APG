@@ -1331,6 +1331,14 @@ def admin_charter_operations():
             cfg.catering_services_json = json.dumps([line.strip() for line in str(request.form.get("catering_services") or "").splitlines() if line.strip()])
             db.session.add(cfg)
             flash("Catering services saved.", "success")
+        elif action == "save_crew_cars":
+            try:
+                crew_cars = json.loads(str(request.form.get("crew_cars_json") or "{}"))
+                if not isinstance(crew_cars, dict): raise ValueError
+                cfg.charter_crew_cars_json = json.dumps({str(port).upper(): str(notes).strip() for port, notes in crew_cars.items() if str(port).strip()})
+                db.session.add(cfg); flash("Crew-car settings saved.", "success")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                flash("Crew-car settings must be a valid port-to-notes JSON object.", "danger")
         elif action == "delete_provider":
             provider = db.session.get(AirportHandlingProvider, request.form.get("provider_id"))
             if provider: db.session.delete(provider); flash("Handling provider removed.", "success")
@@ -1353,7 +1361,27 @@ def admin_charter_operations():
         return redirect(url_for("ui.admin_charter_operations"))
     catering, _ = _charter_operations_directory()
     providers = AirportHandlingProvider.query.order_by(AirportHandlingProvider.airport, AirportHandlingProvider.label).all()
-    return render_template("admin_charter_operations.html", catering_services="\n".join(catering), providers=providers)
+    try: crew_cars = json.loads(cfg.charter_crew_cars_json or "{}")
+    except (TypeError, ValueError): crew_cars = {}
+    return render_template("admin_charter_operations.html", catering_services="\n".join(catering), providers=providers, crew_cars=crew_cars)
+
+
+@ui_bp.route("/admin/charter-crew-cars", methods=["GET", "POST"])
+@_admin_required
+def admin_charter_crew_cars():
+    cfg = db.session.get(AppConfig, 1) or AppConfig(id=1)
+    if request.method == "POST":
+        if not _csrf_is_valid(): abort(403)
+        try:
+            values = json.loads(str(request.form.get("crew_cars_json") or "{}"))
+            if not isinstance(values, dict): raise ValueError
+            cfg.charter_crew_cars_json = json.dumps({str(port).upper(): str(notes).strip() for port, notes in values.items() if str(port).strip()})
+            db.session.add(cfg); db.session.commit(); flash("Crew-car settings saved.", "success")
+        except (TypeError, ValueError, json.JSONDecodeError): flash("Use a valid JSON port-to-notes object.", "danger")
+        return redirect(url_for("ui.admin_charter_crew_cars"))
+    try: crew_cars = json.loads(cfg.charter_crew_cars_json or "{}")
+    except (TypeError, ValueError): crew_cars = {}
+    return render_template("admin_charter_crew_cars.html", crew_cars=crew_cars)
 
 
 @ui_bp.route("/settings", methods=["GET", "POST"])
@@ -2931,7 +2959,9 @@ def ops_charter_request_ground_handling(request_id):
         except (TypeError, ValueError): item.events = []
         item.evidence_files = CharterChecklistEvidence.query.filter_by(checklist_item_id=item.id).order_by(CharterChecklistEvidence.created_at.desc()).all()
     evidence_map = {f"{item.item_type}|{item.service_date}|{item.location}": [{"name": evidence.filename, "url": url_for("ui.ops_charter_checklist_evidence", request_id=row.id, evidence_id=evidence.id), "view_url": url_for("ui.ops_charter_checklist_evidence_view", request_id=row.id, evidence_id=evidence.id)} for evidence in item.evidence_files] for item in coordination_items.values()}
-    return render_template("charter_request_ground_handling.html", charter_request=row, checklist=checklist, overnight_stops=overnight_stops, coordination_items=coordination_items, sectors=_request_sectors(row), checklist_evidence_map=evidence_map)
+    try: crew_cars = json.loads((db.session.get(AppConfig, 1).charter_crew_cars_json or "{}"))
+    except (AttributeError, TypeError, ValueError): crew_cars = {}
+    return render_template("charter_request_ground_handling.html", charter_request=row, checklist=checklist, overnight_stops=overnight_stops, coordination_items=coordination_items, sectors=_request_sectors(row), checklist_evidence_map=evidence_map, crew_cars=crew_cars)
 
 
 @ui_bp.route("/ops/charter-requests/<int:request_id>", methods=["GET", "POST"])
