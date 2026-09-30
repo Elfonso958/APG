@@ -179,6 +179,26 @@ class CharterHandlingEvent(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
 
 
+class CharterChecklistItem(db.Model):
+    """Accommodation and transport coordination for an overnight charter stop."""
+    __tablename__ = "charter_checklist_items"
+    id = db.Column(db.Integer, primary_key=True)
+    charter_request_id = db.Column(db.Integer, db.ForeignKey("charter_requests.id"), nullable=False, index=True)
+    item_type = db.Column(db.String(24), nullable=False)  # Accommodation or Transport
+    service_date = db.Column(db.String(16), nullable=False)
+    location = db.Column(db.String(8), nullable=False)
+    provider_name = db.Column(db.String(255), nullable=True)
+    contact = db.Column(db.String(255), nullable=True)
+    email_addresses = db.Column(db.Text, nullable=True)
+    details = db.Column(db.Text, nullable=True)
+    status = db.Column(db.String(24), nullable=False, default="Not sent")
+    event_log = db.Column(db.Text, nullable=False, default="[]")
+    evidence_filename = db.Column(db.String(255), nullable=True)
+    evidence_data = db.Column(db.LargeBinary, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class ManualApgFlightLink(db.Model):
     """Operations override for an Envision flight that could not be auto-matched to APG."""
     __tablename__ = "manual_apg_flight_links"

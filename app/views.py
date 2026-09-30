@@ -1,7 +1,7 @@
 ﻿from flask import Blueprint, render_template, request, redirect, jsonify, flash, current_app,send_file, abort, url_for, make_response
 from datetime import date, datetime, time, timezone, timedelta
 from flask import session
-from .models import SyncRun, SyncFlightLog, AppConfig, CharterManifest, CharterBrief, CharterRequest, CharterHandlingRequest, CharterHandlingEvent, AppUser, EmailSettings, PowerBiApiKey, ManualDcsFlightLink, AirportHandlingProvider
+from .models import SyncRun, SyncFlightLog, AppConfig, CharterManifest, CharterBrief, CharterRequest, CharterHandlingRequest, CharterHandlingEvent, CharterChecklistItem, AppUser, EmailSettings, PowerBiApiKey, ManualDcsFlightLink, AirportHandlingProvider
 from .airport_handling import AIRPORT_HANDLERS, DEFAULT_CATERING_SERVICES, handlers_for_airports
 from . import db
 from .kmh_auth import create_kmh_session, clear_kmh_session, get_kmh_session
@@ -1977,6 +1977,28 @@ def _request_handling_ports(request_row) -> list[str]:
     return ports
 
 
+def _charter_overnight_stops(request_row):
+    """Stops where a routed aircraft remains away from base until a later local date."""
+    sectors = _request_sectors(request_row)
+    ordered = []
+    for sector in sectors:
+        try:
+            ordered.append((_parse_charter_local(sector.get("std"), sector.get("date")), sector))
+        except Exception:
+            continue
+    ordered.sort(key=lambda item: item[0])
+    stops = []
+    for (_when, sector), (next_when, following) in zip(ordered, ordered[1:]):
+        location = str(sector.get("arr") or "").upper().strip()
+        if not location or location == "AKL" or location != str(following.get("dep") or "").upper().strip():
+            continue
+        if next_when.date() > _when.date():
+            stop = {"date": _when.date().isoformat(), "location": location, "next_date": next_when.date().isoformat()}
+            if stop not in stops:
+                stops.append(stop)
+    return stops
+
+
 def _handling_provider_for_port(request_row, airport, providers):
     """Use the saved allocation, otherwise auto-select a sole provider."""
     record = CharterHandlingRequest.query.filter_by(charter_request_id=request_row.id, airport=airport).order_by(CharterHandlingRequest.updated_at.desc()).first()
@@ -2697,6 +2719,63 @@ def ops_charter_request_ground_handling(request_id):
     providers = AirportHandlingProvider.query.order_by(AirportHandlingProvider.airport, AirportHandlingProvider.label).all()
     if request.method == "POST":
         if not _csrf_is_valid(): abort(403)
+        checklist_type = str(request.form.get("checklist_type") or "").strip()
+        if checklist_type:
+            if checklist_type not in {"Accommodation", "Transport"}:
+                abort(400)
+            service_date = str(request.form.get("service_date") or "").strip()
+            location = str(request.form.get("location") or "").upper().strip()
+            permitted = {(stop["date"], stop["location"]) for stop in _charter_overnight_stops(row)}
+            if (service_date, location) not in permitted:
+                abort(400)
+            item = CharterChecklistItem.query.filter_by(charter_request_id=row.id, item_type=checklist_type, service_date=service_date, location=location).first()
+            if not item:
+                item = CharterChecklistItem(charter_request_id=row.id, item_type=checklist_type, service_date=service_date, location=location)
+            item.provider_name = str(request.form.get("provider_name") or "").strip()
+            item.contact = str(request.form.get("contact") or "").strip()
+            item.email_addresses = "\n".join(line.strip() for line in str(request.form.get("email_addresses") or "").splitlines() if line.strip())
+            item.details = str(request.form.get("details") or "").strip()
+            try: events = json.loads(item.event_log or "[]")
+            except (TypeError, ValueError): events = []
+            now, actor = datetime.utcnow().strftime("%d %b %Y %H:%M UTC"), user.display_name or user.email or "Operations"
+            action = request.form.get("action")
+            if action == "send":
+                recipients = [line.strip() for line in item.email_addresses.splitlines() if "@" in line]
+                if not recipients:
+                    flash(f"Add an email address before sending the {checklist_type.lower()} request.", "danger")
+                    return redirect(url_for("ui.ops_charter_request_ground_handling", request_id=row.id))
+                subject = f"{checklist_type} request — {row.reference} — {location}"
+                message = f"Hello {item.contact or item.provider_name or ''},\n\nPlease confirm {checklist_type.lower()} arrangements for {row.reference} at {location} on {service_date}.\n\nDetails: {item.details or 'To be confirmed'}\n\nPlease reply all to confirm."
+                try:
+                    from .routes import _send_email_via_graph, _charter_email_sender
+                    if not _send_email_via_graph(_charter_email_sender(), recipients, subject, message):
+                        raise RuntimeError("Microsoft Graph did not accept the request.")
+                    item.status = "Sent"; events.append({"at": now, "event": "Request sent", "actor": actor, "detail": ", ".join(recipients)})
+                    flash(f"{checklist_type} request sent to {item.provider_name or location}.", "success")
+                except Exception as exc:
+                    current_app.logger.exception("Unable to send charter checklist request")
+                    flash(f"Request was not sent: {exc}", "danger")
+            elif action == "confirm":
+                item.status = "Confirmed"; events.append({"at": now, "event": "Confirmed", "actor": actor, "detail": str(request.form.get("confirmation_note") or "").strip()})
+                flash(f"{checklist_type} confirmed for {location}.", "success")
+            elif action == "upload":
+                upload = request.files.get("confirmation_file")
+                if not upload or not upload.filename:
+                    flash("Choose an email or confirmation file to attach.", "danger")
+                    return redirect(url_for("ui.ops_charter_request_ground_handling", request_id=row.id))
+                data = upload.read()
+                if len(data) > 10 * 1024 * 1024:
+                    flash("The attachment must be 10 MB or smaller.", "danger")
+                    return redirect(url_for("ui.ops_charter_request_ground_handling", request_id=row.id))
+                item.evidence_filename, item.evidence_data = upload.filename[:255], data
+                events.append({"at": now, "event": "Confirmation attached", "actor": actor, "detail": item.evidence_filename})
+                flash("Confirmation attached to the checklist item.", "success")
+            else:
+                events.append({"at": now, "event": "Details saved", "actor": actor, "detail": ""})
+                flash(f"{checklist_type} details saved for {location}.", "success")
+            item.event_log = json.dumps(events)
+            db.session.add(item); db.session.commit()
+            return redirect(url_for("ui.ops_charter_request_ground_handling", request_id=row.id))
         airport = str(request.form.get("airport") or "").upper().strip()
         provider_id = request.form.get("provider_id", type=int)
         provider = db.session.get(AirportHandlingProvider, provider_id) if provider_id else None
@@ -2770,7 +2849,12 @@ def ops_charter_request_ground_handling(request_id):
         events = events_by_record.get(record.id, []) if record else []
         send_count = sum(1 for event in events if event.event_type == "Request sent") + (1 if record and record.sent_at and not any(event.event_type == "Request sent" for event in events) else 0)
         checklist.append({"airport": airport, "providers": choices, "selected": selected, "record": record, "events": events, "send_count": send_count, "auto_selected": bool(selected and not record and len(choices) == 1)})
-    return render_template("charter_request_ground_handling.html", charter_request=row, checklist=checklist, sectors=_request_sectors(row))
+    overnight_stops = _charter_overnight_stops(row)
+    coordination_items = {(item.item_type, item.service_date, item.location): item for item in CharterChecklistItem.query.filter_by(charter_request_id=row.id).all()}
+    for item in coordination_items.values():
+        try: item.events = json.loads(item.event_log or "[]")
+        except (TypeError, ValueError): item.events = []
+    return render_template("charter_request_ground_handling.html", charter_request=row, checklist=checklist, overnight_stops=overnight_stops, coordination_items=coordination_items, sectors=_request_sectors(row))
 
 
 @ui_bp.route("/ops/charter-requests/<int:request_id>", methods=["GET", "POST"])
