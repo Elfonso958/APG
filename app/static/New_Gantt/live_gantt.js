@@ -4687,7 +4687,7 @@
         <div class="briefing-quick-actions">
           <button class="briefing-seatmap-button" type="button" data-seatmap-flight-id="${escapeHtml(String(f.envision_flight_id || ""))}">Seatmap</button>
           ${defectCount > 0 ? `<button class="briefing-mel-button" type="button" data-mel-reg="${escapeHtml(String(f.reg || ""))}" data-mel-reg-id="${escapeHtml(String(f.registration_id || ""))}" aria-label="View ${defectCount} open aircraft defect${defectCount === 1 ? "" : "s"}">MEL ${defectCount}</button>` : ""}
-          ${charterBriefUrl ? `<a class="briefing-charter-button" href="${escapeHtml(charterBriefUrl)}" target="_blank">Charter Brief${charterBriefVersion ? ` v${charterBriefVersion}` : ""}</a>` : ""}
+          ${charterBriefUrl ? `<a class="briefing-charter-button" href="${escapeHtml(charterBriefUrl)}" onclick="window.open(this.href, 'acCharterBrief'); return false;">Charter Brief${charterBriefVersion ? ` v${charterBriefVersion}` : ""}</a>` : ""}
           ${apgPlanId ? `<a class="briefing-apg-button" href="${apgRouteUrl(f, apgPlanId)}" target="_blank" rel="noopener noreferrer" aria-label="Open ${escapeHtml(flightCode(f))} in APG">APG</a>` : ""}
         </div>
         </article>`;
