@@ -2382,6 +2382,23 @@ def ops_charter_requests():
         dated = sorted((day for day in days if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day)))
         start = date.fromisoformat(dated[0]) if dated else None
         request_rows.append({"request": item, "days": days, "start_date": start, "days_to_charter": (start - _nz_today()).days if start else None})
+    handling_records = {}
+    if request_rows:
+        for record in CharterHandlingRequest.query.filter(
+            CharterHandlingRequest.charter_request_id.in_([group["request"].id for group in request_rows])
+        ).all():
+            handling_records[(record.charter_request_id, record.airport)] = record
+    for group in request_rows:
+        required_ports = _request_handling_ports(group["request"])
+        records = [handling_records.get((group["request"].id, airport)) for airport in required_ports]
+        confirmed = sum(record is not None and record.status == "Confirmed" for record in records)
+        outstanding = len(required_ports) - confirmed
+        if not required_ports or outstanding == 0:
+            group["handling"] = {"state": "complete", "label": "Handling complete", "detail": "No outstanding handling items", "confirmed": confirmed, "total": len(required_ports)}
+        elif any(record is None or record.status == "Not sent" for record in records):
+            group["handling"] = {"state": "attention", "label": "Handling needs action", "detail": f"{outstanding} port{'s' if outstanding != 1 else ''} outstanding", "confirmed": confirmed, "total": len(required_ports)}
+        else:
+            group["handling"] = {"state": "awaiting", "label": "Awaiting confirmation", "detail": f"{outstanding} port{'s' if outstanding != 1 else ''} to confirm", "confirmed": confirmed, "total": len(required_ports)}
     request_rows.sort(key=lambda item: (item["start_date"] is None, item["start_date"] or date.max, min((str(sector.get("std") or "9999").replace(":", "") for sectors in item["days"].values() for sector in sectors), default="9999")))
     rotations = []
     for group in request_rows:
