@@ -6247,7 +6247,10 @@
     setupCargoRevisionTimer();
     setActionsEnabled(false);
     applyCabinCrewRestriction(isCabinCrewRestricted);
-    if (isBriefingView && crewCodeInput) crewCodeInput.value = signedInCrewCode || localStorage.getItem("crew_briefing_code") || "";
+    // Preserve an Operations user's deliberate crew search when returning from
+    // a linked charter brief.  Fall back to their own EMP code only on the
+    // first visit, when there is no remembered search.
+    if (isBriefingView && crewCodeInput) crewCodeInput.value = localStorage.getItem("crew_briefing_code") || signedInCrewCode || "";
     if (isBriefingView && "serviceWorker" in navigator && app.dataset.serviceWorkerUrl) {
       navigator.serviceWorker.register(app.dataset.serviceWorkerUrl).catch((err) => console.warn("Crew briefing service worker unavailable", err));
     }
@@ -6256,8 +6259,8 @@
     if (isBriefingView) {
       flightDataReady = false;
       if (crewSearchBtn) crewSearchBtn.disabled = false;
-      if (signedInCrewCode) {
-        if (crewSearchStatus) crewSearchStatus.textContent = "Loading your roster…";
+      if (crewCodeInput?.value.trim()) {
+        if (crewSearchStatus) crewSearchStatus.textContent = "Loading crew roster…";
         await loadData({ showSpinner: true, force: true });
         return;
       }
