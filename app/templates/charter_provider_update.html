@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Update port information · AC Charters</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #eef3f4; color: #173743; font: 16px/1.45 Arial, Helvetica, sans-serif; }
+    .page { width: min(720px, calc(100% - 28px)); margin: 32px auto; background: #fff; }
+    .header { background: #075c74; color: #fff; padding: 26px 30px; }
+    .header img { display: block; width: 180px; height: auto; margin-bottom: 18px; }
+    .header h1 { margin: 0; font-size: 28px; }
+    .header p { margin: 6px 0 0; color: #dceff0; }
+    .content { padding: 28px 30px 32px; }
+    .port { background: #eef7f6; border-left: 5px solid #8dc63f; padding: 13px 16px; margin-bottom: 22px; }
+    .notice { background: #e7f4ea; border-left: 5px solid #4c9a61; padding: 14px 16px; margin-bottom: 22px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    label { display: block; font-weight: bold; font-size: 14px; margin: 0 0 6px; }
+    input, textarea { width: 100%; border: 1px solid #b6c9cc; border-radius: 4px; padding: 10px; color: #173743; font: inherit; }
+    textarea { min-height: 92px; resize: vertical; }
+    .wide { grid-column: 1 / -1; }
+    button { margin-top: 22px; border: 0; background: #075c74; color: #fff; padding: 13px 20px; font: bold 15px Arial, sans-serif; cursor: pointer; }
+    .small { color: #587479; font-size: 13px; }
+    @media (max-width: 600px) { .page { margin: 14px auto; } .header, .content { padding: 22px 18px; } .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="header">
+      <img src="{{ url_for('ui.charter_brand_asset', asset='main-logo') }}" alt="AC Charters">
+      <h1>Update port information</h1>
+      <p>Please keep your ground-handling details current for Charter Operations.</p>
+    </section>
+    <section class="content">
+      <div class="port"><strong>{{ provider.label }}</strong><br><span class="small">{{ provider.airport }} · Airport handling provider</span></div>
+      {% if saved %}
+        <div class="notice"><strong>Thank you — your port information has been updated.</strong><br>Charter Operations will use these details for future handling requests.</div>
+      {% else %}
+        <p>Please amend any details that are no longer current, then submit the form. This update applies to your provider record for <strong>{{ provider.airport }}</strong>.</p>
+        <form method="post">
+          <div class="grid">
+            <div><label for="handler">Handling company</label><input id="handler" name="handler" value="{{ provider.handler or '' }}"></div>
+            <div><label for="contact">Primary contact</label><input id="contact" name="contact" value="{{ provider.contact or '' }}"></div>
+            <div><label for="phone">Phone</label><input id="phone" name="phone" value="{{ provider.phone or '' }}"></div>
+            <div><label for="additional_phone">Additional phone</label><input id="additional_phone" name="additional_phone" value="{{ provider.additional_phone or '' }}"></div>
+            <div class="wide"><label for="email_addresses">Handling email addresses</label><textarea id="email_addresses" name="email_addresses" rows="3">{{ provider.email_addresses or '' }}</textarea><div class="small">One address per line.</div></div>
+            <div><label for="frequency">Agent frequency</label><input id="frequency" name="frequency" value="{{ provider.frequency or '' }}"></div>
+            <div><label for="gpu">GPU availability</label><input id="gpu" name="gpu" value="{{ provider.gpu or '' }}"></div>
+            <div class="wide"><label for="fuel">Fuel arrangements</label><textarea id="fuel" name="fuel">{{ provider.fuel or '' }}</textarea></div>
+            <div class="wide"><label for="notes">Operational notes</label><textarea id="notes" name="notes">{{ provider.notes or '' }}</textarea></div>
+          </div>
+          <button type="submit">Save port information</button>
+        </form>
+      {% endif %}
+    </section>
+  </main>
+</body>
+</html>

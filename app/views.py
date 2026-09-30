@@ -20,6 +20,7 @@ import html
 import time as _time
 import re
 import secrets
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from werkzeug.security import check_password_hash, generate_password_hash
 from markupsafe import Markup, escape
 from zoneinfo import ZoneInfo
@@ -1985,7 +1986,13 @@ def _handling_provider_for_port(request_row, airport, providers):
     return (choices[0], None) if len(choices) == 1 else (None, None)
 
 
-def _handling_request_text(charter_request, airport, provider, tracking_id):
+def _handling_provider_update_token(provider_id):
+    """A time-limited bearer link for a handler to correct its own directory record."""
+    serializer = URLSafeTimedSerializer(current_app.config["SECRET_KEY"], salt="charter-handling-provider-update")
+    return serializer.dumps({"provider_id": int(provider_id)})
+
+
+def _handling_request_text(charter_request, airport, provider, tracking_id, provider_update_url=None):
     matching_sectors = [sector for sector in _request_sectors(charter_request) if airport in {str(sector.get("dep") or "").upper(), str(sector.get("arr") or "").upper()}]
     lines = [
         f"Ground handling request — {charter_request.reference}",
@@ -2000,13 +2007,18 @@ def _handling_request_text(charter_request, airport, provider, tracking_id):
     ]
     for sector in matching_sectors:
         lines.append(f"{sector.get('date') or 'Date TBC'} · {sector.get('flight_number') or 'Flight TBC'} · {sector.get('dep') or '---'}–{sector.get('arr') or '---'} · STD {sector.get('std') or 'TBC'} · STA {sector.get('sta') or 'TBC'} · {sector.get('tail') or sector.get('aircraft_type') or 'Aircraft TBC'}")
-    lines.extend(["", f"Fuel: {provider.fuel or 'Please advise availability and arrangements.'}", f"GPU: {provider.gpu or 'Please advise availability.'}", "", "Please reply all to this email so the Charter Operations team can record your confirmation.", "", f"Tracking reference: [APG-HANDLING-{tracking_id}]"])
+    lines.extend(["", f"Fuel: {provider.fuel or 'Please advise availability and arrangements.'}", f"GPU: {provider.gpu or 'Please advise availability.'}", "", "Please reply all to this email so the Charter Operations team can record your confirmation."])
+    if provider_update_url:
+        lines.extend(["", "Need to correct your handling, fuel or contact details? Update your port information here:", provider_update_url])
+    lines.extend(["", f"Tracking reference: [APG-HANDLING-{tracking_id}]"])
     return "\n".join(lines)
 
 
-def _handling_request_html(charter_request, airport, provider, tracking_id):
-    """Branded, email-client-safe companion to the plain handling request."""
+def _handling_request_html(charter_request, airport, provider, tracking_id, provider_update_url):
+    """Conservative table markup so the message remains readable in Outlook."""
     safe = lambda value: html.escape(str(value or "—"))
+    safe_url = html.escape(provider_update_url, quote=True)
+    logo_url = url_for("ui.charter_brand_asset", asset="main-logo", _external=True)
     matching_sectors = [sector for sector in _request_sectors(charter_request) if airport in {str(sector.get("dep") or "").upper(), str(sector.get("arr") or "").upper()}]
     rows = "".join(
         "<tr>"
@@ -2017,17 +2029,19 @@ def _handling_request_html(charter_request, airport, provider, tracking_id):
         f"<td style='padding:10px;border-bottom:1px solid #d8e5e8'>{safe(sector.get('tail') or sector.get('aircraft_type'))}</td>"
         "</tr>" for sector in matching_sectors
     ) or "<tr><td colspan='5' style='padding:10px'>Sector details to be confirmed.</td></tr>"
-    return f"""<!doctype html><html><body style='margin:0;padding:24px;background:#edf5f5;font-family:Arial,sans-serif;color:#173743'>
-<table role='presentation' width='100%' cellspacing='0' cellpadding='0' border='0'><tr><td align='center'>
-<table role='presentation' width='680' cellspacing='0' cellpadding='0' border='0' style='max-width:680px;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 4px 18px #073b5c24'>
-<tr><td style='padding:26px 30px;background:linear-gradient(120deg,#075c74,#168195);color:#fff'><div style='font-size:11px;font-weight:bold;letter-spacing:1.4px'>AIR CHATHAMS · CHARTER OPERATIONS</div><h1 style='margin:9px 0 0;font-size:26px;line-height:1.15'>Ground handling request</h1><p style='margin:8px 0 0;color:#d8f2f0'>Please confirm the arrangements below.</p></td></tr>
-<tr><td style='padding:26px 30px'><table role='presentation' width='100%' cellspacing='0' cellpadding='0' border='0' style='margin-bottom:22px;background:#eef7f6;border-left:4px solid #8dc63f'><tr><td style='padding:13px 16px'><strong>{safe(charter_request.reference)}</strong><br><span style='color:#587479'>{safe(charter_request.title)} · {safe(airport)} · {safe(provider.label)}</span></td></tr></table>
-<p style='margin:0 0 16px;line-height:1.55'>Hello {safe(provider.contact or provider.handler)},</p><p style='margin:0 0 20px;line-height:1.55'>Please confirm ground handling, parking, GPU availability and any local requirements for the following charter operation at <strong>{safe(airport)}</strong>.</p>
-<table role='presentation' width='100%' cellspacing='0' cellpadding='0' border='0' style='border-collapse:collapse;font-size:13px'><thead><tr style='background:#173f50;color:#fff'><th align='left' style='padding:10px'>Date</th><th align='left' style='padding:10px'>Flight</th><th align='left' style='padding:10px'>Sector</th><th align='left' style='padding:10px'>Schedule</th><th align='left' style='padding:10px'>Aircraft</th></tr></thead><tbody>{rows}</tbody></table>
-<table role='presentation' width='100%' cellspacing='0' cellpadding='0' border='0' style='margin-top:22px;border-collapse:separate;border-spacing:0 8px'><tr><td style='width:130px;color:#587479;font-weight:bold'>Fuel</td><td>{safe(provider.fuel or 'Please advise availability and arrangements.')}</td></tr><tr><td style='color:#587479;font-weight:bold'>GPU</td><td>{safe(provider.gpu or 'Please advise availability.')}</td></tr><tr><td style='color:#587479;font-weight:bold'>Contact</td><td>{safe(provider.contact)} · {safe(provider.phone)}</td></tr></table>
-<div style='margin-top:22px;padding:14px 16px;border-radius:7px;background:#fff7e7;color:#6c5120;line-height:1.45'><strong>Please reply all</strong> to confirm arrangements, so the Charter Operations team can record your response.<br><span style='font-size:12px'>Tracking reference: [APG-HANDLING-{tracking_id}]</span></div>
-<p style='margin:24px 0 0;line-height:1.5'>Kind regards,<br><strong>Air Chathams Charter Operations</strong><br><a href='mailto:charters@airchathams.co.nz' style='color:#075c74'>charters@airchathams.co.nz</a></p></td></tr>
-<tr><td style='padding:14px 30px;background:#f2f7f7;color:#6d8589;font-size:11px'>Air Chathams Ltd · Charter Operations</td></tr></table>
+    return f"""<!doctype html><html><body style='margin:0;padding:0;background:#eef3f4;font-family:Arial,Helvetica,sans-serif;color:#173743'>
+<table role='presentation' width='100%' cellspacing='0' cellpadding='0' border='0' bgcolor='#eef3f4'><tr><td align='center' style='padding:24px 12px'>
+<table role='presentation' width='680' cellspacing='0' cellpadding='0' border='0' bgcolor='#ffffff' style='width:680px;max-width:680px'>
+<tr><td bgcolor='#075c74' style='padding:22px 28px;color:#ffffff'><img src='{html.escape(logo_url, quote=True)}' alt='AC Charters' width='180' border='0' style='display:block;height:auto;margin:0 0 18px'><div style='font-size:11px;font-weight:bold;letter-spacing:1px'>AIR CHATHAMS · CHARTER OPERATIONS</div><div style='font-size:27px;font-weight:bold;line-height:32px;margin-top:7px'>Ground handling request</div><div style='font-size:15px;line-height:21px;margin-top:5px;color:#dceff0'>Please confirm the arrangements below.</div></td></tr>
+<tr><td style='padding:26px 28px'><table role='presentation' width='100%' cellspacing='0' cellpadding='0' border='0' bgcolor='#eef7f6'><tr><td width='5' bgcolor='#8dc63f'>&nbsp;</td><td style='padding:13px 16px'><strong style='font-size:16px'>{safe(charter_request.reference)}</strong><br><span style='color:#587479;font-size:13px'>{safe(charter_request.title)} · {safe(airport)} · {safe(provider.label)}</span></td></tr></table>
+<p style='margin:22px 0 12px;line-height:22px'>Hello {safe(provider.contact or provider.handler)},</p><p style='margin:0 0 20px;line-height:22px'>Please confirm ground handling, parking, GPU availability and any local requirements for the following charter operation at <strong>{safe(airport)}</strong>.</p>
+<table role='presentation' width='100%' cellspacing='0' cellpadding='0' border='0' style='border-collapse:collapse;font-size:13px'><tr bgcolor='#173f50' style='color:#ffffff'><th align='left' style='padding:10px 7px'>Date</th><th align='left' style='padding:10px 7px'>Flight</th><th align='left' style='padding:10px 7px'>Sector</th><th align='left' style='padding:10px 7px'>Schedule</th><th align='left' style='padding:10px 7px'>Aircraft</th></tr><tbody>{rows}</tbody></table>
+<table role='presentation' width='100%' cellspacing='0' cellpadding='0' border='0' style='margin-top:20px;font-size:14px'><tr><td width='130' style='padding:6px 0;color:#587479;font-weight:bold'>Fuel</td><td style='padding:6px 0'>{safe(provider.fuel or 'Please advise availability and arrangements.')}</td></tr><tr><td style='padding:6px 0;color:#587479;font-weight:bold'>GPU</td><td style='padding:6px 0'>{safe(provider.gpu or 'Please advise availability.')}</td></tr><tr><td style='padding:6px 0;color:#587479;font-weight:bold'>Contact</td><td style='padding:6px 0'>{safe(provider.contact)} · {safe(provider.phone)}</td></tr></table>
+<table role='presentation' width='100%' cellspacing='0' cellpadding='0' border='0' bgcolor='#fff7e7' style='margin-top:20px'><tr><td style='padding:14px 16px;color:#6c5120;font-size:14px;line-height:20px'><strong>Please reply all</strong> to confirm arrangements, so Charter Operations can record your response.<br><span style='font-size:12px'>Tracking reference: [APG-HANDLING-{tracking_id}]</span></td></tr></table>
+<p style='margin:22px 0 12px;font-size:14px;line-height:20px'>Are any contact, fuel, GPU or local handling details out of date? Please use the button below to update your port information.</p>
+<table role='presentation' cellspacing='0' cellpadding='0' border='0'><tr><td bgcolor='#075c74' style='padding:12px 18px'><a href='{safe_url}' style='color:#ffffff;font-size:14px;font-weight:bold;text-decoration:none'>Update your port information</a></td></tr></table>
+<p style='margin:24px 0 0;line-height:20px'>Kind regards,<br><strong>Air Chathams Charter Operations</strong><br><a href='mailto:charters@airchathams.co.nz' style='color:#075c74'>charters@airchathams.co.nz</a></p></td></tr>
+<tr><td bgcolor='#f2f7f7' style='padding:14px 28px;color:#6d8589;font-size:11px'>Air Chathams Ltd · Charter Operations</td></tr></table>
 </td></tr></table></body></html>"""
 
 
@@ -2662,7 +2676,12 @@ def ops_charter_request_ground_handling(request_id):
         db.session.add(record); db.session.flush()
         record.recipient_emails = "\n".join(email.strip() for email in (provider.email_addresses or "").splitlines() if "@" in email)
         record.subject = f"Ground handling request — {row.reference} — {airport} [APG-HANDLING-{record.id}]"
-        record.body = _handling_request_text(row, airport, provider, record.id)
+        provider_update_url = url_for(
+            "ui.charter_handling_provider_update",
+            token=_handling_provider_update_token(provider.id),
+            _external=True,
+        )
+        record.body = _handling_request_text(row, airport, provider, record.id, provider_update_url)
         if request.form.get("action") == "send":
             recipients = [email.strip() for email in record.recipient_emails.splitlines() if "@" in email]
             cc = [email.strip() for email in str((db.session.get(EmailSettings, 1) or EmailSettings()).charter_request_recipients or "").split(",") if "@" in email]
@@ -2672,7 +2691,7 @@ def ops_charter_request_ground_handling(request_id):
                 return redirect(url_for("ui.ops_charter_request_ground_handling", request_id=row.id))
             try:
                 from .routes import _send_email_via_graph, _charter_email_sender
-                if not _send_email_via_graph(_charter_email_sender(), recipients, record.subject, record.body, html_body=_handling_request_html(row, airport, provider, record.id), cc_recipients=cc):
+                if not _send_email_via_graph(_charter_email_sender(), recipients, record.subject, record.body, html_body=_handling_request_html(row, airport, provider, record.id, provider_update_url), cc_recipients=cc):
                     raise RuntimeError("Microsoft Graph did not accept the handling request.")
                 record.status, record.sent_at, record.sent_by = "Sent", datetime.utcnow(), user.display_name or user.email
                 flash(f"Handling request sent to {provider.label}.", "success")
@@ -2965,6 +2984,36 @@ def ops_charter_brief_print(brief_id: int):
 @ui_bp.get("/charter/check-in/<token>")
 def charter_self_checkin(token: str):
     return render_template("charter_self_checkin.html", token=token)
+
+
+@ui_bp.route("/charter/handling-provider-update/<token>", methods=["GET", "POST"])
+def charter_handling_provider_update(token: str):
+    """Public, time-limited correction page linked only from handling emails."""
+    serializer = URLSafeTimedSerializer(current_app.config["SECRET_KEY"], salt="charter-handling-provider-update")
+    try:
+        payload = serializer.loads(token, max_age=60 * 60 * 24 * 90)
+        provider_id = int(payload["provider_id"])
+    except (BadSignature, SignatureExpired, KeyError, TypeError, ValueError):
+        abort(404)
+    provider = db.session.get(AirportHandlingProvider, provider_id)
+    if not provider:
+        abort(404)
+    if request.method == "POST":
+        provider.handler = str(request.form.get("handler") or "").strip()
+        provider.contact = str(request.form.get("contact") or "").strip()
+        provider.phone = str(request.form.get("phone") or "").strip()
+        provider.additional_phone = str(request.form.get("additional_phone") or "").strip()
+        provider.email_addresses = "\n".join(
+            line.strip() for line in str(request.form.get("email_addresses") or "").splitlines() if line.strip()
+        )
+        provider.frequency = str(request.form.get("frequency") or "").strip()
+        provider.gpu = str(request.form.get("gpu") or "").strip()
+        provider.fuel = str(request.form.get("fuel") or "").strip()
+        provider.notes = str(request.form.get("notes") or "").strip()
+        db.session.add(provider)
+        db.session.commit()
+        return render_template("charter_provider_update.html", provider=provider, saved=True)
+    return render_template("charter_provider_update.html", provider=provider, saved=False)
 
 
 @ui_bp.get("/dcs/charter-brand/<asset>")
