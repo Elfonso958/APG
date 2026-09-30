@@ -1,7 +1,7 @@
 ﻿from flask import Blueprint, render_template, request, redirect, jsonify, flash, current_app,send_file, abort, url_for, make_response
 from datetime import date, datetime, time, timezone, timedelta
 from flask import session
-from .models import SyncRun, SyncFlightLog, AppConfig, CharterManifest, CharterBrief, CharterRequest, AppUser, EmailSettings, PowerBiApiKey, ManualDcsFlightLink, AirportHandlingProvider
+from .models import SyncRun, SyncFlightLog, AppConfig, CharterManifest, CharterBrief, CharterRequest, CharterHandlingRequest, AppUser, EmailSettings, PowerBiApiKey, ManualDcsFlightLink, AirportHandlingProvider
 from .airport_handling import AIRPORT_HANDLERS, DEFAULT_CATERING_SERVICES, handlers_for_airports
 from . import db
 from .kmh_auth import create_kmh_session, clear_kmh_session, get_kmh_session
@@ -364,7 +364,7 @@ def _charter_operations_directory():
         catering = []
     _seed_airport_handling_providers()
     providers = AirportHandlingProvider.query.order_by(AirportHandlingProvider.airport, AirportHandlingProvider.label).all()
-    handlers = [{"airport": item.airport, "label": item.label, "handler": item.handler or "", "contact": item.contact or "", "phone": item.phone or "", "additional_phone": item.additional_phone or "", "emails": [email.strip() for email in (item.email_addresses or "").splitlines() if email.strip()], "frequency": item.frequency or "", "gpu": item.gpu or "", "fuel": item.fuel or "", "notes": item.notes or ""} for item in providers]
+    handlers = [{"id": item.id, "airport": item.airport, "label": item.label, "handler": item.handler or "", "contact": item.contact or "", "phone": item.phone or "", "additional_phone": item.additional_phone or "", "emails": [email.strip() for email in (item.email_addresses or "").splitlines() if email.strip()], "frequency": item.frequency or "", "gpu": item.gpu or "", "fuel": item.fuel or "", "notes": item.notes or ""} for item in providers]
     return (catering if isinstance(catering, list) and catering else DEFAULT_CATERING_SERVICES,
             handlers if isinstance(handlers, list) and handlers else AIRPORT_HANDLERS)
 
@@ -1964,6 +1964,45 @@ def _request_sectors(request_row):
         return []
 
 
+def _request_handling_ports(request_row) -> list[str]:
+    """Unique stations needing handling coordination, in route order."""
+    ports = []
+    for sector in _request_sectors(request_row):
+        for key in ("dep", "arr"):
+            airport = str(sector.get(key) or "").strip().upper()
+            if airport and airport not in ports:
+                ports.append(airport)
+    return ports
+
+
+def _handling_provider_for_port(request_row, airport, providers):
+    """Use the saved allocation, otherwise auto-select a sole provider."""
+    record = CharterHandlingRequest.query.filter_by(charter_request_id=request_row.id, airport=airport).order_by(CharterHandlingRequest.updated_at.desc()).first()
+    if record:
+        return next((provider for provider in providers if provider.id == record.provider_id), None), record
+    choices = [provider for provider in providers if provider.airport == airport]
+    return (choices[0], None) if len(choices) == 1 else (None, None)
+
+
+def _handling_request_text(charter_request, airport, provider, tracking_id):
+    matching_sectors = [sector for sector in _request_sectors(charter_request) if airport in {str(sector.get("dep") or "").upper(), str(sector.get("arr") or "").upper()}]
+    lines = [
+        f"Ground handling request — {charter_request.reference}",
+        "",
+        f"Reference: {charter_request.reference}",
+        f"Charter: {charter_request.title}",
+        f"Airport: {airport}",
+        f"Provider: {provider.label}",
+        "",
+        "Please confirm handling, parking, GPU availability and any local requirements for the following charter sectors:",
+        "",
+    ]
+    for sector in matching_sectors:
+        lines.append(f"{sector.get('date') or 'Date TBC'} · {sector.get('flight_number') or 'Flight TBC'} · {sector.get('dep') or '---'}–{sector.get('arr') or '---'} · STD {sector.get('std') or 'TBC'} · STA {sector.get('sta') or 'TBC'} · {sector.get('tail') or sector.get('aircraft_type') or 'Aircraft TBC'}")
+    lines.extend(["", f"Fuel: {provider.fuel or 'Please advise availability and arrangements.'}", f"GPU: {provider.gpu or 'Please advise availability.'}", "", "Please reply all to this email so the Charter Operations team can record your confirmation.", "", f"Tracking reference: [APG-HANDLING-{tracking_id}]"])
+    return "\n".join(lines)
+
+
 _CHARTER_AIRPORT_LATITUDES = {"AKL":-37.0,"WLG":-41.3,"CHC":-43.5,"DUD":-45.9,"IVC":-46.4,"ZQN":-45.0,"ROT":-38.1,"TRG":-37.7,"NPL":-39.0,"NPE":-39.5,"PMR":-40.3,"NSN":-41.3,"WSZ":-41.7,"TUO":-38.7,"TBU":-21.2,"VAV":-18.6,"HPA":-19.8}
 
 
@@ -2149,7 +2188,14 @@ def ops_charter_request_create_brief(request_id):
     start_date, end_date = date.fromisoformat(dated[0]), date.fromisoformat(dated[-1])
     reference = f"CB-{start_date:%Y%m%d}-{secrets.token_hex(2).upper()}"
     source_label = " + ".join(item.reference for item in source_rows)
-    details = {"source_charter_request_id": row.id, "source_charter_request_ids": [item.id for item in source_rows], "source_sector_keys": [sector.get("source_sector_key") for sector in sectors], "sectors": brief_sectors, "crew": crew, "accommodation": [], "transport": [], "ports": [], "handler_selections": {}, "bag_weights_text": "", "operations_notes": "", "crew_notes": ""}
+    providers = AirportHandlingProvider.query.all()
+    handler_selections = {}
+    for source_row in source_rows:
+        for airport in _request_handling_ports(source_row):
+            provider, _record = _handling_provider_for_port(source_row, airport, providers)
+            if provider:
+                handler_selections[airport] = provider.label
+    details = {"source_charter_request_id": row.id, "source_charter_request_ids": [item.id for item in source_rows], "source_sector_keys": [sector.get("source_sector_key") for sector in sectors], "sectors": brief_sectors, "crew": crew, "accommodation": [], "transport": [], "ports": [], "handler_selections": handler_selections, "bag_weights_text": "", "operations_notes": "", "crew_notes": ""}
     brief = CharterBrief(reference=reference, title=" + ".join(item.title or item.reference for item in source_rows), charterer=source_label, start_date=start_date, end_date=end_date, details_json=json.dumps(details, ensure_ascii=False))
     db.session.add(brief); db.session.commit()
     flash("Combined draft charter brief created." if len(source_rows) > 1 else "Draft charter brief created from the approved request.", "success")
@@ -2560,6 +2606,61 @@ def ops_charter_request_edit(request_id):
         flash("Approved charter details updated." if row.status in {"Approved", "Pushed to Envision"} else "Charter request updated and resubmitted for approval.", "success")
         return redirect(url_for("ui.ops_charter_requests"))
     return render_template("charter_request_edit_v2.html", charter_request=row, sectors=_request_sectors(row))
+
+
+@ui_bp.route("/ops/charter-requests/<int:request_id>/ground-handling", methods=["GET", "POST"])
+@_login_required
+def ops_charter_request_ground_handling(request_id):
+    """Operations checklist and outbound requests for charter handling providers."""
+    user = _current_apg_user()
+    can_operate = bool(user and (user.is_admin or "operations" in _user_permissions(user)))
+    row = db.session.get(CharterRequest, request_id)
+    if not row or not can_operate or row.status not in {"Approved", "Pushed to Envision"}:
+        abort(404)
+    providers = AirportHandlingProvider.query.order_by(AirportHandlingProvider.airport, AirportHandlingProvider.label).all()
+    if request.method == "POST":
+        if not _csrf_is_valid(): abort(403)
+        airport = str(request.form.get("airport") or "").upper().strip()
+        provider_id = request.form.get("provider_id", type=int)
+        provider = db.session.get(AirportHandlingProvider, provider_id) if provider_id else None
+        if airport not in _request_handling_ports(row) or not provider or provider.airport != airport:
+            flash("Choose a valid handling provider for that airport.", "danger")
+            return redirect(url_for("ui.ops_charter_request_ground_handling", request_id=row.id))
+        record = CharterHandlingRequest.query.filter_by(charter_request_id=row.id, airport=airport).first()
+        if not record:
+            record = CharterHandlingRequest(charter_request_id=row.id, airport=airport, provider_id=provider.id)
+        elif record.provider_id != provider.id:
+            record.provider_id, record.status, record.sent_at, record.sent_by = provider.id, "Not sent", None, None
+        db.session.add(record); db.session.flush()
+        record.recipient_emails = "\n".join(email.strip() for email in (provider.email_addresses or "").splitlines() if "@" in email)
+        record.subject = f"Ground handling request — {row.reference} — {airport} [APG-HANDLING-{record.id}]"
+        record.body = _handling_request_text(row, airport, provider, record.id)
+        if request.form.get("action") == "send":
+            recipients = [email.strip() for email in record.recipient_emails.splitlines() if "@" in email]
+            cc = [email.strip() for email in str((db.session.get(EmailSettings, 1) or EmailSettings()).charter_request_recipients or "").split(",") if "@" in email]
+            if not recipients:
+                db.session.rollback()
+                flash(f"{provider.label} has no saved email address. Add one in Charter operations first.", "danger")
+                return redirect(url_for("ui.ops_charter_request_ground_handling", request_id=row.id))
+            try:
+                from .routes import _send_email_via_graph, _charter_email_sender
+                if not _send_email_via_graph(_charter_email_sender(), recipients, record.subject, record.body, cc_recipients=cc):
+                    raise RuntimeError("Microsoft Graph did not accept the handling request.")
+                record.status, record.sent_at, record.sent_by = "Sent", datetime.utcnow(), user.display_name or user.email
+                flash(f"Handling request sent to {provider.label}.", "success")
+            except Exception as exc:
+                current_app.logger.exception("Unable to send charter handling request")
+                flash(f"Handling request was not sent: {exc}", "danger")
+        else:
+            flash(f"{provider.label} allocated for {airport}.", "success")
+        db.session.add(record); db.session.commit()
+        return redirect(url_for("ui.ops_charter_request_ground_handling", request_id=row.id))
+    checklist = []
+    for airport in _request_handling_ports(row):
+        choices = [provider for provider in providers if provider.airport == airport]
+        selected, record = _handling_provider_for_port(row, airport, providers)
+        checklist.append({"airport": airport, "providers": choices, "selected": selected, "record": record, "auto_selected": bool(selected and not record and len(choices) == 1)})
+    return render_template("charter_request_ground_handling.html", charter_request=row, checklist=checklist, sectors=_request_sectors(row))
 
 
 @ui_bp.route("/ops/charter-requests/<int:request_id>", methods=["GET", "POST"])

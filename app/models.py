@@ -148,6 +148,25 @@ class CharterRequest(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
+class CharterHandlingRequest(db.Model):
+    """Outbound handling coordination record, retained with the commercial request."""
+    __tablename__ = "charter_handling_requests"
+
+    id = db.Column(db.Integer, primary_key=True)
+    charter_request_id = db.Column(db.Integer, db.ForeignKey("charter_requests.id"), nullable=False, index=True)
+    airport = db.Column(db.String(8), nullable=False, index=True)
+    provider_id = db.Column(db.Integer, db.ForeignKey("airport_handling_providers.id"), nullable=False)
+    recipient_emails = db.Column(db.Text, nullable=False, default="")
+    subject = db.Column(db.String(500), nullable=False, default="")
+    body = db.Column(db.Text, nullable=False, default="")
+    status = db.Column(db.String(24), nullable=False, default="Not sent")
+    sent_at = db.Column(db.DateTime, nullable=True)
+    sent_by = db.Column(db.String(255), nullable=True)
+    reply_log = db.Column(db.Text, nullable=False, default="[]")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class ManualApgFlightLink(db.Model):
     """Operations override for an Envision flight that could not be auto-matched to APG."""
     __tablename__ = "manual_apg_flight_links"

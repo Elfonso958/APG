@@ -2267,7 +2267,7 @@ def _charter_email_sender() -> str:
     return _email_env("SMTP_FROM", "MAIL_FROM", "MAIL_DEFAULT_SENDER", default="info@accharters.co.nz")
 
 
-def _send_email_via_graph(sender: str, recipients: list[str], subject: str, body: str, *, html_body: str | None = None) -> bool:
+def _send_email_via_graph(sender: str, recipients: list[str], subject: str, body: str, *, html_body: str | None = None, cc_recipients: list[str] | None = None) -> bool:
     """Use the LMS Microsoft Graph setup when it is present; return False when unavailable."""
     tenant_id = _email_env("GRAPH_TENANT_ID", "MS_TENANT_ID")
     client_id = _email_env("GRAPH_CLIENT_ID", "MS_CLIENT_ID")
@@ -2299,6 +2299,8 @@ def _send_email_via_graph(sender: str, recipients: list[str], subject: str, body
             "body": {"contentType": "HTML" if html_body else "Text", "content": html_body or body},
             "toRecipients": [{"emailAddress": {"address": address}} for address in recipients],
         }
+        if cc_recipients:
+            message["ccRecipients"] = [{"emailAddress": {"address": address}} for address in cc_recipients]
         # Keep normal operational delivery on the authorised Graph mailbox.
         # A custom From is only attempted after Exchange has been configured to
         # permit this app to Send As that branded identity.
