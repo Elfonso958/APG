@@ -1,7 +1,7 @@
 ﻿from flask import Blueprint, render_template, request, redirect, jsonify, flash, current_app,send_file, abort, url_for, make_response
 from datetime import date, datetime, time, timezone, timedelta
 from flask import session
-from .models import SyncRun, SyncFlightLog, AppConfig, CharterManifest, CharterBrief, CharterRequest, CharterHandlingRequest, CharterHandlingEvent, CharterChecklistItem, AppUser, EmailSettings, PowerBiApiKey, ManualDcsFlightLink, AirportHandlingProvider
+from .models import SyncRun, SyncFlightLog, AppConfig, CharterManifest, CharterBrief, CharterRequest, CharterHandlingRequest, CharterHandlingEvent, CharterChecklistItem, CharterChecklistEvidence, AppUser, EmailSettings, PowerBiApiKey, ManualDcsFlightLink, AirportHandlingProvider
 from .airport_handling import AIRPORT_HANDLERS, DEFAULT_CATERING_SERVICES, handlers_for_airports
 from . import db
 from .kmh_auth import create_kmh_session, clear_kmh_session, get_kmh_session
@@ -2721,6 +2721,21 @@ def ops_charter_request_edit(request_id):
     return render_template("charter_request_edit_v2.html", charter_request=row, sectors=_request_sectors(row))
 
 
+@ui_bp.get("/ops/charter-requests/<int:request_id>/checklist-evidence/<int:evidence_id>")
+@_login_required
+def ops_charter_checklist_evidence(request_id, evidence_id):
+    user = _current_apg_user()
+    if not user or not (user.is_admin or "operations" in _user_permissions(user)):
+        abort(403)
+    evidence = db.session.get(CharterChecklistEvidence, evidence_id)
+    if not evidence:
+        abort(404)
+    item = db.session.get(CharterChecklistItem, evidence.checklist_item_id)
+    if not item or item.charter_request_id != request_id:
+        abort(404)
+    return send_file(BytesIO(evidence.data), download_name=evidence.filename, as_attachment=False)
+
+
 @ui_bp.route("/ops/charter-requests/<int:request_id>/ground-handling", methods=["GET", "POST"])
 @_login_required
 def ops_charter_request_ground_handling(request_id):
@@ -2749,6 +2764,7 @@ def ops_charter_request_ground_handling(request_id):
             item.contact = str(request.form.get("contact") or "").strip()
             item.email_addresses = "\n".join(line.strip() for line in str(request.form.get("email_addresses") or "").splitlines() if line.strip())
             item.details = str(request.form.get("details") or "").strip()
+            db.session.add(item); db.session.flush()
             try: events = json.loads(item.event_log or "[]")
             except (TypeError, ValueError): events = []
             now, actor = datetime.utcnow().strftime("%d %b %Y %H:%M UTC"), user.display_name or user.email or "Operations"
@@ -2773,17 +2789,22 @@ def ops_charter_request_ground_handling(request_id):
                 item.status = "Confirmed"; events.append({"at": now, "event": "Confirmed", "actor": actor, "detail": str(request.form.get("confirmation_note") or "").strip()})
                 flash(f"{checklist_type} confirmed for {location}.", "success")
             elif action == "upload":
-                upload = request.files.get("confirmation_file")
-                if not upload or not upload.filename:
+                uploads = [upload for upload in request.files.getlist("confirmation_files") if upload and upload.filename]
+                if not uploads:
+                    uploads = [upload for upload in request.files.getlist("confirmation_file") if upload and upload.filename]
+                if not uploads:
                     flash("Choose an email or confirmation file to attach.", "danger")
                     return redirect(url_for("ui.ops_charter_request_ground_handling", request_id=row.id))
-                data = upload.read()
-                if len(data) > 10 * 1024 * 1024:
-                    flash("The attachment must be 10 MB or smaller.", "danger")
-                    return redirect(url_for("ui.ops_charter_request_ground_handling", request_id=row.id))
-                item.evidence_filename, item.evidence_data = upload.filename[:255], data
-                events.append({"at": now, "event": "Confirmation attached", "actor": actor, "detail": item.evidence_filename})
-                flash("Confirmation attached to the checklist item.", "success")
+                filenames = []
+                for upload in uploads:
+                    data = upload.read()
+                    if len(data) > 10 * 1024 * 1024:
+                        flash(f"{upload.filename} exceeds the 10 MB attachment limit.", "danger")
+                        return redirect(url_for("ui.ops_charter_request_ground_handling", request_id=row.id))
+                    evidence = CharterChecklistEvidence(checklist_item_id=item.id, filename=upload.filename[:255], data=data, uploaded_by=actor)
+                    db.session.add(evidence); filenames.append(evidence.filename)
+                events.append({"at": now, "event": "Confirmation attached", "actor": actor, "detail": ", ".join(filenames)})
+                flash(f"{len(filenames)} confirmation file{'s' if len(filenames) != 1 else ''} attached.", "success")
             else:
                 events.append({"at": now, "event": "Details saved", "actor": actor, "detail": ""})
                 flash(f"{checklist_type} details saved for {location}.", "success")
@@ -2868,7 +2889,9 @@ def ops_charter_request_ground_handling(request_id):
     for item in coordination_items.values():
         try: item.events = json.loads(item.event_log or "[]")
         except (TypeError, ValueError): item.events = []
-    return render_template("charter_request_ground_handling.html", charter_request=row, checklist=checklist, overnight_stops=overnight_stops, coordination_items=coordination_items, sectors=_request_sectors(row))
+        item.evidence_files = CharterChecklistEvidence.query.filter_by(checklist_item_id=item.id).order_by(CharterChecklistEvidence.created_at.desc()).all()
+    evidence_map = {f"{item.item_type}|{item.service_date}|{item.location}": [{"name": evidence.filename, "url": url_for("ui.ops_charter_checklist_evidence", request_id=row.id, evidence_id=evidence.id)} for evidence in item.evidence_files] for item in coordination_items.values()}
+    return render_template("charter_request_ground_handling.html", charter_request=row, checklist=checklist, overnight_stops=overnight_stops, coordination_items=coordination_items, sectors=_request_sectors(row), checklist_evidence_map=evidence_map)
 
 
 @ui_bp.route("/ops/charter-requests/<int:request_id>", methods=["GET", "POST"])

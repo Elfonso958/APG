@@ -31,4 +31,22 @@
  fetch(favouritesUrl).then(response=>response.json()).then(data=>{if(data.ok!==false){favourites=data.favourites||[];renderFavourites();}}).catch(()=>{});
 })();
 </script>
+<script>
+(()=>{
+ const evidence={{ checklist_evidence_map|tojson }};
+ document.querySelectorAll('form').forEach((form,index)=>{
+  const type=form.querySelector('[name="checklist_type"]')?.value;if(!type)return;
+  const status=form.closest('.card')?.querySelector('.status'),confirm=form.querySelector('button[name="action"][value="confirm"]');
+  if(confirm&&status){form.id=`overnight-form-${index}`;confirm.setAttribute('form',form.id);status.after(confirm);}
+  const input=form.querySelector('input[name="confirmation_file"]');if(!input)return;
+  input.name='confirmation_files';input.multiple=true;const drop=input.closest('.drop');drop?.classList.add('evidence-drop');
+  const upload=files=>{if(!files?.length)return;const action=document.createElement('input');action.type='hidden';action.name='action';action.value='upload';form.append(action);form.submit();};
+  input.addEventListener('change',()=>upload(input.files));
+  ['dragenter','dragover'].forEach(event=>drop?.addEventListener(event,e=>{e.preventDefault();drop.classList.add('dragging')}));['dragleave','drop'].forEach(event=>drop?.addEventListener(event,e=>{e.preventDefault();drop.classList.remove('dragging')}));drop?.addEventListener('drop',event=>{upload(event.dataTransfer.files)});
+  const key=[type,form.querySelector('[name="service_date"]').value,form.querySelector('[name="location"]').value].join('|'),files=evidence[key]||[];
+  if(files.length){const list=document.createElement('div');list.className='evidence-list';list.innerHTML=`<strong>Attached evidence</strong>${files.map(file=>`<a target="_blank" href="${file.url}">${file.name}</a>`).join('')}`;drop?.after(list);}
+ });
+})();
+</script>
+<style>.evidence-drop{cursor:pointer}.evidence-drop.dragging{border-color:#168195!important;background:#e6f5f6!important}.evidence-list{display:grid;gap:6px;margin:13px 0;padding:11px;border-radius:9px;background:#eef7f8;color:#315a63;font-size:.8rem}.evidence-list a{color:#075c74;font-weight:800;text-decoration:none}.overnight-card header>.green{margin-left:4px;border-radius:999px;font-size:.75rem;padding:7px 10px}</style>
 {% endblock %}

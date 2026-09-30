@@ -199,6 +199,17 @@ class CharterChecklistItem(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
+class CharterChecklistEvidence(db.Model):
+    """An uploaded email or document supporting an overnight checklist item."""
+    __tablename__ = "charter_checklist_evidence"
+    id = db.Column(db.Integer, primary_key=True)
+    checklist_item_id = db.Column(db.Integer, db.ForeignKey("charter_checklist_items.id"), nullable=False, index=True)
+    filename = db.Column(db.String(255), nullable=False)
+    data = db.Column(db.LargeBinary, nullable=False)
+    uploaded_by = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+
 class ManualApgFlightLink(db.Model):
     """Operations override for an Envision flight that could not be auto-matched to APG."""
     __tablename__ = "manual_apg_flight_links"
