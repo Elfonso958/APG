@@ -16,6 +16,7 @@ import os
 from io import BytesIO
 
 import json, requests
+import html
 import time as _time
 import re
 import secrets
@@ -2003,6 +2004,33 @@ def _handling_request_text(charter_request, airport, provider, tracking_id):
     return "\n".join(lines)
 
 
+def _handling_request_html(charter_request, airport, provider, tracking_id):
+    """Branded, email-client-safe companion to the plain handling request."""
+    safe = lambda value: html.escape(str(value or "—"))
+    matching_sectors = [sector for sector in _request_sectors(charter_request) if airport in {str(sector.get("dep") or "").upper(), str(sector.get("arr") or "").upper()}]
+    rows = "".join(
+        "<tr>"
+        f"<td style='padding:10px;border-bottom:1px solid #d8e5e8'>{safe(sector.get('date'))}</td>"
+        f"<td style='padding:10px;border-bottom:1px solid #d8e5e8'><strong>{safe(sector.get('flight_number') or 'TBC')}</strong></td>"
+        f"<td style='padding:10px;border-bottom:1px solid #d8e5e8'>{safe(sector.get('dep'))} – {safe(sector.get('arr'))}</td>"
+        f"<td style='padding:10px;border-bottom:1px solid #d8e5e8'>{safe(sector.get('std'))} – {safe(sector.get('sta'))}</td>"
+        f"<td style='padding:10px;border-bottom:1px solid #d8e5e8'>{safe(sector.get('tail') or sector.get('aircraft_type'))}</td>"
+        "</tr>" for sector in matching_sectors
+    ) or "<tr><td colspan='5' style='padding:10px'>Sector details to be confirmed.</td></tr>"
+    return f"""<!doctype html><html><body style='margin:0;padding:24px;background:#edf5f5;font-family:Arial,sans-serif;color:#173743'>
+<table role='presentation' width='100%' cellspacing='0' cellpadding='0' border='0'><tr><td align='center'>
+<table role='presentation' width='680' cellspacing='0' cellpadding='0' border='0' style='max-width:680px;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 4px 18px #073b5c24'>
+<tr><td style='padding:26px 30px;background:linear-gradient(120deg,#075c74,#168195);color:#fff'><div style='font-size:11px;font-weight:bold;letter-spacing:1.4px'>AIR CHATHAMS · CHARTER OPERATIONS</div><h1 style='margin:9px 0 0;font-size:26px;line-height:1.15'>Ground handling request</h1><p style='margin:8px 0 0;color:#d8f2f0'>Please confirm the arrangements below.</p></td></tr>
+<tr><td style='padding:26px 30px'><table role='presentation' width='100%' cellspacing='0' cellpadding='0' border='0' style='margin-bottom:22px;background:#eef7f6;border-left:4px solid #8dc63f'><tr><td style='padding:13px 16px'><strong>{safe(charter_request.reference)}</strong><br><span style='color:#587479'>{safe(charter_request.title)} · {safe(airport)} · {safe(provider.label)}</span></td></tr></table>
+<p style='margin:0 0 16px;line-height:1.55'>Hello {safe(provider.contact or provider.handler)},</p><p style='margin:0 0 20px;line-height:1.55'>Please confirm ground handling, parking, GPU availability and any local requirements for the following charter operation at <strong>{safe(airport)}</strong>.</p>
+<table role='presentation' width='100%' cellspacing='0' cellpadding='0' border='0' style='border-collapse:collapse;font-size:13px'><thead><tr style='background:#173f50;color:#fff'><th align='left' style='padding:10px'>Date</th><th align='left' style='padding:10px'>Flight</th><th align='left' style='padding:10px'>Sector</th><th align='left' style='padding:10px'>Schedule</th><th align='left' style='padding:10px'>Aircraft</th></tr></thead><tbody>{rows}</tbody></table>
+<table role='presentation' width='100%' cellspacing='0' cellpadding='0' border='0' style='margin-top:22px;border-collapse:separate;border-spacing:0 8px'><tr><td style='width:130px;color:#587479;font-weight:bold'>Fuel</td><td>{safe(provider.fuel or 'Please advise availability and arrangements.')}</td></tr><tr><td style='color:#587479;font-weight:bold'>GPU</td><td>{safe(provider.gpu or 'Please advise availability.')}</td></tr><tr><td style='color:#587479;font-weight:bold'>Contact</td><td>{safe(provider.contact)} · {safe(provider.phone)}</td></tr></table>
+<div style='margin-top:22px;padding:14px 16px;border-radius:7px;background:#fff7e7;color:#6c5120;line-height:1.45'><strong>Please reply all</strong> to confirm arrangements, so the Charter Operations team can record your response.<br><span style='font-size:12px'>Tracking reference: [APG-HANDLING-{tracking_id}]</span></div>
+<p style='margin:24px 0 0;line-height:1.5'>Kind regards,<br><strong>Air Chathams Charter Operations</strong><br><a href='mailto:charters@airchathams.co.nz' style='color:#075c74'>charters@airchathams.co.nz</a></p></td></tr>
+<tr><td style='padding:14px 30px;background:#f2f7f7;color:#6d8589;font-size:11px'>Air Chathams Ltd · Charter Operations</td></tr></table>
+</td></tr></table></body></html>"""
+
+
 _CHARTER_AIRPORT_LATITUDES = {"AKL":-37.0,"WLG":-41.3,"CHC":-43.5,"DUD":-45.9,"IVC":-46.4,"ZQN":-45.0,"ROT":-38.1,"TRG":-37.7,"NPL":-39.0,"NPE":-39.5,"PMR":-40.3,"NSN":-41.3,"WSZ":-41.7,"TUO":-38.7,"TBU":-21.2,"VAV":-18.6,"HPA":-19.8}
 
 
@@ -2644,7 +2672,7 @@ def ops_charter_request_ground_handling(request_id):
                 return redirect(url_for("ui.ops_charter_request_ground_handling", request_id=row.id))
             try:
                 from .routes import _send_email_via_graph, _charter_email_sender
-                if not _send_email_via_graph(_charter_email_sender(), recipients, record.subject, record.body, cc_recipients=cc):
+                if not _send_email_via_graph(_charter_email_sender(), recipients, record.subject, record.body, html_body=_handling_request_html(row, airport, provider, record.id), cc_recipients=cc):
                     raise RuntimeError("Microsoft Graph did not accept the handling request.")
                 record.status, record.sent_at, record.sent_by = "Sent", datetime.utcnow(), user.display_name or user.email
                 flash(f"Handling request sent to {provider.label}.", "success")
