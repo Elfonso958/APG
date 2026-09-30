@@ -13,6 +13,7 @@ from datetime import datetime as _dt
 from datetime import date as _date
 import io
 import os
+import tempfile
 from io import BytesIO
 
 import json, requests
@@ -2736,6 +2737,42 @@ def ops_charter_checklist_evidence(request_id, evidence_id):
     return send_file(BytesIO(evidence.data), download_name=evidence.filename, as_attachment=False)
 
 
+@ui_bp.get("/ops/charter-requests/<int:request_id>/checklist-evidence/<int:evidence_id>/view")
+@_login_required
+def ops_charter_checklist_evidence_view(request_id, evidence_id):
+    """Readable in-browser view for Outlook and RFC email evidence."""
+    user = _current_apg_user()
+    evidence = db.session.get(CharterChecklistEvidence, evidence_id)
+    item = db.session.get(CharterChecklistItem, evidence.checklist_item_id) if evidence else None
+    if not user or not (user.is_admin or "operations" in _user_permissions(user)):
+        abort(403)
+    if not item or item.charter_request_id != request_id:
+        abort(404)
+    filename = evidence.filename.lower()
+    subject = evidence.filename; sender = ""; body = ""
+    try:
+        if filename.endswith(".msg"):
+            import extract_msg
+            with tempfile.NamedTemporaryFile(suffix=".msg") as temp:
+                temp.write(evidence.data); temp.flush()
+                message = extract_msg.Message(temp.name)
+                subject, sender, body = message.subject or subject, message.sender or "", message.body or ""
+                message.close()
+        elif filename.endswith(".eml"):
+            from email import policy
+            from email.parser import BytesParser
+            message = BytesParser(policy=policy.default).parsebytes(evidence.data)
+            subject, sender = message.get("subject") or subject, message.get("from") or ""
+            body = message.get_body(preferencelist=("plain",)).get_content() if message.get_body(preferencelist=("plain",)) else ""
+        else:
+            return redirect(url_for("ui.ops_charter_checklist_evidence", request_id=request_id, evidence_id=evidence_id))
+    except Exception:
+        current_app.logger.exception("Unable to render checklist email evidence")
+        return make_response("<h1>Unable to open this email</h1><p>Please download the original file instead.</p>", 422)
+    page = f"<!doctype html><title>{html.escape(str(subject))}</title><main style='max-width:900px;margin:40px auto;font:15px/1.55 Arial;color:#183a45'><a href='{url_for('ui.ops_charter_request_ground_handling', request_id=request_id)}'>← Back to checklist</a><h1>{html.escape(str(subject))}</h1><p><strong>From:</strong> {html.escape(str(sender or 'Unknown sender'))}</p><hr><pre style='white-space:pre-wrap;font:15px/1.55 Arial'>{html.escape(str(body))}</pre></main>"
+    return make_response(page)
+
+
 @ui_bp.route("/ops/charter-requests/<int:request_id>/ground-handling", methods=["GET", "POST"])
 @_login_required
 def ops_charter_request_ground_handling(request_id):
@@ -2810,6 +2847,9 @@ def ops_charter_request_ground_handling(request_id):
                 flash(f"{checklist_type} details saved for {location}.", "success")
             item.event_log = json.dumps(events)
             db.session.add(item); db.session.commit()
+            if request.form.get("background") == "1":
+                files = CharterChecklistEvidence.query.filter_by(checklist_item_id=item.id).order_by(CharterChecklistEvidence.created_at.desc()).all()
+                return jsonify(ok=True, files=[{"name": evidence.filename, "url": url_for("ui.ops_charter_checklist_evidence", request_id=row.id, evidence_id=evidence.id), "view_url": url_for("ui.ops_charter_checklist_evidence_view", request_id=row.id, evidence_id=evidence.id)} for evidence in files])
             return redirect(url_for("ui.ops_charter_request_ground_handling", request_id=row.id))
         airport = str(request.form.get("airport") or "").upper().strip()
         provider_id = request.form.get("provider_id", type=int)
@@ -2890,7 +2930,7 @@ def ops_charter_request_ground_handling(request_id):
         try: item.events = json.loads(item.event_log or "[]")
         except (TypeError, ValueError): item.events = []
         item.evidence_files = CharterChecklistEvidence.query.filter_by(checklist_item_id=item.id).order_by(CharterChecklistEvidence.created_at.desc()).all()
-    evidence_map = {f"{item.item_type}|{item.service_date}|{item.location}": [{"name": evidence.filename, "url": url_for("ui.ops_charter_checklist_evidence", request_id=row.id, evidence_id=evidence.id)} for evidence in item.evidence_files] for item in coordination_items.values()}
+    evidence_map = {f"{item.item_type}|{item.service_date}|{item.location}": [{"name": evidence.filename, "url": url_for("ui.ops_charter_checklist_evidence", request_id=row.id, evidence_id=evidence.id), "view_url": url_for("ui.ops_charter_checklist_evidence_view", request_id=row.id, evidence_id=evidence.id)} for evidence in item.evidence_files] for item in coordination_items.values()}
     return render_template("charter_request_ground_handling.html", charter_request=row, checklist=checklist, overnight_stops=overnight_stops, coordination_items=coordination_items, sectors=_request_sectors(row), checklist_evidence_map=evidence_map)
 
 
