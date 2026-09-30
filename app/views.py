@@ -337,6 +337,7 @@ def _inject_apg_account_context():
         "apg_is_cabin_crew": _is_cabin_crew_user(user),
         "apg_csrf_token": _csrf_token(),
         "charter_tail_debug_enabled": bool(config and config.charter_tail_debug_enabled),
+        "charter_crew_cars": json.loads(config.charter_crew_cars_json or "{}") if config else {},
     }
 
 
@@ -2679,6 +2680,13 @@ def ops_charter_planner_debug_settings():
     if not _csrf_is_valid(): abort(403)
     config = db.session.get(AppConfig, 1) or AppConfig(id=1)
     config.charter_tail_debug_enabled = request.form.get("tail_debug_enabled") == "1"
+    if request.form.get("crew_cars_json") is not None:
+        try:
+            crew_cars = json.loads(str(request.form.get("crew_cars_json") or "{}"))
+            if not isinstance(crew_cars, dict): raise ValueError
+            config.charter_crew_cars_json = json.dumps({str(port).upper(): str(notes).strip() for port, notes in crew_cars.items() if str(port).strip()})
+        except (TypeError, ValueError, json.JSONDecodeError):
+            flash("Crew-car settings were not saved: use a valid JSON port-to-notes object.", "danger")
     db.session.add(config); db.session.commit()
     flash(f"Envision tail-change debugging {'enabled' if config.charter_tail_debug_enabled else 'disabled'}.", "success")
     request_id = request.form.get("request_id", type=int)

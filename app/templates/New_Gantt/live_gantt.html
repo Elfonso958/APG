@@ -92,6 +92,7 @@
           <input name="crew_briefing_private" type="hidden" value="{{ '0' if apg_current_user.crew_briefing_private else '1' }}">
           <button class="btn btn-ghost crew-privacy-button" type="submit" title="Other people cannot search for your roster by crew code. You still appear in the crew list for their flights.">{% if apg_current_user.crew_briefing_private %}Make my roster visible{% else %}Make my roster private{% endif %}</button>
         </form>
+        <form method="post" action="{{ url_for('ui.apg_logout') }}"><input type="hidden" name="csrf_token" value="{{ apg_csrf_token }}"><button class="btn btn-ghost" type="submit">Sign out</button></form>
         {% else %}
         {% if 'crew_briefing' in apg_permissions %}<a class="btn btn-ghost view-link" href="{{ url_for('ui.dcs_crew_briefing', date=day.isoformat()) }}">Crew Briefing</a>{% endif %}
         {% if 'charter_checkin' in apg_permissions %}<a class="btn btn-ghost view-link" href="{{ url_for('ui.dcs_charter_checkin', date=day.isoformat()) }}">Charter Check-in</a>{% endif %}
