@@ -1,7 +1,7 @@
 ﻿from flask import Blueprint, render_template, request, redirect, jsonify, flash, current_app,send_file, abort, url_for, make_response
 from datetime import date, datetime, time, timezone, timedelta
 from flask import session
-from .models import SyncRun, SyncFlightLog, AppConfig, CharterManifest, CharterBrief, CharterRequest, CharterHandlingRequest, AppUser, EmailSettings, PowerBiApiKey, ManualDcsFlightLink, AirportHandlingProvider
+from .models import SyncRun, SyncFlightLog, AppConfig, CharterManifest, CharterBrief, CharterRequest, CharterHandlingRequest, CharterHandlingEvent, AppUser, EmailSettings, PowerBiApiKey, ManualDcsFlightLink, AirportHandlingProvider
 from .airport_handling import AIRPORT_HANDLERS, DEFAULT_CATERING_SERVICES, handlers_for_airports
 from . import db
 from .kmh_auth import create_kmh_session, clear_kmh_session, get_kmh_session
@@ -1986,13 +1986,27 @@ def _handling_provider_for_port(request_row, airport, providers):
     return (choices[0], None) if len(choices) == 1 else (None, None)
 
 
+def _log_handling_event(record, event_type, actor, detail=None):
+    db.session.add(CharterHandlingEvent(
+        handling_request_id=record.id,
+        event_type=event_type,
+        detail=detail,
+        actor=actor,
+    ))
+
+
 def _handling_provider_update_token(provider_id):
     """A time-limited bearer link for a handler to correct its own directory record."""
     serializer = URLSafeTimedSerializer(current_app.config["SECRET_KEY"], salt="charter-handling-provider-update")
     return serializer.dumps({"provider_id": int(provider_id)})
 
 
-def _handling_request_text(charter_request, airport, provider, tracking_id, provider_update_url=None):
+def _handling_confirmation_token(record_id):
+    serializer = URLSafeTimedSerializer(current_app.config["SECRET_KEY"], salt="charter-handling-confirmation")
+    return serializer.dumps({"handling_request_id": int(record_id)})
+
+
+def _handling_request_text(charter_request, airport, provider, tracking_id, provider_update_url=None, confirmation_url=None):
     matching_sectors = [sector for sector in _request_sectors(charter_request) if airport in {str(sector.get("dep") or "").upper(), str(sector.get("arr") or "").upper()}]
     lines = [
         f"Ground handling request — {charter_request.reference}",
@@ -2007,17 +2021,21 @@ def _handling_request_text(charter_request, airport, provider, tracking_id, prov
     ]
     for sector in matching_sectors:
         lines.append(f"{sector.get('date') or 'Date TBC'} · {sector.get('flight_number') or 'Flight TBC'} · {sector.get('dep') or '---'}–{sector.get('arr') or '---'} · STD {sector.get('std') or 'TBC'} · STA {sector.get('sta') or 'TBC'} · {sector.get('tail') or sector.get('aircraft_type') or 'Aircraft TBC'}")
-    lines.extend(["", f"Fuel: {provider.fuel or 'Please advise availability and arrangements.'}", f"GPU: {provider.gpu or 'Please advise availability.'}", "", "Please reply all to this email so the Charter Operations team can record your confirmation."])
+    lines.extend(["", f"Fuel: {provider.fuel or 'Please advise availability and arrangements.'}", f"GPU: {provider.gpu or 'Please advise availability.'}", ""])
+    if confirmation_url:
+        lines.extend(["Please confirm that handling is accepted by opening this link:", confirmation_url])
+    lines.extend(["", "You can also reply all to this email so Charter Operations can record your response."])
     if provider_update_url:
         lines.extend(["", "Need to correct your handling, fuel or contact details? Update your port information here:", provider_update_url])
     lines.extend(["", f"Tracking reference: [APG-HANDLING-{tracking_id}]"])
     return "\n".join(lines)
 
 
-def _handling_request_html(charter_request, airport, provider, tracking_id, provider_update_url):
+def _handling_request_html(charter_request, airport, provider, tracking_id, provider_update_url, confirmation_url):
     """Conservative table markup so the message remains readable in Outlook."""
     safe = lambda value: html.escape(str(value or "—"))
     safe_url = html.escape(provider_update_url, quote=True)
+    safe_confirmation_url = html.escape(confirmation_url, quote=True)
     logo_url = url_for("ui.charter_brand_asset", asset="main-logo", _external=True)
     matching_sectors = [sector for sector in _request_sectors(charter_request) if airport in {str(sector.get("dep") or "").upper(), str(sector.get("arr") or "").upper()}]
     rows = "".join(
@@ -2037,7 +2055,7 @@ def _handling_request_html(charter_request, airport, provider, tracking_id, prov
 <p style='margin:22px 0 12px;line-height:22px'>Hello {safe(provider.contact or provider.handler)},</p><p style='margin:0 0 20px;line-height:22px'>Please confirm ground handling, parking, GPU availability and any local requirements for the following charter operation at <strong>{safe(airport)}</strong>.</p>
 <table role='presentation' width='100%' cellspacing='0' cellpadding='0' border='0' style='border-collapse:collapse;font-size:13px'><tr bgcolor='#173f50' style='color:#ffffff'><th align='left' style='padding:10px 7px'>Date</th><th align='left' style='padding:10px 7px'>Flight</th><th align='left' style='padding:10px 7px'>Sector</th><th align='left' style='padding:10px 7px'>Schedule</th><th align='left' style='padding:10px 7px'>Aircraft</th></tr><tbody>{rows}</tbody></table>
 <table role='presentation' width='100%' cellspacing='0' cellpadding='0' border='0' style='margin-top:20px;font-size:14px'><tr><td width='130' style='padding:6px 0;color:#587479;font-weight:bold'>Fuel</td><td style='padding:6px 0'>{safe(provider.fuel or 'Please advise availability and arrangements.')}</td></tr><tr><td style='padding:6px 0;color:#587479;font-weight:bold'>GPU</td><td style='padding:6px 0'>{safe(provider.gpu or 'Please advise availability.')}</td></tr><tr><td style='padding:6px 0;color:#587479;font-weight:bold'>Contact</td><td style='padding:6px 0'>{safe(provider.contact)} · {safe(provider.phone)}</td></tr></table>
-<table role='presentation' width='100%' cellspacing='0' cellpadding='0' border='0' bgcolor='#fff7e7' style='margin-top:20px'><tr><td style='padding:14px 16px;color:#6c5120;font-size:14px;line-height:20px'><strong>Please reply all</strong> to confirm arrangements, so Charter Operations can record your response.<br><span style='font-size:12px'>Tracking reference: [APG-HANDLING-{tracking_id}]</span></td></tr></table>
+<table role='presentation' width='100%' cellspacing='0' cellpadding='0' border='0' bgcolor='#e7f4ea' style='margin-top:20px'><tr><td style='padding:16px;color:#214d31;font-size:14px;line-height:20px'><strong>Ready to confirm?</strong><br>Please select the button below to confirm handling arrangements. Charter Operations will be notified automatically.<br><table role='presentation' cellspacing='0' cellpadding='0' border='0' style='margin-top:12px'><tr><td bgcolor='#24744d' style='padding:12px 18px'><a href='{safe_confirmation_url}' style='color:#ffffff;font-size:14px;font-weight:bold;text-decoration:none'>Accept and confirm handling</a></td></tr></table><span style='display:block;margin-top:12px;font-size:12px'>Or reply all with your confirmation. Tracking reference: [APG-HANDLING-{tracking_id}]</span></td></tr></table>
 <p style='margin:22px 0 12px;font-size:14px;line-height:20px'>Are any contact, fuel, GPU or local handling details out of date? Please use the button below to update your port information.</p>
 <table role='presentation' cellspacing='0' cellpadding='0' border='0'><tr><td bgcolor='#075c74' style='padding:12px 18px'><a href='{safe_url}' style='color:#ffffff;font-size:14px;font-weight:bold;text-decoration:none'>Update your port information</a></td></tr></table>
 <p style='margin:24px 0 0;line-height:20px'>Kind regards,<br><strong>Air Chathams Charter Operations</strong><br><a href='mailto:charters@airchathams.co.nz' style='color:#075c74'>charters@airchathams.co.nz</a></p></td></tr>
@@ -2669,11 +2687,17 @@ def ops_charter_request_ground_handling(request_id):
             flash("Choose a valid handling provider for that airport.", "danger")
             return redirect(url_for("ui.ops_charter_request_ground_handling", request_id=row.id))
         record = CharterHandlingRequest.query.filter_by(charter_request_id=row.id, airport=airport).first()
+        is_new_record = record is None
+        provider_changed = False
         if not record:
             record = CharterHandlingRequest(charter_request_id=row.id, airport=airport, provider_id=provider.id)
         elif record.provider_id != provider.id:
             record.provider_id, record.status, record.sent_at, record.sent_by = provider.id, "Not sent", None, None
+            provider_changed = True
         db.session.add(record); db.session.flush()
+        actor = user.display_name or user.email or "Operations"
+        if is_new_record or provider_changed:
+            _log_handling_event(record, "Provider allocated", actor, provider.label)
         record.recipient_emails = "\n".join(email.strip() for email in (provider.email_addresses or "").splitlines() if "@" in email)
         record.subject = f"Ground handling request — {row.reference} — {airport} [APG-HANDLING-{record.id}]"
         provider_update_url = url_for(
@@ -2681,8 +2705,18 @@ def ops_charter_request_ground_handling(request_id):
             token=_handling_provider_update_token(provider.id),
             _external=True,
         )
-        record.body = _handling_request_text(row, airport, provider, record.id, provider_update_url)
-        if request.form.get("action") == "send":
+        confirmation_url = url_for(
+            "ui.charter_handling_confirmation",
+            token=_handling_confirmation_token(record.id),
+            _external=True,
+        )
+        record.body = _handling_request_text(row, airport, provider, record.id, provider_update_url, confirmation_url)
+        action = request.form.get("action")
+        if action == "confirm":
+            record.status = "Confirmed"
+            _log_handling_event(record, "Handling confirmed", actor, str(request.form.get("confirmation_note") or "").strip() or None)
+            flash(f"Handling confirmed for {airport} with {provider.label}.", "success")
+        elif action == "send":
             recipients = [email.strip() for email in record.recipient_emails.splitlines() if "@" in email]
             cc = [email.strip() for email in str((db.session.get(EmailSettings, 1) or EmailSettings()).charter_request_recipients or "").split(",") if "@" in email]
             if not recipients:
@@ -2691,9 +2725,11 @@ def ops_charter_request_ground_handling(request_id):
                 return redirect(url_for("ui.ops_charter_request_ground_handling", request_id=row.id))
             try:
                 from .routes import _send_email_via_graph, _charter_email_sender
-                if not _send_email_via_graph(_charter_email_sender(), recipients, record.subject, record.body, html_body=_handling_request_html(row, airport, provider, record.id, provider_update_url), cc_recipients=cc):
+                if not _send_email_via_graph(_charter_email_sender(), recipients, record.subject, record.body, html_body=_handling_request_html(row, airport, provider, record.id, provider_update_url, confirmation_url), cc_recipients=cc):
                     raise RuntimeError("Microsoft Graph did not accept the handling request.")
-                record.status, record.sent_at, record.sent_by = "Sent", datetime.utcnow(), user.display_name or user.email
+                record.status = "Confirmed" if record.status == "Confirmed" else "Sent"
+                record.sent_at, record.sent_by = datetime.utcnow(), actor
+                _log_handling_event(record, "Request sent", actor, f"Sent to {', '.join(recipients)}")
                 flash(f"Handling request sent to {provider.label}.", "success")
             except Exception as exc:
                 current_app.logger.exception("Unable to send charter handling request")
@@ -2702,11 +2738,21 @@ def ops_charter_request_ground_handling(request_id):
             flash(f"{provider.label} allocated for {airport}.", "success")
         db.session.add(record); db.session.commit()
         return redirect(url_for("ui.ops_charter_request_ground_handling", request_id=row.id))
+    records = CharterHandlingRequest.query.filter_by(charter_request_id=row.id).all()
+    events_by_record = {}
+    if records:
+        event_rows = CharterHandlingEvent.query.filter(
+            CharterHandlingEvent.handling_request_id.in_([record.id for record in records])
+        ).order_by(CharterHandlingEvent.created_at.desc()).all()
+        for event in event_rows:
+            events_by_record.setdefault(event.handling_request_id, []).append(event)
     checklist = []
     for airport in _request_handling_ports(row):
         choices = [provider for provider in providers if provider.airport == airport]
         selected, record = _handling_provider_for_port(row, airport, providers)
-        checklist.append({"airport": airport, "providers": choices, "selected": selected, "record": record, "auto_selected": bool(selected and not record and len(choices) == 1)})
+        events = events_by_record.get(record.id, []) if record else []
+        send_count = sum(1 for event in events if event.event_type == "Request sent") + (1 if record and record.sent_at and not any(event.event_type == "Request sent" for event in events) else 0)
+        checklist.append({"airport": airport, "providers": choices, "selected": selected, "record": record, "events": events, "send_count": send_count, "auto_selected": bool(selected and not record and len(choices) == 1)})
     return render_template("charter_request_ground_handling.html", charter_request=row, checklist=checklist, sectors=_request_sectors(row))
 
 
@@ -3014,6 +3060,46 @@ def charter_handling_provider_update(token: str):
         db.session.commit()
         return render_template("charter_provider_update.html", provider=provider, saved=True)
     return render_template("charter_provider_update.html", provider=provider, saved=False)
+
+
+@ui_bp.route("/charter/handling-confirmation/<token>", methods=["GET", "POST"])
+def charter_handling_confirmation(token: str):
+    """Handler-facing acceptance flow; confirmation is then emailed to Operations."""
+    serializer = URLSafeTimedSerializer(current_app.config["SECRET_KEY"], salt="charter-handling-confirmation")
+    try:
+        payload = serializer.loads(token, max_age=60 * 60 * 24 * 90)
+        record = db.session.get(CharterHandlingRequest, int(payload["handling_request_id"]))
+    except (BadSignature, SignatureExpired, KeyError, TypeError, ValueError):
+        abort(404)
+    if not record:
+        abort(404)
+    provider = db.session.get(AirportHandlingProvider, record.provider_id)
+    request_row = db.session.get(CharterRequest, record.charter_request_id)
+    if not provider or not request_row:
+        abort(404)
+    already_confirmed = record.status == "Confirmed"
+    if request.method == "POST" and not already_confirmed:
+        note = str(request.form.get("note") or "").strip()
+        record.status = "Confirmed"
+        _log_handling_event(record, "Handling confirmed", provider.label, note or "Confirmed through handler email")
+        db.session.add(record)
+        db.session.commit()
+        recipients = [item.strip() for item in str((db.session.get(EmailSettings, 1) or EmailSettings()).charter_request_recipients or "").split(",") if "@" in item]
+        if recipients:
+            try:
+                from .routes import _send_email_via_graph, _charter_email_sender
+                subject = f"Handling confirmed — {request_row.reference} — {record.airport}"
+                body = f"{provider.label} has confirmed ground handling for {request_row.reference} at {record.airport}."
+                if note:
+                    body += f"\n\nHandler note: {note}"
+                body += f"\n\nView the handling checklist: {url_for('ui.ops_charter_request_ground_handling', request_id=request_row.id, _external=True)}"
+                if _send_email_via_graph(_charter_email_sender(), recipients, subject, body):
+                    _log_handling_event(record, "Operations notified", "APG", f"Confirmation email sent to {', '.join(recipients)}")
+                    db.session.commit()
+            except Exception:
+                current_app.logger.exception("Unable to notify Operations of handling confirmation")
+        already_confirmed = True
+    return render_template("charter_handling_confirmation.html", provider=provider, charter_request=request_row, handling_request=record, confirmed=already_confirmed)
 
 
 @ui_bp.get("/dcs/charter-brand/<asset>")

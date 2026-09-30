@@ -167,6 +167,18 @@ class CharterHandlingRequest(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
+class CharterHandlingEvent(db.Model):
+    """Auditable send, allocation and confirmation events for a handling request."""
+    __tablename__ = "charter_handling_events"
+
+    id = db.Column(db.Integer, primary_key=True)
+    handling_request_id = db.Column(db.Integer, db.ForeignKey("charter_handling_requests.id"), nullable=False, index=True)
+    event_type = db.Column(db.String(48), nullable=False)
+    detail = db.Column(db.Text, nullable=True)
+    actor = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
 class ManualApgFlightLink(db.Model):
     """Operations override for an Envision flight that could not be auto-matched to APG."""
     __tablename__ = "manual_apg_flight_links"
