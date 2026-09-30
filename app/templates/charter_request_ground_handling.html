@@ -70,7 +70,7 @@
    }catch(error){alert(error.message);}
   };
  };
- document.querySelectorAll('form').forEach(form=>{if(form.querySelector('[name="checklist_type"]')?.value!=='Transport')return;const port=form.querySelector('[name="location"]').value;form.querySelector('[data-mode="rental"]')?.addEventListener('click',()=>showRentalSearch(form,port));});
+ document.querySelectorAll('form').forEach(form=>{if(form.querySelector('[name="checklist_type"]')?.value!=='Transport')return;const port=form.querySelector('[name="location"]').value;form.querySelector('[data-mode="rental"]')?.addEventListener('click',()=>{form.querySelector('.transport-link').hidden=true;showRentalSearch(form,port);});form.querySelector('[data-mode="crew"]')?.addEventListener('click',()=>{form.querySelector('.transport-link').hidden=true;});});
 })();
 </script>
 <dialog id="emailEvidenceModal" class="email-evidence-modal"><div><button type="button" class="btn secondary" onclick="this.closest('dialog').close()">Close</button><iframe title="Email evidence"></iframe></div></dialog><style>.email-evidence-modal{width:min(980px,94vw);height:min(760px,88vh);padding:0;border:0;border-radius:16px;box-shadow:0 24px 80px #0007}.email-evidence-modal::backdrop{background:#102f3b88}.email-evidence-modal>div{height:100%;display:grid;grid-template-rows:auto 1fr;padding:12px;background:#fff}.email-evidence-modal button{justify-self:end}.email-evidence-modal iframe{width:100%;height:100%;border:0;margin-top:8px}</style>
