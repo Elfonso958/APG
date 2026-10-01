@@ -1500,12 +1500,19 @@ def admin_organisation_chart_save(chart_id: int):
         title = str(payload.get("title") or "").strip()
         if not title:
             return jsonify(ok=False, error="Enter a group title."), 400
-        members = [by_id[node_id] for node_id in selected_ids]
+        members = sorted((by_id[node_id] for node_id in selected_ids), key=lambda node: (node.job_title or "", node.full_name))
         left, top = min(node.x for node in members), min(node.y for node in members)
         right, bottom = max(node.x + 228 for node in members), max(node.y + 105 for node in members)
         group = OrganisationChartGroup(chart_id=chart.id, title=title, x=max(0, left - 22), y=max(0, top - 46), width=max(270, right - left + 44), height=max(150, bottom - top + 68))
         db.session.add(group); db.session.flush()
-        for node in members: node.group_id = group.id
+        columns = min(3, max(1, int(len(members) ** 0.5 + 0.999)))
+        rows = (len(members) + columns - 1) // columns
+        group.width = max(270, columns * 244 + 20)
+        group.height = max(150, rows * 124 + 58)
+        for index, node in enumerate(members):
+            node.group_id = group.id
+            node.x = group.x + 20 + (index % columns) * 244
+            node.y = group.y + 44 + (index // columns) * 124
         db.session.commit()
         return jsonify(ok=True)
     if action == "move_group":
