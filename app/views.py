@@ -1398,6 +1398,8 @@ def _organisation_chart_payload(chart: OrganisationChart) -> dict:
             "id": node.id, "parent_id": node.report_to_node_id,
             "name": node.full_name, "title": node.job_title or "",
             "department": node.department or "", "employment_type": node.employment_type or "",
+            "secondary_parent_id": node.secondary_report_to_node_id,
+            "secondary_roles": json.loads(node.secondary_roles_json or "[]"),
             "hours": node.hours_per_week, "x": node.x, "y": node.y,
         } for node in nodes],
     }
@@ -1489,6 +1491,26 @@ def admin_organisation_chart_save(chart_id: int):
     nodes = OrganisationChartNode.query.filter_by(chart_id=chart.id).all()
     by_id = {node.id: node for node in nodes}
     action = str(payload.get("action") or "save")
+    selected_ids = {int(value) for value in (payload.get("ids") or []) if str(value).isdigit()} & set(by_id)
+    if action == "secondary_roles":
+        roles = payload.get("secondary_roles") or []
+        if not isinstance(roles, list):
+            return jsonify(ok=False, error="Secondary roles must be a list."), 400
+        clean_roles = list(dict.fromkeys(str(role).strip() for role in roles if str(role).strip()))
+        for node_id in selected_ids:
+            by_id[node_id].secondary_roles_json = json.dumps(clean_roles)
+        db.session.commit()
+        return jsonify(ok=True)
+    if action in {"secondary_link", "remove_secondary_link"}:
+        manager_id = payload.get("manager_id")
+        try: manager_id = int(manager_id) if manager_id is not None else None
+        except (TypeError, ValueError): manager_id = None
+        if action == "secondary_link" and manager_id not in by_id:
+            return jsonify(ok=False, error="Choose a manager from this chart."), 400
+        for node_id in selected_ids:
+            by_id[node_id].secondary_report_to_node_id = None if action == "remove_secondary_link" or node_id == manager_id else manager_id
+        db.session.commit()
+        return jsonify(ok=True)
     if action == "add":
         node = OrganisationChartNode(chart_id=chart.id, full_name=str(payload.get("name") or "New position").strip() or "New position", job_title=str(payload.get("title") or "").strip(), department=str(payload.get("department") or "Unassigned").strip(), x=float(payload.get("x") or 120), y=float(payload.get("y") or 120))
         db.session.add(node); db.session.commit()
@@ -1532,11 +1554,13 @@ def admin_organisation_chart_copy(chart_id: int):
     source_nodes = OrganisationChartNode.query.filter_by(chart_id=source.id).order_by(OrganisationChartNode.id).all()
     copies = {}
     for node in source_nodes:
-        clone = OrganisationChartNode(chart_id=copy.id, full_name=node.full_name, job_title=node.job_title, department=node.department, employment_type=node.employment_type, hours_per_week=node.hours_per_week, x=node.x, y=node.y)
+        clone = OrganisationChartNode(chart_id=copy.id, full_name=node.full_name, job_title=node.job_title, secondary_roles_json=node.secondary_roles_json or "[]", department=node.department, employment_type=node.employment_type, hours_per_week=node.hours_per_week, x=node.x, y=node.y)
         db.session.add(clone); db.session.flush(); copies[node.id] = clone
     for node in source_nodes:
         if node.report_to_node_id in copies:
             copies[node.id].report_to_node_id = copies[node.report_to_node_id].id
+        if node.secondary_report_to_node_id in copies:
+            copies[node.id].secondary_report_to_node_id = copies[node.secondary_report_to_node_id].id
     db.session.commit()
     flash(f"Created an editable proposed copy of {source.name}.", "success")
     return redirect(url_for("ui.admin_organisation_chart", chart_id=copy.id))
