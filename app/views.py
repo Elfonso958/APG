@@ -1,7 +1,7 @@
 ﻿from flask import Blueprint, render_template, request, redirect, jsonify, flash, current_app,send_file, abort, url_for, make_response
 from datetime import date, datetime, time, timezone, timedelta
 from flask import session
-from .models import SyncRun, SyncFlightLog, AppConfig, CharterManifest, CharterBrief, CharterRequest, CharterHandlingRequest, CharterHandlingEvent, CharterChecklistItem, CharterChecklistEvidence, AppUser, EmailSettings, PowerBiApiKey, ManualDcsFlightLink, AirportHandlingProvider, OrganisationChart, OrganisationChartNode
+from .models import SyncRun, SyncFlightLog, AppConfig, CharterManifest, CharterBrief, CharterRequest, CharterHandlingRequest, CharterHandlingEvent, CharterChecklistItem, CharterChecklistEvidence, AppUser, EmailSettings, PowerBiApiKey, ManualDcsFlightLink, AirportHandlingProvider, OrganisationChart, OrganisationChartNode, OrganisationChartGroup
 from .airport_handling import AIRPORT_HANDLERS, DEFAULT_CATERING_SERVICES, handlers_for_airports
 from . import db
 from .kmh_auth import create_kmh_session, clear_kmh_session, get_kmh_session
@@ -1389,19 +1389,21 @@ def admin_charter_crew_cars():
 
 def _organisation_chart_payload(chart: OrganisationChart) -> dict:
     nodes = OrganisationChartNode.query.filter_by(chart_id=chart.id).order_by(OrganisationChartNode.id).all()
+    groups = OrganisationChartGroup.query.filter_by(chart_id=chart.id).order_by(OrganisationChartGroup.id).all()
     return {
         "id": chart.id,
         "name": chart.name,
         "type": chart.chart_type,
         "source_filename": chart.source_filename or "",
         "nodes": [{
-            "id": node.id, "parent_id": node.report_to_node_id,
+            "id": node.id, "parent_id": node.report_to_node_id, "group_id": node.group_id,
             "name": node.full_name, "title": node.job_title or "",
             "department": node.department or "", "employment_type": node.employment_type or "",
             "secondary_parent_id": node.secondary_report_to_node_id,
             "secondary_roles": json.loads(node.secondary_roles_json or "[]"),
             "hours": node.hours_per_week, "x": node.x, "y": node.y,
         } for node in nodes],
+        "groups": [{"id": group.id, "title": group.title, "x": group.x, "y": group.y, "width": group.width, "height": group.height} for group in groups],
     }
 
 
@@ -1492,6 +1494,20 @@ def admin_organisation_chart_save(chart_id: int):
     by_id = {node.id: node for node in nodes}
     action = str(payload.get("action") or "save")
     selected_ids = {int(value) for value in (payload.get("ids") or []) if str(value).isdigit()} & set(by_id)
+    if action == "create_group":
+        if not selected_ids:
+            return jsonify(ok=False, error="Select at least one person for the group."), 400
+        title = str(payload.get("title") or "").strip()
+        if not title:
+            return jsonify(ok=False, error="Enter a group title."), 400
+        members = [by_id[node_id] for node_id in selected_ids]
+        left, top = min(node.x for node in members), min(node.y for node in members)
+        right, bottom = max(node.x + 228 for node in members), max(node.y + 105 for node in members)
+        group = OrganisationChartGroup(chart_id=chart.id, title=title, x=max(0, left - 22), y=max(0, top - 46), width=max(270, right - left + 44), height=max(150, bottom - top + 68))
+        db.session.add(group); db.session.flush()
+        for node in members: node.group_id = group.id
+        db.session.commit()
+        return jsonify(ok=True)
     if action == "secondary_roles":
         roles = payload.get("secondary_roles") or []
         if not isinstance(roles, list):

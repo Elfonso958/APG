@@ -287,6 +287,7 @@ class OrganisationChartNode(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     chart_id = db.Column(db.Integer, db.ForeignKey("organisation_charts.id"), nullable=False, index=True)
+    group_id = db.Column(db.Integer, nullable=True, index=True)
     report_to_node_id = db.Column(db.Integer, nullable=True, index=True)
     full_name = db.Column(db.String(255), nullable=False)
     job_title = db.Column(db.String(255), nullable=True)
@@ -297,6 +298,20 @@ class OrganisationChartNode(db.Model):
     secondary_report_to_node_id = db.Column(db.Integer, nullable=True, index=True)
     x = db.Column(db.Float, nullable=False, default=80)
     y = db.Column(db.Float, nullable=False, default=80)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class OrganisationChartGroup(db.Model):
+    """A titled visual grouping of people within an organisation chart."""
+    __tablename__ = "organisation_chart_groups"
+    id = db.Column(db.Integer, primary_key=True)
+    chart_id = db.Column(db.Integer, db.ForeignKey("organisation_charts.id"), nullable=False, index=True)
+    title = db.Column(db.String(120), nullable=False)
+    x = db.Column(db.Float, nullable=False, default=40)
+    y = db.Column(db.Float, nullable=False, default=40)
+    width = db.Column(db.Float, nullable=False, default=300)
+    height = db.Column(db.Float, nullable=False, default=220)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
