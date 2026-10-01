@@ -1497,6 +1497,12 @@ def admin_organisation_chart_save(chart_id: int):
         node = by_id.get(int(value.get("id") or 0))
         if not node:
             continue
+        if "name" in value:
+            node.full_name = str(value.get("name") or node.full_name).strip() or node.full_name
+        if "title" in value:
+            node.job_title = str(value.get("title") or "").strip() or None
+        if "department" in value:
+            node.department = str(value.get("department") or "").strip() or None
         node.x = max(0, min(float(value.get("x") or node.x), 10000))
         node.y = max(0, min(float(value.get("y") or node.y), 10000))
         parent_id = value.get("parent_id")
