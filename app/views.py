@@ -1549,6 +1549,18 @@ def admin_organisation_chart_save(chart_id: int):
             member.group_id = None
         db.session.commit()
         return jsonify(ok=True)
+    if action == "add_group_member":
+        try:
+            group_id, member_id = int(payload.get("group_id")), int(payload.get("member_id"))
+        except (TypeError, ValueError):
+            return jsonify(ok=False, error="Choose a group and person."), 400
+        group = db.session.get(OrganisationChartGroup, group_id)
+        member = by_id.get(member_id)
+        if not group or group.chart_id != chart.id or not member:
+            return jsonify(ok=False, error="The group or person was not found."), 404
+        member.group_id = group.id
+        db.session.commit()
+        return jsonify(ok=True)
     if action == "secondary_roles":
         roles = payload.get("secondary_roles") or []
         if not isinstance(roles, list):
