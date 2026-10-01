@@ -1,7 +1,7 @@
 ﻿from flask import Blueprint, render_template, request, redirect, jsonify, flash, current_app,send_file, abort, url_for, make_response
 from datetime import date, datetime, time, timezone, timedelta
 from flask import session
-from .models import SyncRun, SyncFlightLog, AppConfig, CharterManifest, CharterBrief, CharterRequest, CharterHandlingRequest, CharterHandlingEvent, CharterChecklistItem, CharterChecklistEvidence, AppUser, EmailSettings, PowerBiApiKey, ManualDcsFlightLink, AirportHandlingProvider
+from .models import SyncRun, SyncFlightLog, AppConfig, CharterManifest, CharterBrief, CharterRequest, CharterHandlingRequest, CharterHandlingEvent, CharterChecklistItem, CharterChecklistEvidence, AppUser, EmailSettings, PowerBiApiKey, ManualDcsFlightLink, AirportHandlingProvider, OrganisationChart, OrganisationChartNode
 from .airport_handling import AIRPORT_HANDLERS, DEFAULT_CATERING_SERVICES, handlers_for_airports
 from . import db
 from .kmh_auth import create_kmh_session, clear_kmh_session, get_kmh_session
@@ -21,8 +21,10 @@ import html
 import time as _time
 import re
 import secrets
+from openpyxl import load_workbook
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.utils import secure_filename
 from markupsafe import Markup, escape
 from zoneinfo import ZoneInfo
 NZ = ZoneInfo("Pacific/Auckland")
@@ -1383,6 +1385,126 @@ def admin_charter_crew_cars():
     try: crew_cars = json.loads(cfg.charter_crew_cars_json or "{}")
     except (TypeError, ValueError): crew_cars = {}
     return render_template("admin_charter_crew_cars.html", crew_cars=crew_cars)
+
+
+def _organisation_chart_payload(chart: OrganisationChart) -> dict:
+    nodes = OrganisationChartNode.query.filter_by(chart_id=chart.id).order_by(OrganisationChartNode.id).all()
+    return {
+        "id": chart.id,
+        "name": chart.name,
+        "type": chart.chart_type,
+        "source_filename": chart.source_filename or "",
+        "nodes": [{
+            "id": node.id, "parent_id": node.report_to_node_id,
+            "name": node.full_name, "title": node.job_title or "",
+            "department": node.department or "", "employment_type": node.employment_type or "",
+            "hours": node.hours_per_week, "x": node.x, "y": node.y,
+        } for node in nodes],
+    }
+
+
+def _import_organisation_chart_workbook(upload, user_name: str) -> tuple[OrganisationChart, OrganisationChart, int]:
+    workbook = load_workbook(upload, read_only=True, data_only=True)
+    sheet = workbook.active
+    headings = [str(value or "").strip() for value in next(sheet.iter_rows(values_only=True), ())]
+    indexes = {heading.casefold(): index for index, heading in enumerate(headings)}
+    required = {"surname", "first names", "job title", "department"}
+    if not required.issubset(indexes):
+        raise ValueError("The spreadsheet needs Surname, First Names, Job Title and Department columns.")
+    records = []
+    for row in sheet.iter_rows(min_row=2, values_only=True):
+        value = lambda key: row[indexes[key]] if indexes[key] < len(row) else None
+        surname = str(value("surname") or "").strip()
+        first_names = str(value("first names") or "").strip()
+        if not surname or surname.casefold() == "surname":
+            continue
+        preferred = str(value("preferred name") or "").strip() if "preferred name" in indexes else ""
+        name = f"{preferred or first_names} {surname}".strip()
+        if not name:
+            continue
+        hours = value("hours per week") if "hours per week" in indexes else None
+        try: hours = float(hours) if hours not in (None, "") else None
+        except (TypeError, ValueError): hours = None
+        records.append({
+            "name": name, "title": str(value("job title") or "").strip(),
+            "department": str(value("department") or "Unassigned").strip() or "Unassigned",
+            "employment_type": str(value("proprietor") or "").strip() if "proprietor" in indexes else "",
+            "hours": hours,
+        })
+    if not records:
+        raise ValueError("No staff rows were found in the spreadsheet.")
+    stamp = datetime.now(NZ).strftime("%d %b %Y")
+    source_name = secure_filename(upload.filename or "staff-structure.xlsx")
+    reference = OrganisationChart(name=f"Existing structure · {stamp}", chart_type="Reference", source_filename=source_name, created_by=user_name)
+    proposed = OrganisationChart(name=f"Proposed structure · {stamp}", chart_type="Proposed", source_filename=source_name, created_by=user_name)
+    db.session.add_all([reference, proposed]); db.session.flush()
+    grouped: dict[str, list[dict]] = {}
+    for record in sorted(records, key=lambda item: (item["department"], item["name"])):
+        grouped.setdefault(record["department"], []).append(record)
+    for column, (_, people) in enumerate(grouped.items()):
+        for row, record in enumerate(people):
+            x, y = 80 + column * 270, 90 + row * 112
+            for chart in (reference, proposed):
+                db.session.add(OrganisationChartNode(chart_id=chart.id, full_name=record["name"], job_title=record["title"], department=record["department"], employment_type=record["employment_type"], hours_per_week=record["hours"], x=x, y=y))
+    db.session.commit()
+    return reference, proposed, len(records)
+
+
+@ui_bp.route("/admin/organisation-chart", methods=["GET", "POST"])
+@_admin_required
+def admin_organisation_chart():
+    if request.method == "POST":
+        if not _csrf_is_valid():
+            flash("Your form expired. Please try again.", "danger")
+            return redirect(url_for("ui.admin_organisation_chart"))
+        upload = request.files.get("staff_file")
+        if not upload or not upload.filename.lower().endswith(".xlsx"):
+            flash("Choose an Excel .xlsx staff file to import.", "danger")
+            return redirect(url_for("ui.admin_organisation_chart"))
+        try:
+            _, proposed, count = _import_organisation_chart_workbook(upload, (_current_apg_user().display_name or _current_apg_user().email))
+            flash(f"Imported {count} people. A reference and editable proposed structure have been created.", "success")
+            return redirect(url_for("ui.admin_organisation_chart", chart_id=proposed.id))
+        except Exception as exc:
+            current_app.logger.exception("Organisation chart import failed")
+            flash(str(exc) if isinstance(exc, ValueError) else "The spreadsheet could not be imported.", "danger")
+            return redirect(url_for("ui.admin_organisation_chart"))
+    charts = OrganisationChart.query.order_by(OrganisationChart.created_at.desc()).all()
+    selected = db.session.get(OrganisationChart, request.args.get("chart_id", type=int)) if request.args.get("chart_id") else None
+    if selected is None and charts:
+        selected = next((chart for chart in charts if chart.chart_type == "Proposed"), charts[0])
+    return render_template("admin_organisation_chart.html", charts=charts, selected_chart=selected, chart_data=_organisation_chart_payload(selected) if selected else None)
+
+
+@ui_bp.post("/admin/organisation-chart/<int:chart_id>/save")
+@_admin_required
+def admin_organisation_chart_save(chart_id: int):
+    token = str(request.headers.get("X-CSRF-Token") or "")
+    if not session.get("apg_csrf_token") or not secrets.compare_digest(token, str(session.get("apg_csrf_token"))):
+        return jsonify(ok=False, error="Your session expired. Refresh the page and try again."), 403
+    chart = db.session.get(OrganisationChart, chart_id)
+    if not chart or chart.chart_type == "Reference":
+        return jsonify(ok=False, error="Only a proposed structure can be edited."), 400
+    payload = request.get_json(silent=True) or {}
+    nodes = OrganisationChartNode.query.filter_by(chart_id=chart.id).all()
+    by_id = {node.id: node for node in nodes}
+    action = str(payload.get("action") or "save")
+    if action == "add":
+        node = OrganisationChartNode(chart_id=chart.id, full_name=str(payload.get("name") or "New position").strip() or "New position", job_title=str(payload.get("title") or "").strip(), department=str(payload.get("department") or "Unassigned").strip(), x=float(payload.get("x") or 120), y=float(payload.get("y") or 120))
+        db.session.add(node); db.session.commit()
+        return jsonify(ok=True, node=_organisation_chart_payload(chart)["nodes"][-1])
+    for value in payload.get("nodes") or []:
+        node = by_id.get(int(value.get("id") or 0))
+        if not node:
+            continue
+        node.x = max(0, min(float(value.get("x") or node.x), 10000))
+        node.y = max(0, min(float(value.get("y") or node.y), 10000))
+        parent_id = value.get("parent_id")
+        try: parent_id = int(parent_id) if parent_id is not None else None
+        except (TypeError, ValueError): parent_id = None
+        node.report_to_node_id = parent_id if parent_id in by_id and parent_id != node.id else None
+    db.session.commit()
+    return jsonify(ok=True)
 
 
 @ui_bp.route("/settings", methods=["GET", "POST"])

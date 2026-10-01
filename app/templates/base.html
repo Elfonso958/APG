@@ -36,6 +36,7 @@
           <a href="{{ url_for('ui.admin_email_settings') }}" class="{{ 'nav-active' if request.path.startswith('/admin/email-settings') else '' }}">Email settings</a>
           <a href="{{ url_for('ui.admin_powerbi_api_keys') }}" class="{{ 'nav-active' if request.path.startswith('/admin/powerbi-api-keys') else '' }}">Power BI keys</a>
           <a href="{{ url_for('ui.admin_charter_operations') }}" class="{{ 'nav-active' if request.path.startswith('/admin/charter-operations') else '' }}">Charter operations</a>
+          <a href="{{ url_for('ui.admin_organisation_chart') }}" class="{{ 'nav-active' if request.path.startswith('/admin/organisation-chart') else '' }}">Organisation chart</a>
         {% endif %}
         <button id="run-once-btn" type="button" class="btn btn-sm">
           Run Sync (once)

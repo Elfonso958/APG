@@ -268,6 +268,37 @@ class HotelFavourite(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
+class OrganisationChart(db.Model):
+    """A reference or proposed organisation-chart workspace."""
+    __tablename__ = "organisation_charts"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(160), nullable=False)
+    chart_type = db.Column(db.String(24), nullable=False, default="Proposed")  # Reference or Proposed
+    source_filename = db.Column(db.String(255), nullable=True)
+    created_by = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class OrganisationChartNode(db.Model):
+    """A draggable person or position and its optional reporting line."""
+    __tablename__ = "organisation_chart_nodes"
+
+    id = db.Column(db.Integer, primary_key=True)
+    chart_id = db.Column(db.Integer, db.ForeignKey("organisation_charts.id"), nullable=False, index=True)
+    report_to_node_id = db.Column(db.Integer, nullable=True, index=True)
+    full_name = db.Column(db.String(255), nullable=False)
+    job_title = db.Column(db.String(255), nullable=True)
+    department = db.Column(db.String(80), nullable=True)
+    employment_type = db.Column(db.String(120), nullable=True)
+    hours_per_week = db.Column(db.Float, nullable=True)
+    x = db.Column(db.Float, nullable=False, default=80)
+    y = db.Column(db.Float, nullable=False, default=80)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class AppUser(db.Model):
     """APG access assignments, optionally authenticated by Envision."""
     __tablename__ = "app_users"
