@@ -1403,7 +1403,7 @@ def _organisation_chart_payload(chart: OrganisationChart) -> dict:
             "secondary_roles": json.loads(node.secondary_roles_json or "[]"),
             "hours": node.hours_per_week, "x": node.x, "y": node.y,
         } for node in nodes],
-        "groups": [{"id": group.id, "title": group.title, "x": group.x, "y": group.y, "width": group.width, "height": group.height} for group in groups],
+        "groups": [{"id": group.id, "title": group.title, "x": group.x, "y": group.y, "width": group.width, "height": group.height, "manager_id": group.report_to_node_id} for group in groups],
     }
 
 
@@ -1559,6 +1559,24 @@ def admin_organisation_chart_save(chart_id: int):
         if not group or group.chart_id != chart.id or not member:
             return jsonify(ok=False, error="The group or person was not found."), 404
         member.group_id = group.id
+        db.session.commit()
+        return jsonify(ok=True)
+    if action in {"group_manager_link", "remove_group_manager_link"}:
+        try:
+            group_id = int(payload.get("group_id"))
+        except (TypeError, ValueError):
+            return jsonify(ok=False, error="Choose a group."), 400
+        group = db.session.get(OrganisationChartGroup, group_id)
+        if not group or group.chart_id != chart.id:
+            return jsonify(ok=False, error="The group was not found."), 404
+        if action == "remove_group_manager_link":
+            group.report_to_node_id = None
+        else:
+            try: manager_id = int(payload.get("manager_id"))
+            except (TypeError, ValueError): return jsonify(ok=False, error="Choose a manager from this chart."), 400
+            if manager_id not in by_id:
+                return jsonify(ok=False, error="Choose a manager from this chart."), 400
+            group.report_to_node_id = manager_id
         db.session.commit()
         return jsonify(ok=True)
     if action == "secondary_roles":

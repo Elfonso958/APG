@@ -307,6 +307,7 @@ class OrganisationChartGroup(db.Model):
     __tablename__ = "organisation_chart_groups"
     id = db.Column(db.Integer, primary_key=True)
     chart_id = db.Column(db.Integer, db.ForeignKey("organisation_charts.id"), nullable=False, index=True)
+    report_to_node_id = db.Column(db.Integer, nullable=True, index=True)
     title = db.Column(db.String(120), nullable=False)
     x = db.Column(db.Float, nullable=False, default=40)
     y = db.Column(db.Float, nullable=False, default=40)
