@@ -1483,8 +1483,8 @@ def admin_organisation_chart_save(chart_id: int):
     if not session.get("apg_csrf_token") or not secrets.compare_digest(token, str(session.get("apg_csrf_token"))):
         return jsonify(ok=False, error="Your session expired. Refresh the page and try again."), 403
     chart = db.session.get(OrganisationChart, chart_id)
-    if not chart or chart.chart_type == "Reference":
-        return jsonify(ok=False, error="Only a proposed structure can be edited."), 400
+    if not chart:
+        return jsonify(ok=False, error="The organisation chart was not found."), 404
     payload = request.get_json(silent=True) or {}
     nodes = OrganisationChartNode.query.filter_by(chart_id=chart.id).all()
     by_id = {node.id: node for node in nodes}
@@ -1511,6 +1511,35 @@ def admin_organisation_chart_save(chart_id: int):
         node.report_to_node_id = parent_id if parent_id in by_id and parent_id != node.id else None
     db.session.commit()
     return jsonify(ok=True)
+
+
+@ui_bp.post("/admin/organisation-chart/<int:chart_id>/copy")
+@_admin_required
+def admin_organisation_chart_copy(chart_id: int):
+    if not _csrf_is_valid():
+        abort(403)
+    source = db.session.get(OrganisationChart, chart_id)
+    if not source:
+        abort(404)
+    user = _current_apg_user()
+    copy = OrganisationChart(
+        name=f"Proposed structure · {datetime.now(NZ).strftime('%d %b %Y %H:%M')}",
+        chart_type="Proposed",
+        source_filename=source.source_filename,
+        created_by=user.display_name or user.email,
+    )
+    db.session.add(copy); db.session.flush()
+    source_nodes = OrganisationChartNode.query.filter_by(chart_id=source.id).order_by(OrganisationChartNode.id).all()
+    copies = {}
+    for node in source_nodes:
+        clone = OrganisationChartNode(chart_id=copy.id, full_name=node.full_name, job_title=node.job_title, department=node.department, employment_type=node.employment_type, hours_per_week=node.hours_per_week, x=node.x, y=node.y)
+        db.session.add(clone); db.session.flush(); copies[node.id] = clone
+    for node in source_nodes:
+        if node.report_to_node_id in copies:
+            copies[node.id].report_to_node_id = copies[node.report_to_node_id].id
+    db.session.commit()
+    flash(f"Created an editable proposed copy of {source.name}.", "success")
+    return redirect(url_for("ui.admin_organisation_chart", chart_id=copy.id))
 
 
 @ui_bp.route("/settings", methods=["GET", "POST"])
