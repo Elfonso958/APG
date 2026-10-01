@@ -1507,12 +1507,12 @@ def admin_organisation_chart_save(chart_id: int):
         db.session.add(group); db.session.flush()
         columns = min(3, max(1, int(len(members) ** 0.5 + 0.999)))
         rows = (len(members) + columns - 1) // columns
-        group.width = max(270, columns * 244 + 20)
-        group.height = max(150, rows * 124 + 58)
+        group.width = max(270, columns * 228 + 40)
+        group.height = max(150, rows * 105 + 60)
         for index, node in enumerate(members):
             node.group_id = group.id
-            node.x = group.x + 20 + (index % columns) * 244
-            node.y = group.y + 44 + (index // columns) * 124
+            node.x = group.x + 20 + (index % columns) * 228
+            node.y = group.y + 44 + (index // columns) * 105
         db.session.commit()
         return jsonify(ok=True)
     if action == "move_group":
