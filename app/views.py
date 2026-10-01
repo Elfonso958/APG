@@ -1508,6 +1508,21 @@ def admin_organisation_chart_save(chart_id: int):
         for node in members: node.group_id = group.id
         db.session.commit()
         return jsonify(ok=True)
+    if action == "move_group":
+        try:
+            group_id = int(payload.get("group_id"))
+            dx, dy = float(payload.get("dx") or 0), float(payload.get("dy") or 0)
+        except (TypeError, ValueError):
+            return jsonify(ok=False, error="Invalid group movement."), 400
+        group = db.session.get(OrganisationChartGroup, group_id)
+        if not group or group.chart_id != chart.id:
+            return jsonify(ok=False, error="The group was not found."), 404
+        group.x, group.y = max(0, group.x + dx), max(0, group.y + dy)
+        for node in nodes:
+            if node.group_id == group.id:
+                node.x, node.y = max(0, node.x + dx), max(0, node.y + dy)
+        db.session.commit()
+        return jsonify(ok=True)
     if action == "secondary_roles":
         roles = payload.get("secondary_roles") or []
         if not isinstance(roles, list):
