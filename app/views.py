@@ -1524,12 +1524,14 @@ def admin_organisation_chart_save(chart_id: int):
         group = db.session.get(OrganisationChartGroup, group_id)
         if not group or group.chart_id != chart.id:
             return jsonify(ok=False, error="The group was not found."), 404
-        group.x, group.y = max(0, group.x + dx), max(0, group.y + dy)
+        applied_dx = max(-group.x, min(dx, 4800 - group.width - group.x))
+        applied_dy = max(-group.y, min(dy, 4200 - group.height - group.y))
+        group.x, group.y = group.x + applied_dx, group.y + applied_dy
         for node in nodes:
             if node.group_id == group.id:
-                node.x, node.y = max(0, node.x + dx), max(0, node.y + dy)
+                node.x, node.y = max(0, min(4572, node.x + applied_dx)), max(0, min(4095, node.y + applied_dy))
         db.session.commit()
-        return jsonify(ok=True)
+        return jsonify(ok=True, dx=applied_dx, dy=applied_dy)
     if action in {"remove_group", "remove_group_member"}:
         try: group_id = int(payload.get("group_id"))
         except (TypeError, ValueError): return jsonify(ok=False, error="Choose a group."), 400
@@ -1612,8 +1614,8 @@ def admin_organisation_chart_save(chart_id: int):
             node.job_title = str(value.get("title") or "").strip() or None
         if "department" in value:
             node.department = str(value.get("department") or "").strip() or None
-        node.x = max(0, min(float(value.get("x") or node.x), 10000))
-        node.y = max(0, min(float(value.get("y") or node.y), 10000))
+        node.x = max(0, min(float(value.get("x") or node.x), 4572))
+        node.y = max(0, min(float(value.get("y") or node.y), 4095))
         parent_id = value.get("parent_id")
         try: parent_id = int(parent_id) if parent_id is not None else None
         except (TypeError, ValueError): parent_id = None
