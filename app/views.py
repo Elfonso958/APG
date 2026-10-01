@@ -1530,6 +1530,25 @@ def admin_organisation_chart_save(chart_id: int):
                 node.x, node.y = max(0, node.x + dx), max(0, node.y + dy)
         db.session.commit()
         return jsonify(ok=True)
+    if action in {"remove_group", "remove_group_member"}:
+        try: group_id = int(payload.get("group_id"))
+        except (TypeError, ValueError): return jsonify(ok=False, error="Choose a group."), 400
+        group = db.session.get(OrganisationChartGroup, group_id)
+        if not group or group.chart_id != chart.id:
+            return jsonify(ok=False, error="The group was not found."), 404
+        if action == "remove_group":
+            for node in nodes:
+                if node.group_id == group.id: node.group_id = None
+            db.session.delete(group)
+        else:
+            try: member_id = int(payload.get("member_id"))
+            except (TypeError, ValueError): return jsonify(ok=False, error="Choose a person."), 400
+            member = by_id.get(member_id)
+            if not member or member.group_id != group.id:
+                return jsonify(ok=False, error="That person is not in this group."), 400
+            member.group_id = None
+        db.session.commit()
+        return jsonify(ok=True)
     if action == "secondary_roles":
         roles = payload.get("secondary_roles") or []
         if not isinstance(roles, list):
