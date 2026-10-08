@@ -1480,7 +1480,7 @@ def _configured_airport_taxi_times() -> dict[str, int]:
 
 
 def _apg_plan_is_filed(plan: dict) -> bool:
-    """APG versions expose the plan status under slightly different keys."""
+    """Return whether APG has activated/filed the plan for operational use."""
     if not isinstance(plan, dict):
         return False
     status_keys = {
@@ -1502,7 +1502,9 @@ def _apg_plan_is_filed(plan: dict) -> bool:
             values.append(str(value).strip().lower())
 
     visit(plan)
-    return any("filed" in value for value in values)
+    # RocketRoute exposes a successfully filed plan as ``active`` in its plan
+    # API, while other versions use ``filed``.  Both mean APG owns the EET.
+    return any("filed" in value or value == "active" for value in values)
 
 
 def _apg_plan_eet(plan: dict) -> Optional[int]:
