@@ -1714,7 +1714,8 @@ def _plan_key_from_apg_row(row: dict) -> Optional[tuple[str, str, str, Optional[
 def build_existing_plan_index(
     bearer: str,
     window_from_utc: datetime,
-    window_to_utc: datetime
+    window_to_utc: datetime,
+    plan_status_by_id: Optional[dict[int, str]] = None,
 ) -> dict[tuple[str, str, str, Optional[str]], Optional[int]]:
     statuses = [s.strip() for s in os.getenv("APG_EXIST_STATUSES", "draft,planned,active,filed").split(",") if s.strip()]
     index: dict[tuple[str, str, str, Optional[str]], Optional[int]] = {}
@@ -1740,6 +1741,12 @@ def build_existing_plan_index(
                 continue
             pid = _plan_id_from_row(p)
             index[key] = pid
+            if plan_status_by_id is not None and pid is not None:
+                # This list was explicitly requested with ``status=st``.  Use
+                # that known APG status even where the list row omits it.
+                plan_status_by_id[int(pid)] = str(
+                    p.get("status") or p.get("planStatus") or st
+                ).strip().lower()
             kept += 1
 
     logging.info(f"APG presence across statuses {','.join(statuses)} â†’ scanned {seen}, kept {kept} within window")
@@ -4300,10 +4307,12 @@ def attach_apg_presence_to_rows(
     apg_bearer = apg_auth["authorization"]
 
     # 2) Build presence index in the same window you show on the page
+    plan_status_by_id: dict[int, str] = {}
     existing_index = build_existing_plan_index(
         apg_bearer,
         window_from_utc=window_from_utc,
         window_to_utc=window_to_utc,
+        plan_status_by_id=plan_status_by_id,
     )
 
     try:
@@ -4381,6 +4390,7 @@ def attach_apg_presence_to_rows(
                         plan_id = saved_plan_id
         r["apg_plan_id"] = plan_id
         r["apg_has_plan"] = bool(plan_id)
+        r["apg_plan_status"] = plan_status_by_id.get(int(plan_id)) if plan_id is not None else None
 
 def _std_to_utc_from_row(row: dict) -> Optional[datetime]:
     """

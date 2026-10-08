@@ -4630,6 +4630,15 @@
       const counts = briefingPaxBreakdown(f);
       const defectCount = Number.isFinite(Number(f.defect_count)) ? Number(f.defect_count) : 0;
       const apgPlanId = getApgPlanId(f.apg_plan_id);
+      const apgPlanStatus = String(f.apg_plan_status || "").trim().toLowerCase();
+      const apgPlanFiled = apgPlanStatus === "active" || apgPlanStatus.includes("filed");
+      const apgPlanStatusLabel = !apgPlanId
+        ? "No flight plan"
+        : apgPlanFiled
+          ? "Flight plan filed"
+          : apgPlanStatus
+            ? `Flight plan ${apgPlanStatus}`
+            : "Flight plan status unavailable";
       const charterBriefUrl = String(f.charter_brief_url || "");
       const charterBriefVersion = Number(f.charter_brief_version || 0);
       const stdText = fmtTime(f.std_sched_nz || f.std_nz);
@@ -4673,7 +4682,10 @@
             <div class="briefing-route">
               <span>${escapeHtml(f.dep || "-")}</span><span class="briefing-route-line" aria-hidden="true"></span><span>${escapeHtml(f.ades || "-")}</span>
             </div>
-            <span class="briefing-status">${escapeHtml(f.flight_status || "Scheduled")}</span>
+            <span class="briefing-status-stack">
+              <span class="briefing-status">${escapeHtml(f.flight_status || "Scheduled")}</span>
+              <span class="briefing-plan-status ${apgPlanFiled ? "is-filed" : "is-pending"}">${escapeHtml(apgPlanStatusLabel)}</span>
+            </span>
           </div>
           <div class="briefing-card-meta">
             <span><small>Aircraft</small><strong>${escapeHtml(f.reg || "TBA")}</strong></span>

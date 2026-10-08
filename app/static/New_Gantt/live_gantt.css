@@ -2269,6 +2269,10 @@ body[data-theme="dark"] .wb-inline-status.is-over {
 .briefing-arrival-time { color: var(--accent); }
 .briefing-flight-no { grid-column: 1 / -1; margin-top: 5px; color: var(--muted); font-size: 11px; font-weight: 800; }
 .briefing-status { padding: 5px 9px; border-radius: 999px; background: rgba(24, 129, 86, .12); color: #087548; font-size: 11px; font-weight: 800; }
+.briefing-status-stack { display: grid; justify-items: end; gap: 4px; }
+.briefing-plan-status { padding: 4px 8px; border: 1px solid var(--line); border-radius: 999px; font-size: 10px; font-weight: 800; white-space: nowrap; }
+.briefing-plan-status.is-filed { border-color: color-mix(in srgb, #087548 45%, var(--line)); background: rgba(24, 129, 86, .12); color: #087548; }
+.briefing-plan-status.is-pending { background: color-mix(in srgb, var(--warn) 14%, var(--panel)); color: #805300; }
 .briefing-route { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; margin: 0; font-size: 22px; font-weight: 800; }
 .briefing-route-line { height: 2px; background: var(--line); position: relative; }
 .briefing-route-line::after { content: ""; position: absolute; right: 0; top: -3px; width: 7px; height: 7px; border-top: 2px solid var(--muted); border-right: 2px solid var(--muted); transform: rotate(45deg); }
