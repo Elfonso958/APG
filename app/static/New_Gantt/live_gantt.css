@@ -2259,9 +2259,11 @@ body[data-theme="dark"] .wb-inline-status.is-over {
 .briefing-charter-button:hover, .briefing-charter-button:focus-visible { border-color:#8a6422;background:#b89552;color:#fff; }
 .briefing-mel-button:disabled { opacity: .65; cursor: wait; }
 .briefing-card-header { display: grid; grid-template-columns: auto minmax(150px, 1fr) auto; align-items: center; gap: 16px; }
-.briefing-schedule { display: grid; min-width: 72px; }
+.briefing-schedule { display: grid; grid-template-columns: repeat(2, auto); column-gap: 12px; min-width: 128px; }
 .briefing-time { font-size: 21px; font-weight: 800; line-height: 1; }
-.briefing-flight-no { margin-top: 3px; color: var(--muted); font-size: 11px; font-weight: 800; }
+.briefing-time small { display: block; margin-bottom: 3px; color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .04em; line-height: 1; }
+.briefing-arrival-time { color: var(--accent); }
+.briefing-flight-no { grid-column: 1 / -1; margin-top: 5px; color: var(--muted); font-size: 11px; font-weight: 800; }
 .briefing-status { padding: 5px 9px; border-radius: 999px; background: rgba(24, 129, 86, .12); color: #087548; font-size: 11px; font-weight: 800; }
 .briefing-route { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; margin: 0; font-size: 22px; font-weight: 800; }
 .briefing-route-line { height: 2px; background: var(--line); position: relative; }

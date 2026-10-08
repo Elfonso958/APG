@@ -4657,7 +4657,8 @@
         <button class="briefing-flight-card" type="button" aria-expanded="false" data-briefing-flight-id="${escapeHtml(String(f.envision_flight_id || ""))}">
           <div class="briefing-card-header">
             <div class="briefing-schedule">
-              <span class="briefing-time">${fmtTime(f.std_nz)}</span>
+              <span class="briefing-time"><small>ETD</small>${fmtTime(f.std_nz)}</span>
+              <span class="briefing-time briefing-arrival-time"><small>ETA</small>${fmtTime(f.sta_nz)}</span>
               <span class="briefing-flight-no">${escapeHtml(flightCode(f))}</span>
             </div>
             <div class="briefing-route">
