@@ -362,6 +362,52 @@ def _seed_airport_handling_providers() -> None:
     db.session.commit()
 
 
+DEFAULT_AIRPORT_TAXI_MINUTES = 5
+
+
+def _normalise_airport_taxi_times(value) -> dict[str, int]:
+    """Return a safe, upper-case airport-code -> minutes configuration."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value or "{}")
+        except (TypeError, ValueError):
+            value = {}
+    if not isinstance(value, dict):
+        return {}
+
+    result: dict[str, int] = {}
+    for raw_code, raw_minutes in value.items():
+        code = str(raw_code or "").strip().upper()
+        if not code or len(code) > 8:
+            continue
+        try:
+            minutes = int(raw_minutes)
+        except (TypeError, ValueError):
+            continue
+        result[code] = min(max(minutes, 0), 180)
+    return result
+
+
+def _airport_taxi_times_for_settings(cfg: AppConfig | None) -> dict[str, int]:
+    """Seed all locally known ports at five minutes without overwriting edits."""
+    configured = _normalise_airport_taxi_times(
+        getattr(cfg, "airport_taxi_times_json", "{}") if cfg else "{}"
+    )
+    known_codes = {
+        str(entry.get("airport") or "").strip().upper()
+        for entry in AIRPORT_HANDLERS
+        if isinstance(entry, dict)
+    }
+    known_codes.update(
+        str(code or "").strip().upper()
+        for (code,) in db.session.query(AirportHandlingProvider.airport).distinct().all()
+    )
+    for code in known_codes:
+        if code:
+            configured.setdefault(code, DEFAULT_AIRPORT_TAXI_MINUTES)
+    return dict(sorted(configured.items()))
+
+
 def _charter_operations_directory():
     cfg = db.session.get(AppConfig, 1)
     try:
@@ -1656,6 +1702,7 @@ def admin_organisation_chart_copy(chart_id: int):
 
 
 @ui_bp.route("/settings", methods=["GET", "POST"])
+@_admin_required
 def settings_page():
     cfg = AppConfig.query.get(1)
     if request.method == "POST":
@@ -1667,13 +1714,35 @@ def settings_page():
         apg_create_ahead_hours = min(max(apg_create_ahead_hours, 1), 336)
         if not cfg:
             cfg = AppConfig(id=1)
+        taxi_times = _airport_taxi_times_for_settings(cfg)
+        for raw_code, raw_minutes in zip(
+            request.form.getlist("taxi_airport_code"),
+            request.form.getlist("taxi_minutes"),
+        ):
+            code = str(raw_code or "").strip().upper()
+            if not code:
+                continue
+            if not re.fullmatch(r"[A-Z0-9]{3,8}", code):
+                flash(f"Ignored invalid taxi-time airport code: {code}", "warning")
+                continue
+            try:
+                minutes = int(raw_minutes)
+            except (TypeError, ValueError):
+                flash(f"Ignored invalid taxi time for {code}.", "warning")
+                continue
+            taxi_times[code] = min(max(minutes, 0), 180)
         cfg.auto_enabled = auto_enabled
         cfg.interval_sec = interval_sec
         cfg.apg_create_ahead_hours = apg_create_ahead_hours
+        cfg.airport_taxi_times_json = json.dumps(taxi_times, sort_keys=True)
         db.session.add(cfg); db.session.commit()
         # API also reschedules; but you can reschedule here if desired.
         return redirect(url_for("ui.settings_page"))
-    return render_template("settings.html", cfg=cfg)
+    return render_template(
+        "settings.html",
+        cfg=cfg,
+        taxi_time_rows=_airport_taxi_times_for_settings(cfg),
+    )
 
 def _infer_designator(fnum: str) -> str | None:
     if not fnum:

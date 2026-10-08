@@ -4,6 +4,8 @@ import json
 import logging
 import re
 from flask import current_app
+from ..models import AppConfig
+from .. import db
 from requests import HTTPError
 from datetime import datetime, date, time, timedelta, timezone
 try:
@@ -220,6 +222,7 @@ IATA_TO_ICAO = {
     "HPA": "NFTL",  # Ha'apai (NOT "HAP")
     "NTT": "NFTP",  # Niuatoputapu
 }
+ICAO_TO_IATA = {icao: iata for iata, icao in IATA_TO_ICAO.items()}
 
 
 # --- APG aircraft caches/indexes ---
@@ -1426,6 +1429,146 @@ def minutes_to_eet_str(mins: Optional[int]) -> Optional[str]:
         return f"{hh:02d}{mm:02d}"
     except Exception:
         return None
+
+
+def eet_to_minutes(value: Any) -> Optional[int]:
+    """Parse APG's EET format (usually HHMM) into minutes."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    match = re.fullmatch(r"(\d{1,3}):?(\d{2})", text)
+    if not match:
+        return None
+    hours, minutes = int(match.group(1)), int(match.group(2))
+    if minutes >= 60:
+        return None
+    return hours * 60 + minutes
+
+
+def _airport_taxi_code(raw_code: Any) -> Optional[str]:
+    """Normalise an Envision/APG aerodrome value to the admin-facing code."""
+    code = guess_code(str(raw_code or ""))
+    if not code:
+        return None
+    code = code.upper()
+    return ICAO_TO_IATA.get(code, code)
+
+
+def _configured_airport_taxi_times() -> dict[str, int]:
+    """Load the administrator-managed taxi time table; unknown ports use 5 min."""
+    try:
+        cfg = db.session.get(AppConfig, 1)
+        raw_times = json.loads((cfg.airport_taxi_times_json if cfg else "{}") or "{}")
+    except Exception:
+        logging.exception("Could not load airport taxi-time settings; using five-minute defaults.")
+        return {}
+    if not isinstance(raw_times, dict):
+        return {}
+
+    times: dict[str, int] = {}
+    for raw_code, raw_minutes in raw_times.items():
+        code = _airport_taxi_code(raw_code)
+        try:
+            minutes = int(raw_minutes)
+        except (TypeError, ValueError):
+            continue
+        if code:
+            times[code] = min(max(minutes, 0), 180)
+    return times
+
+
+def _apg_plan_is_filed(plan: dict) -> bool:
+    """APG versions expose the plan status under slightly different keys."""
+    if not isinstance(plan, dict):
+        return False
+    status_keys = {
+        "status", "planstatus", "flightplanstatus", "flightstatus",
+        "filingstatus", "state", "statusname", "statusdescription",
+    }
+    values: list[str] = []
+
+    def visit(value: Any, key: str = "", depth: int = 0) -> None:
+        if depth > 3:
+            return
+        if isinstance(value, dict):
+            for child_key, child_value in value.items():
+                visit(child_value, str(child_key).replace("_", "").lower(), depth + 1)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item, key, depth + 1)
+        elif key in status_keys and value is not None:
+            values.append(str(value).strip().lower())
+
+    visit(plan)
+    return any("filed" in value for value in values)
+
+
+def _apg_plan_eet(plan: dict) -> Optional[int]:
+    """Return EET from APG plan/get data, including common nested response shapes."""
+    if not isinstance(plan, dict):
+        return None
+    for key in ("eet", "estimatedElapsedTime", "estimated_elapsed_time"):
+        minutes = eet_to_minutes(plan.get(key))
+        if minutes is not None:
+            return minutes
+    for key in ("plan", "flightPlan", "flight_plan", "route"):
+        nested = plan.get(key)
+        if isinstance(nested, dict):
+            minutes = _apg_plan_eet(nested)
+            if minutes is not None:
+                return minutes
+    return None
+
+
+def update_envision_eta_after_apg_filing(
+    env_token: str,
+    apg_bearer: str,
+    envision_flight: dict,
+    apg_plan_id: int,
+) -> bool:
+    """Set Envision ETA from ETD + APG EET + taxi at both stations after filing."""
+    if envision_flight.get("arrivalLanded") or envision_flight.get("arrivalActual"):
+        return False
+    plan = apg_plan_get_details(apg_bearer, apg_plan_id)
+    if not _apg_plan_is_filed(plan):
+        return False
+
+    eet_minutes = _apg_plan_eet(plan)
+    etd = parse_iso(envision_flight.get("departureEstimate") or envision_flight.get("departureScheduled"))
+    departure_code = _airport_taxi_code(envision_flight.get("departurePlaceDescription"))
+    arrival_code = _airport_taxi_code(envision_flight.get("arrivalPlaceDescription"))
+    if eet_minutes is None or etd is None or not departure_code or not arrival_code:
+        logging.warning(
+            "Skipping ETA update for Envision flight %s: EET, ETD, or airport code is missing.",
+            envision_flight.get("id"),
+        )
+        return False
+
+    taxi_times = _configured_airport_taxi_times()
+    departure_taxi = taxi_times.get(departure_code, 5)
+    arrival_taxi = taxi_times.get(arrival_code, 5)
+    eta = etd + timedelta(minutes=eet_minutes + departure_taxi + arrival_taxi)
+    if eta.tzinfo is None:
+        eta = eta.replace(tzinfo=timezone.utc)
+    eta_text = eta.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    current_eta = parse_iso(envision_flight.get("arrivalEstimate"))
+    if current_eta and current_eta.astimezone(timezone.utc).replace(second=0, microsecond=0) == eta.astimezone(timezone.utc).replace(second=0, microsecond=0):
+        return False
+
+    envision_update_flight_times(
+        env_token,
+        envision_flight["id"],
+        {"id": int(envision_flight["id"]), "arrivalEstimate": eta_text},
+    )
+    logging.info(
+        "Updated Envision ETA for flight %s from filed APG plan %s: ETD + %s EET + %sm %s taxi + %sm %s taxi = %s.",
+        envision_flight.get("id"), apg_plan_id, minutes_to_eet_str(eet_minutes),
+        departure_taxi, departure_code, arrival_taxi, arrival_code, eta_text,
+    )
+    return True
 
 def normalize_flight_no(s: Optional[str]) -> str:
     if not s:
@@ -2870,6 +3013,20 @@ def main(
         visible_now = plan_id_presence is not None
 
         plan_id_to_update = plan_id_presence
+
+        # APG owns EET once the plan is filed.  Mirror that operational ETA
+        # back to Envision without waiting for any other Envision field to
+        # change, so the normal no-change shortcut below remains safe.
+        if plan_id_to_update is not None:
+            try:
+                update_envision_eta_after_apg_filing(
+                    env_token, apg_bearer, f, int(plan_id_to_update)
+                )
+            except Exception:
+                logging.exception(
+                    "Could not update Envision ETA from filed APG plan %s for flight %s.",
+                    plan_id_to_update, fid,
+                )
 
         # ---------- decide: skip / update / create ----------
         # Only skip if nothing changed *and* APG confirms the plan is visible now.

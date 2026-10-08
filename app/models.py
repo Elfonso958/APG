@@ -395,6 +395,9 @@ class AppConfig(db.Model):
     charter_passenger_weights_json = db.Column(db.Text, default="{}", nullable=False)
     catering_services_json = db.Column(db.Text, default="[]", nullable=False)
     airport_handling_json = db.Column(db.Text, default="[]", nullable=False)
+    # IATA/ICAO airport code -> taxi minutes.  Used to calculate the ETA after
+    # APG files a flight plan; values are maintained by an administrator.
+    airport_taxi_times_json = db.Column(db.Text, default="{}", nullable=False)
     charter_planner_registrations_json = db.Column(db.Text, default="[]", nullable=False)
     charter_tail_debug_enabled = db.Column(db.Boolean, default=False, nullable=False)
     charter_crew_cars_json = db.Column(db.Text, default="{}", nullable=False)

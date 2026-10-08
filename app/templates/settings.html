@@ -56,6 +56,21 @@
           </div>
         </div>
 
+        <div class="mt-3">
+          <div class="fw-semibold">Airport taxi times</div>
+          <div class="muted small mb-2">Used after APG files a flight plan: departure taxi + EET + arrival taxi. New airports default to 5 minutes.</div>
+          <div id="taxiTimeRows">
+            {% for airport, minutes in taxi_time_rows.items() %}
+            <div class="form-row mt-2 taxi-time-row">
+              <label class="form-field"><span>Airport</span><input name="taxi_airport_code" maxlength="8" value="{{ airport }}" aria-label="Airport code"></label>
+              <label class="form-field"><span>Taxi minutes</span><input name="taxi_minutes" type="number" min="0" max="180" step="1" value="{{ minutes }}" aria-label="Taxi minutes"></label>
+              <button class="btn secondary btn-sm" type="button" data-remove-taxi-row>Remove</button>
+            </div>
+            {% endfor %}
+          </div>
+          <button id="addTaxiTimeRow" class="btn secondary btn-sm mt-2" type="button">Add airport</button>
+        </div>
+
         <div class="mt-2">
           <button type="submit" class="btn">Save settings</button>
         </div>
@@ -102,6 +117,16 @@
         btn.addEventListener("click", () => {
           if (aheadInput) aheadInput.value = btn.getAttribute("data-ahead-hours");
         });
+      });
+      const taxiRows = document.getElementById("taxiTimeRows");
+      document.getElementById("addTaxiTimeRow")?.addEventListener("click", () => {
+        const row = document.createElement("div");
+        row.className = "form-row mt-2 taxi-time-row";
+        row.innerHTML = '<label class="form-field"><span>Airport</span><input name="taxi_airport_code" maxlength="8" aria-label="Airport code"></label><label class="form-field"><span>Taxi minutes</span><input name="taxi_minutes" type="number" min="0" max="180" step="1" value="5" aria-label="Taxi minutes"></label><button class="btn secondary btn-sm" type="button" data-remove-taxi-row>Remove</button>';
+        taxiRows?.appendChild(row);
+      });
+      taxiRows?.addEventListener("click", (event) => {
+        if (event.target.closest("[data-remove-taxi-row]")) event.target.closest(".taxi-time-row")?.remove();
       });
     })();
   </script>
