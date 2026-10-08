@@ -2262,6 +2262,10 @@ body[data-theme="dark"] .wb-inline-status.is-over {
 .briefing-schedule { display: grid; grid-template-columns: repeat(2, auto); column-gap: 12px; min-width: 128px; }
 .briefing-time { font-size: 21px; font-weight: 800; line-height: 1; }
 .briefing-time small { display: block; margin-bottom: 3px; color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .04em; line-height: 1; }
+.briefing-departure-times { display: grid; align-content: start; gap: 2px; }
+.briefing-departure-times small { color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .04em; line-height: 1; }
+.briefing-departure-times strong { font-size: 21px; font-weight: 800; line-height: 1; }
+.briefing-scheduled-struck { color: var(--muted); font-size: 14px !important; text-decoration: line-through; text-decoration-thickness: 2px; }
 .briefing-arrival-time { color: var(--accent); }
 .briefing-flight-no { grid-column: 1 / -1; margin-top: 5px; color: var(--muted); font-size: 11px; font-weight: 800; }
 .briefing-status { padding: 5px 9px; border-radius: 999px; background: rgba(24, 129, 86, .12); color: #087548; font-size: 11px; font-weight: 800; }

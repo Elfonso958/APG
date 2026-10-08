@@ -4632,6 +4632,11 @@
       const apgPlanId = getApgPlanId(f.apg_plan_id);
       const charterBriefUrl = String(f.charter_brief_url || "");
       const charterBriefVersion = Number(f.charter_brief_version || 0);
+      const stdText = fmtTime(f.std_sched_nz || f.std_nz);
+      const etdText = fmtTime(f.std_nz);
+      const hasChangedEtd = Boolean(
+        f.std_sched_nz && f.std_nz && stdText !== etdText
+      );
       const crewMember = (f.crew || []).find((c) => String(c.employee_no || "").trim().toUpperCase() === crewCode);
       const operatingCrew = (f.crew || []).filter((c) => c.is_operating !== false);
       const crewOverview = operatingCrew.length
@@ -4657,7 +4662,11 @@
         <button class="briefing-flight-card" type="button" aria-expanded="false" data-briefing-flight-id="${escapeHtml(String(f.envision_flight_id || ""))}">
           <div class="briefing-card-header">
             <div class="briefing-schedule">
-              <span class="briefing-time"><small>ETD</small>${fmtTime(f.std_nz)}</span>
+              <span class="briefing-departure-times">
+                <small>STD</small>
+                <strong class="${hasChangedEtd ? "briefing-scheduled-struck" : ""}">${stdText}</strong>
+                ${hasChangedEtd ? `<small>ETD</small><strong class="briefing-time">${etdText}</strong>` : ""}
+              </span>
               <span class="briefing-time briefing-arrival-time"><small>ETA</small>${fmtTime(f.sta_nz)}</span>
               <span class="briefing-flight-no">${escapeHtml(flightCode(f))}</span>
             </div>
