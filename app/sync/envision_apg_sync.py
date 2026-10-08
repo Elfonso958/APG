@@ -1560,10 +1560,27 @@ def update_envision_eta_after_apg_filing(
     if current_eta and current_eta.astimezone(timezone.utc).replace(second=0, microsecond=0) == eta.astimezone(timezone.utc).replace(second=0, microsecond=0):
         return False
 
+    # Envision's Flights PUT endpoint expects its complete time-update model,
+    # not a PATCH-style body containing only arrivalEstimate.  Preserve every
+    # existing time/status value and replace just the calculated ETA.
+    flight_id = int(envision_flight["id"])
+    base = envision_get_flight_times(env_token, flight_id)
+    update_body = {
+        "id": int(base.get("id") or flight_id),
+        "flightStatusId": base.get("flightStatusId") or 0,
+        "departureEstimate": base.get("departureEstimate"),
+        "departureActual": base.get("departureActual"),
+        "departureTakeOff": base.get("departureTakeOff"),
+        "arrivalEstimate": eta_text,
+        "arrivalLanded": base.get("arrivalLanded"),
+        "arrivalActual": base.get("arrivalActual"),
+        "plannedFlightTime": base.get("plannedFlightTime") or 0,
+        "calculatedTakeOffTime": base.get("calculatedTakeOffTime"),
+    }
     envision_update_flight_times(
         env_token,
-        envision_flight["id"],
-        {"id": int(envision_flight["id"]), "arrivalEstimate": eta_text},
+        flight_id,
+        {key: value for key, value in update_body.items() if value is not None},
     )
     logging.info(
         "Updated Envision ETA for flight %s from filed APG plan %s: ETD + %s EET + %sm %s taxi + %sm %s taxi = %s.",
