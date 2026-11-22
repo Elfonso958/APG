@@ -1163,7 +1163,9 @@
         throw new Error(data.error || "Your session expired. Redirecting to login...");
       }
       if (!resp.ok || data.ok === false) {
-        throw new Error(data.error || `Request failed (${resp.status})`);
+        const error = new Error(data.error || `Request failed (${resp.status})`);
+        error.confirmationRequired = data.confirmation_required === true;
+        throw error;
       }
       return data;
     }
@@ -1605,11 +1607,25 @@
         pilot_employee_id: pilotSelect.value,
         note: flightNote.value.trim(),
       };
-      const data = await fetchKmhJson(flightsUrl, {
+      const submit = () => fetchKmhJson(flightsUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         body: JSON.stringify(payload),
       });
+      let data;
+      try {
+        data = await submit();
+      } catch (error) {
+        if (!error.confirmationRequired) throw error;
+        const confirmed = window.confirm(`${error.message}\n\nEnvision reports that the aircraft's previous location does not match this departure. Continuing asks Envision to ignore validations, which may also bypass other checks. Continue creating this flight?`);
+        if (!confirmed) {
+          setStatus(createStatus, "Flight creation cancelled.");
+          return;
+        }
+        payload.confirm_place_mismatch = true;
+        setStatus(createStatus, "Creating flight in Envision...");
+        data = await submit();
+      }
       const warningText = Array.isArray(data.warnings) && data.warnings.length ? ` ${data.warnings.join(" ")}` : "";
       setStatus(createStatus, `Created Envision flight ${data.flight_id} for ${data.dep}-${data.arr} with ${data.pilot}.${warningText}`, !!warningText);
       state.anchorDate = parseYmd(flightDate.value);

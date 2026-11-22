@@ -776,7 +776,7 @@ def _friendly_kmh_create_error(exc: Exception) -> str:
         return message
     raw_body = message.split("body=", 1)[1].strip()
     try:
-        payload = json.loads(raw_body)
+        payload, _ = json.JSONDecoder().raw_decode(raw_body)
     except Exception:
         return message
     messages = payload.get("messages") or []
@@ -789,7 +789,7 @@ def _friendly_kmh_create_error(exc: Exception) -> str:
                 "This flight overlaps an existing Envision flight for ZK-KMH. "
                 "Adjust the time, or if the overlap is intentional it needs to be created with confirmation."
             )
-    return message
+    return "; ".join(str(item).strip() for item in messages if str(item).strip()) or message
 
 
 def _kmh_envision_error_payload(exc: Exception) -> dict:
@@ -798,7 +798,7 @@ def _kmh_envision_error_payload(exc: Exception) -> dict:
         return {}
     raw_body = message.split("body=", 1)[1].strip()
     try:
-        payload = json.loads(raw_body)
+        payload, _ = json.JSONDecoder().raw_decode(raw_body)
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
@@ -1257,7 +1257,16 @@ def api_kmh_flights():
         try:
             created = envision_create_flight(token, create_payload)
         except Exception as create_exc:
-            if not _kmh_requires_confirmation(create_exc):
+            error_payload = _kmh_envision_error_payload(create_exc)
+            messages = error_payload.get("messages") or []
+            place_mismatch = (
+                isinstance(messages, list) and len(messages) > 0
+                and all("place mismatch with previous flight" in str(item).lower() for item in messages)
+            )
+            if place_mismatch and data.get("confirm_place_mismatch") is not True:
+                return jsonify(ok=False, confirmation_required=True,
+                               error="; ".join(str(item) for item in messages)), 409
+            if not place_mismatch and not _kmh_requires_confirmation(create_exc):
                 raise
             create_payload["ignoreValidations"] = True
             created = envision_create_flight(token, create_payload)
