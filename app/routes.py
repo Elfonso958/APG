@@ -357,6 +357,14 @@ def _apply_session_envision_environment():
 @api_bp.before_request
 def _require_authenticated_operations_api():
     """Keep operational data APIs behind the same role controls as their UI."""
+    # The standalone KMH calendar has its own Envision session. Each of these
+    # endpoints validates that session with _kmh_require_token.
+    if request.endpoint in {
+        "api.api_kmh_lookups", "api.api_kmh_flights",
+        "api.api_kmh_flight_action", "api.api_kmh_export",
+    }:
+        return None
+
     # Power BI cannot use the interactive APG browser session. Its reporting
     # endpoint is protected by an administrator-managed, revocable API key.
     if request.endpoint in _POWERBI_REPORTING_ENDPOINTS:
