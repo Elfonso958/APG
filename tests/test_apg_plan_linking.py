@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from app.sync.envision_apg_sync import (
     _find_apg_plan_id_by_local_clock,
     _sync_plan_id_for_key,
+    _cached_plan_owner_is_unambiguous,
 )
 
 
@@ -45,6 +46,28 @@ class ApgPlanLinkingTests(unittest.TestCase):
         target = ("3C718", "NZWU", "NZAA", "2026-08-27T03:00Z")
 
         self.assertIsNone(_sync_plan_id_for_key(target, {}, cached_plan_id=9999))
+
+    def test_cached_id_cannot_override_departure_tolerance(self):
+        morning = ("CVA332", "NZCI", "NZWN", "2026-11-24T21:45Z")
+        afternoon = ("CVA332", "NZCI", "NZWN", "2026-11-25T04:15Z")
+        self.assertIsNone(_sync_plan_id_for_key(morning, {afternoon: 4971425}, 4971425))
+        self.assertEqual(_sync_plan_id_for_key(afternoon, {afternoon: 4971425}, 4971425), 4971425)
+
+    def test_duplicate_cache_id_is_owned_by_closest_sector_only(self):
+        afternoon = ("CVA332", "NZCI", "NZWN", "2026-11-25T04:15Z")
+        cache = {
+            "83014": {"apg_id": 4971425, "core": {"flight_no": "CVA332", "adep": "NZCI", "ades": "NZWN", "eobt": "2026-11-24T21:45:00+00:00"}},
+            "83016": {"apg_id": 4971425, "core": {"flight_no": "CVA332", "adep": "NZCI", "ades": "NZWN", "eobt": "2026-11-25T04:15:00+00:00"}},
+        }
+        self.assertFalse(_cached_plan_owner_is_unambiguous(cache, "83014", 4971425, {afternoon: 4971425}))
+        self.assertTrue(_cached_plan_owner_is_unambiguous(cache, "83016", 4971425, {afternoon: 4971425}))
+
+    def test_equal_claims_require_review(self):
+        key = ("CVA332", "NZCI", "NZWN", "2026-11-25T04:15Z")
+        core = {"flight_no": "CVA332", "adep": "NZCI", "ades": "NZWN", "eobt": "2026-11-25T04:15:00+00:00"}
+        cache = {"1": {"apg_id": 42, "core": core}, "2": {"apg_id": 42, "core": core}}
+        self.assertFalse(_cached_plan_owner_is_unambiguous(cache, "1", 42, {key: 42}))
+        self.assertFalse(_cached_plan_owner_is_unambiguous(cache, "2", 42, {key: 42}))
 
 
 if __name__ == "__main__":

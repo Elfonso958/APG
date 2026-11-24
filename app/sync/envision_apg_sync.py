@@ -1711,6 +1711,40 @@ def _plan_key_from_apg_row(row: dict) -> Optional[tuple[str, str, str, Optional[
         return None
     return (flight_no, adep, ades, eobt_key)
 
+_APG_PRESENCE_CACHE = {}
+_APG_PRESENCE_LOCK = threading.Lock()
+
+
+def _cached_apg_presence_plans(bearer, statuses):
+    from concurrent.futures import ThreadPoolExecutor
+    cache_key = (APG_BASE, APG_EMAIL, tuple(statuses))
+    def fetch():
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            jobs = [(st, pool.submit(apg_get_plan_list, bearer, status=st, page_size=200, after=None)) for st in statuses]
+            return [(st, job.result()) for st, job in jobs]
+
+    cached = _APG_PRESENCE_CACHE.get(cache_key)
+    if cached and time.monotonic() - cached[0] < 300:
+        if time.monotonic() - cached[0] >= 60 and _APG_PRESENCE_LOCK.acquire(blocking=False):
+            def refresh():
+                try:
+                    result = fetch()
+                    _APG_PRESENCE_CACHE[cache_key] = (time.monotonic(), result)
+                except Exception:
+                    logging.exception("APG presence background refresh failed")
+                finally:
+                    _APG_PRESENCE_LOCK.release()
+            threading.Thread(target=refresh, daemon=True).start()
+        return cached[1]
+    with _APG_PRESENCE_LOCK:
+        cached = _APG_PRESENCE_CACHE.get(cache_key)
+        if cached and time.monotonic() - cached[0] < 60:
+            return cached[1]
+        result = fetch()
+        _APG_PRESENCE_CACHE[cache_key] = (time.monotonic(), result)
+        return result
+
+
 def build_existing_plan_index(
     bearer: str,
     window_from_utc: datetime,
@@ -1721,12 +1755,7 @@ def build_existing_plan_index(
     index: dict[tuple[str, str, str, Optional[str]], Optional[int]] = {}
     seen = kept = 0
 
-    for st in statuses:
-        try:
-            plans = apg_get_plan_list(bearer, status=st, page_size=200, after=None)
-        except Exception as e:
-            logging.warning(f"APG plan list fetch failed for status='{st}': {e}")
-            continue
+    for st, plans in _cached_apg_presence_plans(bearer, statuses):
         for p in plans:
             seen += 1
             key = _plan_key_from_apg_row(p)
@@ -1783,14 +1812,9 @@ def _sync_plan_id_for_key(
     if not candidates:
         return None
 
-    # A cached id is safe only when APG currently reports it for this route and
-    # this NZ-local operating date.
-    if cached_plan_id is not None:
-        cached_id = int(cached_plan_id)
-        if any(candidate_id == cached_id for _, candidate_id in candidates):
-            return cached_id
-
-    tolerance_min = int(os.getenv("APG_SYNC_MATCH_TIME_TOLERANCE_MIN", "720") or "720")
+    # A cached association does not override time: historical cache entries
+    # can point multiple Envision flights at the same APG plan.
+    tolerance_min = int(os.getenv("APG_SYNC_MATCH_TIME_TOLERANCE_MIN", "90") or "90")
     candidates.sort(key=lambda item: item[0])
     best_delta, best_id = candidates[0]
     if best_delta > tolerance_min:
@@ -1798,6 +1822,36 @@ def _sync_plan_id_for_key(
     if len(candidates) > 1 and candidates[1][0] == best_delta and candidates[1][1] != best_id:
         return None
     return best_id
+
+
+def _cached_plan_owner_is_unambiguous(cache: dict, fid: str, plan_id: int,
+                                       index: dict) -> bool:
+    """Reject a plan claimed by another cached flight unless this flight is
+    uniquely closest to the actual APG departure time for that same route.
+    """
+    claims = [(str(other_fid), entry) for other_fid, entry in cache.items()
+              if isinstance(entry, dict) and str(entry.get("apg_id")) == str(plan_id)]
+    if len(claims) <= 1:
+        return not claims or claims[0][0] == str(fid)
+    plan_keys = [key for key, value in index.items() if value == plan_id and key and key[3]]
+    if len(plan_keys) != 1:
+        return False
+    plan_key = plan_keys[0]
+    plan_time = _utc_min_dt_from_key(plan_key[3])
+    if plan_time is None:
+        return False
+    scores = []
+    for other_fid, entry in claims:
+        core = entry.get("core") or {}
+        if (core.get("flight_no"), core.get("adep"), core.get("ades")) != plan_key[:3]:
+            return False
+        stamp = _canon_eobt_to_utc_min_str(core.get("eobt"))
+        departure = _utc_min_dt_from_key(stamp)
+        if departure is None:
+            return False
+        scores.append((abs((departure - plan_time).total_seconds()), other_fid))
+    scores.sort()
+    return scores[0][1] == str(fid) and scores[0][0] < scores[1][0]
 
 
 def choose_apg_aircraft_id_for_flight(envision_flight: dict) -> Optional[int]:
@@ -1876,8 +1930,10 @@ def apg_get_plan_list(bearer: str, status: Optional[str] = None, page_size: int 
             else:
                 rows = []
             rows = [p for p in rows if isinstance(p, dict)]
+        if rows and out and rows == out[-len(rows):]:
+            raise RuntimeError("APG plan list repeated a page; refusing an incomplete plan list")
         out.extend(rows)
-        if len(rows) < page_size:
+        if not rows:
             break
         payload["page"] += 1
     return out
@@ -2505,14 +2561,13 @@ def main(
             continue
         recon_inwin += 1
 
-        # find a live APG plan id to delete: presence index first, then cached apg_id
-        del_id = None
-        if key:
-            del_id = existing_index.get(tuple(key))
-            if del_id is None:
-                del_id = existing_index_by3.get((key[0], key[1], key[2]))
-        if del_id is None and apg_id:
-            del_id = apg_id
+        # Never delete by route alone or by an unverified/shared cache entry.
+        del_id = existing_index.get(tuple(key)) if key else None
+        if del_id != apg_id or sum(
+            1 for e in cache.values()
+            if isinstance(e, dict) and e.get("apg_id") == del_id
+        ) != 1:
+            del_id = None
 
         if not del_id:
             recon_noid += 1
@@ -2653,15 +2708,14 @@ def main(
                 _canon_eobt_to_utc_min_str((effective_eobt.isoformat() if effective_eobt else None)),
             )
 
-            del_id = None
-            if key and existing_index.get(key) is not None:
-                del_id = existing_index[key]
-            if del_id is None and key and existing_index_by3.get((key[0], key[1], key[2])) is not None:
-                del_id = existing_index_by3[(key[0], key[1], key[2])]
-            if del_id is None:
-                prev_entry = cache.get(fid)
-                if isinstance(prev_entry, dict):
-                    del_id = prev_entry.get("apg_id")
+            prev_entry = cache.get(fid)
+            saved_id = prev_entry.get("apg_id") if isinstance(prev_entry, dict) else None
+            del_id = existing_index.get(key)
+            if del_id != saved_id or sum(
+                1 for e in cache.values()
+                if isinstance(e, dict) and e.get("apg_id") == del_id
+            ) != 1:
+                del_id = None
 
             if del_id:
                 try:
@@ -3034,6 +3088,26 @@ def main(
         # Presence must be on this NZ operating date. Route-only and stale cached
         # matches must not suppress creation of a missing APG flight.
         plan_id_presence = _sync_plan_id_for_key(key, existing_index, prev_apg_id)
+
+        if plan_id_presence is not None and prev_apg_id is not None and str(plan_id_presence) != str(prev_apg_id):
+            skipped += 1
+            logging.warning("APG plan %s differs from cached plan %s for flight %s; manual review required", plan_id_presence, prev_apg_id, fid)
+            _emit_flight_event(**base_evt, result="failed", reason="APG plan differs from saved association; manual review required", warnings=None)
+            continue
+        if plan_id_presence is not None and not _cached_plan_owner_is_unambiguous(
+            cache, fid, int(plan_id_presence), existing_index
+        ):
+            skipped += 1
+            logging.warning("APG plan %s has a conflicting cached owner for flight %s; manual review required", plan_id_presence, fid)
+            _emit_flight_event(**base_evt, result="failed", reason="APG plan has a conflicting cached owner; manual review required", warnings=None)
+            continue
+        if plan_id_presence is None and prev_apg_id is not None:
+            # A missing or moved cached plan is not evidence that a new plan
+            # should be created; doing so could duplicate an operational plan.
+            skipped += 1
+            logging.warning("Cached APG plan %s does not match flight %s; manual review required", prev_apg_id, fid)
+            _emit_flight_event(**base_evt, result="failed", reason="Cached APG plan does not match; manual review required", warnings=None)
+            continue
 
         # Visible *now* means only what presence index says (not cache)
         visible_now = plan_id_presence is not None
@@ -4085,8 +4159,10 @@ def apg_get_plan_list(bearer: str, status: Optional[str] = None, page_size: int 
             else:
                 rows = []
 
+        if rows and out and rows == out[-len(rows):]:
+            raise RuntimeError("APG plan list repeated a page; refusing an incomplete plan list")
         out.extend(rows)
-        if len(rows) < page_size:
+        if not rows:
             break
         payload["page"] += 1
 
@@ -4316,7 +4392,9 @@ def attach_apg_presence_to_rows(
     )
 
     try:
-        if os.getenv("APG_RECON_WIDEN", "1").lower() in ("1", "true", "yes"):
+        # Active statuses already include every linkable plan. Avoid a second
+        # unfiltered scan of historical plans during every Gantt refresh.
+        if os.getenv("APG_GANTT_RECON_WIDEN", "0").lower() in ("1", "true", "yes"):
             plans_all = apg_get_plan_list(apg_bearer, page_size=200, after=None)
             for p in plans_all:
                 key = _plan_key_from_apg_row(p)
